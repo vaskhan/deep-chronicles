@@ -11,8 +11,8 @@
     "test:native": "node tools/godot/test.mjs",
     "dev": "node tools/godot/run.mjs",
     "build": "node tools/godot/build.mjs",
-    "test:unit": "node --test tests/unit.test.js tests/progression.test.js tests/party.test.js",
-    "test": "npm run test:pipeline && npm run test:unit && npm run test:server && npm run test:native",
+    "test:unit": "node --test tests/unit.test.js tests/progression.test.js tests/party.test.js tests/tuning.test.js",
+    "test": "npm run test:pipeline && npm run test:unit && npm run test:server && npm run native:lint && npm run test:native",
     "server": "node --no-warnings server/server.js",
     "test:server": "node --no-warnings --test tests/server.test.js",
     "deploy": "bash deploy/deploy.sh",
@@ -30,7 +30,8 @@
     "native:bootstrap": "node tools/godot/bootstrap.mjs",
     "test:pipeline": "node --test tests/pipeline.test.js",
     "native:materials": "node tools/godot/materials.mjs",
-    "native:scales": "node tools/godot/scales.mjs"
+    "native:scales": "node tools/godot/scales.mjs",
+    "native:lint": "node tools/godot/lint.mjs"
   },
   "dependencies": {
     "three": "^0.170.0",

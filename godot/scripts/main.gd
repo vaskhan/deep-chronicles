@@ -22,9 +22,9 @@ var attacking = false
 var pending_skill = ""
 var talking_to: Node3D
 var joystick = Vector2.ZERO
-var camera_yaw = 0.45
-var camera_pitch = 0.56
-var camera_distance = 21.0
+var camera_yaw = Tuning.CAMERA_YAW_START
+var camera_pitch = Tuning.CAMERA_PITCH_START
+var camera_distance = Tuning.CAMERA_DISTANCE_START
 var state_timer = 0.0
 var ui_timer = 0.0
 var cast_time = 0.0
@@ -62,6 +62,7 @@ func _ready():
 		var runner = ""
 		if "--self-test" in args and Network.endpoint.begins_with("ws://127.0.0.1:"): runner = "res://tests/smoke.gd"
 		elif "--network-probe" in args: runner = "res://tests/server_probe.gd"
+		elif "--scene-lint" in args: runner = "res://tests/scene_lint.gd"
 		if not runner.is_empty():
 			Engine.print_to_stdout = true; Engine.print_error_messages = true
 			get_tree().root.set_meta("acceptance_running", true)
@@ -74,7 +75,7 @@ func _ready():
 		if a.begins_with("--capture="): capture_path = a.trim_prefix("--capture=")
 		if a.trim_prefix("--panel=") in ["inventory", "character", "settings"] and a.begins_with("--panel="): startup_panel = a.trim_prefix("--panel=")
 	world = WorldScene.instantiate(); add_child(world); world.build()
-	camera = Camera3D.new(); camera.name = "Camera"; camera.fov = 55; camera.far = 1600; camera.near = 0.2; add_child(camera); camera.current = true
+	camera = Camera3D.new(); camera.name = "Camera"; camera.fov = Tuning.CAMERA_FOV; camera.far = Tuning.CAMERA_FAR; camera.near = Tuning.CAMERA_NEAR; add_child(camera); camera.current = true
 	camera.position = Vector3(-410, 30, 425); camera.look_at(Vector3(-430, 7, 390))
 	combat_fx = load("res://scripts/combat_fx.gd").new(); add_child(combat_fx)
 	game_audio = load("res://scripts/game_audio.gd").new(); add_child(game_audio)
@@ -344,9 +345,9 @@ func _process(dt):
 	for actor in mobs.values() + players.values():
 		if Time.get_ticks_msec() - actor.seen > 1500: actor.hide()
 		elif actor.visible: actor.interpolate(time)
-		actor.label.visible = actor.visible and hero.position.distance_to(actor.position) < 50
-	for drop in ground_loot.values(): drop.label.visible = hero.position.distance_to(drop.position) < 40
-	for npc in npcs: npc.label.visible = hero.position.distance_to(npc.position) < 60
+		actor.label.visible = actor.visible and hero.position.distance_to(actor.position) < Tuning.LABEL_RANGE_ACTOR
+	for drop in ground_loot.values(): drop.label.visible = hero.position.distance_to(drop.position) < Tuning.LABEL_RANGE_LOOT
+	for npc in npcs: npc.label.visible = hero.position.distance_to(npc.position) < Tuning.LABEL_RANGE_NPC
 	if is_instance_valid(target) and target.visible:
 		selection.visible = not target.dead
 		selection.position = target.position + Vector3.UP * 0.17
@@ -431,7 +432,9 @@ func _update_camera(dt):
 func set_target(actor):
 	pending_pickup = ""
 	if is_instance_valid(target): target.selected = false
-	if is_instance_valid(target) and target != actor: _cancel_attack()
+	# Выбор другой цели прекращает бой даже если прежняя цель уже исчезла:
+	# иначе оставшийся флаг атаки молча уводит героя в новый бой.
+	if target != actor: _cancel_attack()
 	target = actor
 	if is_instance_valid(actor): actor.selected = true
 	if is_instance_valid(actor) and actor.kind in ["m", "p"]: Network.send({"t": "atk", "id": actor.entity_id, "kind": actor.kind, "hold": true})
@@ -461,13 +464,13 @@ func use_skill(id: String):
 
 func next_target():
 	if not is_instance_valid(hero): return
-	var list = mobs.values().filter(func(m): return m.visible and not m.dead and hero.position.distance_to(m.position) < 55)
+	var list = mobs.values().filter(func(m): return m.visible and not m.dead and hero.position.distance_to(m.position) < Tuning.TARGET_PICK_RANGE)
 	list.sort_custom(func(a, b): return hero.position.distance_squared_to(a.position) < hero.position.distance_squared_to(b.position))
 	if list.is_empty(): return
 	set_target(list[(list.find(target) + 1) % list.size()])
 
 func talk_nearest():
-	var nearest; var distance = 25.0
+	var nearest; var distance = Tuning.TALK_SEARCH_RANGE
 	for npc in npcs:
 		var d = hero.position.distance_to(npc.position)
 		if d < distance and npc.definition.role != "guard": nearest = npc; distance = d
@@ -476,7 +479,7 @@ func talk_nearest():
 
 func _talk(npc):
 	_cancel_attack(); set_target(npc)
-	if hero.position.distance_to(npc.position) < 8: _open_npc(npc)
+	if hero.position.distance_to(npc.position) < Tuning.TALK_OPEN_RANGE: _open_npc(npc)
 	else: destination = npc.position; has_destination = true; talking_to = npc
 
 func _open_npc(npc):
@@ -488,7 +491,7 @@ func _action(kind: String, value):
 	if profile.is_empty(): return
 	match kind:
 		"inventory", "character", "map", "menu", "skills", "settings", "controls", "actions", "equipment", "party": hud.toggle(kind)
-		"camera": camera_yaw = hero.rotation.y + PI; camera_pitch = 0.65; camera_distance = 24
+		"camera": camera_yaw = hero.rotation.y + PI; camera_pitch = Tuning.CAMERA_PITCH_RESET; camera_distance = Tuning.CAMERA_DISTANCE_RESET
 		"fullscreen": DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 		"attack": attack()
 		"target": next_target()
@@ -586,19 +589,19 @@ func _unhandled_input(event):
 				if hud.window_kind != "": hud.close_window()
 				else: set_target(null); _cancel_attack(); has_destination = false; hud.show_window("menu")
 			KEY_ENTER: hud.chat_input.grab_focus()
-			KEY_V: camera_yaw = hero.rotation.y + PI; camera_pitch = 0.65; camera_distance = 24
+			KEY_V: camera_yaw = hero.rotation.y + PI; camera_pitch = Tuning.CAMERA_PITCH_RESET; camera_distance = Tuning.CAMERA_DISTANCE_RESET
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9: hud.activate_slot(int(event.physical_keycode) - KEY_1)
 			KEY_0: hud.activate_slot(9)
 			KEY_F11: DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 	elif event is InputEventMouseButton:
-		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP: camera_distance = clampf(camera_distance * 0.9, 6, 65)
-		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN: camera_distance = clampf(camera_distance * 1.1, 6, 65)
+		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP: camera_distance = clampf(camera_distance / Tuning.CAMERA_ZOOM_STEP, Tuning.CAMERA_DISTANCE_MIN, Tuning.CAMERA_DISTANCE_MAX)
+		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN: camera_distance = clampf(camera_distance * Tuning.CAMERA_ZOOM_STEP, Tuning.CAMERA_DISTANCE_MIN, Tuning.CAMERA_DISTANCE_MAX)
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed: pick(event.position)
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
-		camera_yaw -= event.relative.x * 0.006; camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, 0.18, 1.4)
+		camera_yaw -= event.relative.x * Tuning.CAMERA_MOUSE_YAW; camera_pitch = clampf(camera_pitch + event.relative.y * Tuning.CAMERA_MOUSE_PITCH, Tuning.CAMERA_PITCH_MIN, Tuning.CAMERA_PITCH_MAX)
 	elif event is InputEventPanGesture:
-		camera_yaw -= event.delta.x * 0.035; camera_pitch = clampf(camera_pitch + event.delta.y * 0.025, 0.18, 1.4)
-	elif event is InputEventMagnifyGesture: camera_distance = clampf(camera_distance / event.factor, 6, 65)
+		camera_yaw -= event.delta.x * Tuning.CAMERA_TRACKPAD_YAW; camera_pitch = clampf(camera_pitch + event.delta.y * Tuning.CAMERA_TRACKPAD_PITCH, Tuning.CAMERA_PITCH_MIN, Tuning.CAMERA_PITCH_MAX)
+	elif event is InputEventMagnifyGesture: camera_distance = clampf(camera_distance / event.factor, Tuning.CAMERA_DISTANCE_MIN, Tuning.CAMERA_DISTANCE_MAX)
 	elif event is InputEventScreenTouch:
 		if event.pressed:
 			touch_start[event.index] = event.position; touch_positions[event.index] = event.position
@@ -614,9 +617,9 @@ func _unhandled_input(event):
 			var other = touch_positions.keys()[0] if touch_positions.keys()[1] == event.index else touch_positions.keys()[1]
 			var before = touch_positions[event.index].distance_to(touch_positions[other])
 			var after = event.position.distance_to(touch_positions[other])
-			if after > 1: camera_distance = clampf(camera_distance * before / after, 6, 65)
+			if after > 1: camera_distance = clampf(camera_distance * before / after, Tuning.CAMERA_DISTANCE_MIN, Tuning.CAMERA_DISTANCE_MAX)
 		elif touch_dragged:
-			camera_yaw -= event.relative.x * 0.007; camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, 0.18, 1.4)
+			camera_yaw -= event.relative.x * Tuning.CAMERA_TOUCH_YAW; camera_pitch = clampf(camera_pitch + event.relative.y * Tuning.CAMERA_MOUSE_PITCH, Tuning.CAMERA_PITCH_MIN, Tuning.CAMERA_PITCH_MAX)
 		touch_positions[event.index] = event.position
 
 func pick(screen: Vector2):

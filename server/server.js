@@ -27,7 +27,7 @@ const LAG_M = 4;
 // отладочные команды для автотестов: включаются только переменной окружения, в проде их нет
 const DEV_CMD = process.env.DEV_CMD === '1';
 const CHAT = { party: { cd: 800 }, all: { cd: 3000 }, trade: { cd: 10000 }, near: { cd: 800 } };
-const wss = new WebSocketServer({ port: PORT, maxPayload: 8000 });
+const wss = new WebSocketServer({ port: PORT, host: process.env.HOST, maxPayload: 8000 });
 const players = new Map();
 let seq = 0;
 
@@ -519,7 +519,7 @@ setInterval(() => {
 setInterval(() => { for (const p of players.values()) store(p); }, 30_000);
 // пинг, чтобы nginx не рвал простаивающие соединения
 setInterval(() => { for (const p of players.values()) if (p.ws.readyState === 1) p.ws.ping(); }, 25000);
-console.log(`realms-ws :${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`);
+wss.on('listening', () => console.log(`realms-ws :${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`));
 
 // Save active profiles before systemd or a local runner restarts the process.
 let stopping = false;
