@@ -1,6 +1,6 @@
 // Расчёт характеристик персонажа: класс, уровень, атрибуты, экипировка, заточка, комплекты, вес. Без DOM — проверяется юнит-тестами.
 import { MOVE_SCALE } from './movement.js';
-import { CLASSES, ITEMS, SETS, SLOTS } from './data.js';
+import { CLASSES, ITEMS, PROFESSIONS, SETS, SLOTS } from './data.js';
 
 export const MAX_ENCH = 16;
 export const SAFE_ENCH = 3;
@@ -57,6 +57,9 @@ export function calcStats(P, buffs = [], now = 0) {
     s.maxHp += b.hp || 0; s.maxMp += b.mp || 0; s.patk += b.patk || 0; s.matk += b.matk || 0;
     s.pdef += b.pdef || 0; s.mdef += b.mdef || 0; s.speed += b.speed || 0; s.crit += b.crit || 0; s.cast += b.cast || 0;
   }
+  // профессия: множители к уже собранным характеристикам (зеркало — godot/scripts/data.gd::stats)
+  const prof = P.prof && Object.hasOwn(PROFESSIONS, P.prof) ? PROFESSIONS[P.prof] : null;
+  if (prof) for (const [key, mul] of Object.entries(prof.bonus)) s[key] *= mul;
   // вес: перегруз больше 70% — медленнее бег и восстановление
   s.load = weightOf(P); s.cap = Math.round(40 + A.con * 1.2);
   s.regen = 1;

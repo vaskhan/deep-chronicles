@@ -413,6 +413,54 @@ test('SP/обучение/автолут по WS: класс, уровень, д
   } finally {a.ws.close();await a.closed();}
 });
 
+test('профессия по WS: рано, чужой класс, повтор, успешный выбор и сохранение после перезахода', async () => {
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'Новобранец', pass: 'prof-test', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    assert.equal(auth.p.prof, null);
+    assert.equal((await a.wait('hi')).features.professions, 1);
+    // до 20 уровня профессия недоступна
+    a.send({ t: 'prof', id: 'knight' }); await untilEv(a, /уровня/);
+    a.send({ t: 'dev', lvl: 20, sp: 100000 }); await untilP(a, p => p.lvl === 20 && p.sp === 100000);
+    // слишком частые попытки сервер отбивает и объясняет
+    a.send({ t: 'prof', id: 'knight' }); await untilEv(a, /Слишком часто/);
+    await pause(1100);
+    // чужой класс и выдуманный id отклоняются
+    a.send({ t: 'prof', id: 'sorcerer' }); await untilEv(a, /недоступна вашему классу/);
+    await pause(1100);
+    a.send({ t: 'prof', id: 'нет-такой' }); await untilEv(a, /недоступна вашему классу/);
+    await pause(1100);
+    // умение профессии нельзя выучить до выбора
+    a.send({ t: 'learn', id: 'shield_bash', rank: 1 }); await untilEv(a, /профессии/);
+    a.send({ t: 'prof', id: 'knight' });
+    const chosen = await untilP(a, p => p.prof === 'knight');
+    assert.equal(chosen.prof, 'knight');
+    // повторный выбор не перезаписывает профессию
+    await pause(1100);
+    a.send({ t: 'prof', id: 'berserker' }); await untilEv(a, /уже выбрана/);
+    // умение профессии учится за SP по общим правилам
+    a.send({ t: 'learn', id: 'shield_bash', rank: 1 });
+    const learned = await untilP(a, p => p.skills.shield_bash === 1);
+    const { skillRanks } = await import('../src/progression.js');
+    assert.equal(learned.sp, 100000 - skillRanks('shield_bash')[0].sp);
+    assert.equal(learned.prof, 'knight');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(DB, { readOnly: true });
+    const saved = JSON.parse(db.prepare('SELECT save FROM accounts WHERE key = ?').get('новобранец').save); db.close();
+    assert.equal(saved.prof, 'knight');
+    a.ws.close(); await a.closed(); await pause(150);
+    const b = client(); await b.open();
+    try {
+      b.send({ t: 'auth', token: auth.token });
+      const ok = await b.wait('authok');
+      assert.equal(ok.p.prof, 'knight');
+      assert.equal(ok.p.skills.shield_bash, 1);
+      assert.equal(ok.p.sp, learned.sp);
+    } finally { b.ws.close(); await b.closed(); }
+  } finally { a.ws.close(); await a.closed(); }
+});
+
 test('изготовление по WS: списание материалов, повтор заказа и сохранение', async () => {
   const a=client();await a.open();
   try {

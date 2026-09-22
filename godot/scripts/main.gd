@@ -510,7 +510,7 @@ func _open_npc(npc):
 func _action(kind: String, value):
 	if profile.is_empty(): return
 	match kind:
-		"inventory", "character", "map", "menu", "skills", "settings", "controls", "actions", "equipment", "party": hud.toggle(kind)
+		"inventory", "character", "map", "menu", "skills", "settings", "controls", "actions", "equipment", "party", "profession": hud.toggle(kind)
 		"camera": camera_yaw = hero.rotation.y + PI; camera_pitch = Tuning.CAMERA_PITCH_RESET; camera_distance = Tuning.CAMERA_DISTANCE_RESET
 		"fullscreen": DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 		"attack": attack()
@@ -526,6 +526,8 @@ func _action(kind: String, value):
 		"hotbar": hud.activate_slot(int(value))
 		"skill": use_skill(str(value))
 		"learn": Network.send({"t": "learn", "id": value.id, "rank": value.rank})
+		# Выбор профессии проверяет и сохраняет сервер: клиент только передаёт намерение.
+		"prof": Network.send({"t": "prof", "id": str(value)})
 		"autoloot": Network.send({"t": "autoloot", "enabled": value})
 		"use", "buy": Network.send({"t": kind, "id": value, "n": 1})
 		"equip", "sell": Network.send({"t": kind, "idx": value, "n": 1})

@@ -68,7 +68,8 @@ func move(pos: Vector3, direction: Vector3, distance: float, trace: Array = []) 
 
 func icon(id: String) -> Texture2D:
 	if not icons.has(id):
-		var art_id = catalog.ITEMS.get(id, {}).get("icon", id)
+		# Умения и предметы могут ссылаться на семейство уже нарисованной иконки полем `icon`.
+		var art_id = catalog.ITEMS.get(id, {}).get("icon", catalog.SKILLS.get(id, {}).get("icon", id))
 		var p = "res://generated/icons/%s.png" % art_id
 		icons[id] = load(p) if ResourceLoader.exists(p) else null
 	return icons[id]
@@ -104,6 +105,10 @@ func stats(p: Dictionary, buffs: Array = []) -> Dictionary:
 			for key in st.bonus:
 				var target = "maxHp" if key == "hp" else ("maxMp" if key == "mp" else key)
 				s[target] += st.bonus[key]
+	# Профессия: те же множители, что и в src/stats.js::calcStats. Считает всё равно сервер.
+	var prof = profession(p)
+	if not prof.is_empty():
+		for key in prof.bonus: s[key] *= prof.bonus[key]
 	s.load = floor(s.load * 10 + 0.5) / 10
 	if s.load > s.cap * 0.7: s.speed *= 0.6; s.regen = 0.5
 	for buff in buffs:
@@ -139,6 +144,26 @@ func appearance(p: Dictionary) -> Dictionary:
 	gear.helmKind = items.get(p.equip.get("head"), {}).get("set")
 	var mat = {"chain": "chain", "bone": "plate", "leather": "leather"}.get(armor.get("set", ""), "cloth")
 	return {"cls": p.cls, "body": armor.get("color", catalog.CLASSES[p.cls].color), "w": weapon.get("color"), "staff": weapon.get("twoHand", false), "ench": p.get("enc", {}).get("weapon", 0), "robe": armor.get("robe", false) or p.cls == "mage", "mat": mat, "gear": gear}
+
+## Выбранная профессия профиля или пустой словарь.
+func profession(p: Dictionary) -> Dictionary:
+	var id = p.get("prof")
+	if id is String and catalog.PROFESSIONS.has(id): return catalog.PROFESSIONS[id]
+	return {}
+
+## Профессии, доступные классу: id + описание. Порядок — как в общих данных.
+func professions_for(cls: String) -> Array:
+	var list = []
+	for id in catalog.PROFESSIONS:
+		if catalog.PROFESSIONS[id].base == cls: list.append({"id": id}.merged(catalog.PROFESSIONS[id]))
+	return list
+
+## Умения персонажа: базовые класса плюс умения выбранной профессии.
+func skills_of(p: Dictionary) -> Array:
+	var list: Array = catalog.CLASSES[p.cls].skills.duplicate()
+	var prof = profession(p)
+	if not prof.is_empty(): list.append_array(prof.skills)
+	return list
 
 func skill(p: Dictionary, id: String) -> Dictionary:
 	var ranks = catalog.UI_RULES.skillRanks[id]

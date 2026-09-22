@@ -1,5 +1,5 @@
 import { MOVE_SCALE } from '../../src/movement.js';
-import { skillRanks } from '../../src/progression.js';
+import { skillRanks, profsFor } from '../../src/progression.js';
 import { LOOT } from '../../src/loot.js';
 // One source of truth: bake the existing world, catalog and procedural animation
 // into engine-neutral files. No server saves or credentials enter this export.
@@ -119,10 +119,13 @@ await bake('npc', enhanceHumanoid(buildNpc(0xd09030), 'npc'));
 // Golden profiles exercise the native display calculation against JS rules.
 const fixtures = [];
 for (const cls of Object.keys(data.CLASSES)) for (const lvl of [1, 8, 18, 40]) for (const set of ['none', ...Object.keys(data.SETS)]) {
-  const p = { cls, lvl, inv: [{ id: 'potion_hp', n: 25 }], equip: Object.fromEntries(data.SLOTS.map(s => [s.id, null])), enc: {} };
-  p.equip.weapon = cls === 'mage' ? 'staff_crystal' : 'sword_crystal'; p.enc.weapon = lvl % 7;
-  for (const id of data.SETS[set]?.parts || []) { p.equip[data.ITEMS[id].slot] = id; p.enc[data.ITEMS[id].slot] = 4; }
-  fixtures.push({ p, stats: calcStats(p) });
+  // Профессии входят в набор эталонов: множители характеристик обязан повторять и клиентский предпросмотр.
+  for (const prof of [null, ...profsFor(cls).map(x => x.id)]) {
+    const p = { cls, lvl, prof, inv: [{ id: 'potion_hp', n: 25 }], equip: Object.fromEntries(data.SLOTS.map(s => [s.id, null])), enc: {} };
+    p.equip.weapon = cls === 'mage' ? 'staff_crystal' : 'sword_crystal'; p.enc.weapon = lvl % 7;
+    for (const id of data.SETS[set]?.parts || []) { p.equip[data.ITEMS[id].slot] = id; p.enc[data.ITEMS[id].slot] = 4; }
+    fixtures.push({ p, stats: calcStats(p) });
+  }
 }
 await fs.writeFile(path.join(out, 'stats-fixtures.json'), JSON.stringify(fixtures));
 console.log(`Godot: ${shapes.length} objects, ${props.spawns.length} spawns, ${obstacles.length} obstacles, ${fixtures.length} stat fixtures exported.`);

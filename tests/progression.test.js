@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newChar, loadChar, newActor, cmdLearn, creditLoot, cmdCraft, cmdBuy, skillError } from '../server/sim/player.js';
-import { skillRanks, spForKill, effectiveSkill } from '../src/progression.js';
-import { ITEMS, SETS, RECIPES, MOBS } from '../src/data.js';
+import { newChar, loadChar, newActor, cmdLearn, cmdProf, creditLoot, cmdCraft, cmdBuy, skillError } from '../server/sim/player.js';
+import { skillRanks, spForKill, effectiveSkill, profsFor, profError, applyProf, skillsOf, profSkillCost, PROF_SP_STEP } from '../src/progression.js';
+import { xpForKill } from '../src/sim.js';
+import { calcStats } from '../src/stats.js';
+import { ITEMS, SETS, RECIPES, MOBS, PROFESSIONS, PROF_LVL, SKILLS, xpToNext } from '../src/data.js';
 import { sellPrice } from '../src/sim.js';
 import { buildProps, TOWNS, CRYPT } from '../src/world-core.js';
 import { artPlacements, presentationHeightAt } from '../tools/godot/placements.mjs';
@@ -125,4 +127,144 @@ test('стационарные лавки продают только свой �
   npcs[0].shop='weapons'; const before=a.P.coins;
   cmdBuy(a,npcs,'potion_hp',1);assert.equal(a.P.coins,before);
   cmdBuy(a,npcs,'sword_long',1);assert.equal(a.P.coins,before-ITEMS.sword_long.price);
+});
+
+
+// ===== профессии =====
+test('профессия: по две на класс, выбор только с 20 уровня, свой класс и один раз', () => {
+  assert.deepEqual(profsFor('warrior').map(p => p.id), ['knight', 'berserker']);
+  assert.deepEqual(profsFor('mage').map(p => p.id), ['sorcerer', 'healer']);
+  const P = newChar('Тест', 'warrior');
+  assert.equal(P.prof, null);
+  assert.match(profError(P, 'knight'), new RegExp(`с ${PROF_LVL} уровня`));
+  assert.match(profError(P, 'sorcerer'), /недоступна вашему классу/);
+  for (const id of ['', 'missing', '__proto__', 'constructor']) assert.match(profError(P, id), /недоступна вашему классу/);
+  P.lvl = PROF_LVL - 1;
+  assert.ok(profError(P, 'knight'));
+  P.lvl = PROF_LVL;
+  assert.equal(profError(P, 'knight'), null);
+  assert.equal(applyProf(P, 'knight'), null);
+  assert.equal(P.prof, 'knight');
+  assert.match(applyProf(P, 'berserker'), /уже выбрана/);
+  assert.equal(P.prof, 'knight');
+});
+
+test('профессия: множители доходят до calcStats и не трогают чужие характеристики', () => {
+  const base = newChar('Тест', 'warrior'); base.lvl = 20;
+  const plain = calcStats(base);
+  for (const [id, expected] of Object.entries({ knight: { maxHp: 1.15, pdef: 1.15 }, berserker: { patk: 1.12, crit: 1.25, pdef: 0.95 } })) {
+    const P = { ...structuredClone(base), prof: id };
+    const s = calcStats(P);
+    assert.deepEqual(PROFESSIONS[id].bonus, expected, id);
+    for (const [key, mul] of Object.entries(expected)) {
+      const want = key === 'maxHp' || key === 'maxMp' ? Math.round(plain[key] * mul) : plain[key] * mul;
+      assert.ok(Math.abs(s[key] - want) < 1e-9, `${id}.${key}: ${s[key]} != ${want}`);
+    }
+    for (const key of ['matk', 'mdef', 'acc', 'eva', 'maxMp']) {
+      if (Object.hasOwn(expected, key)) continue;
+      assert.equal(s[key], plain[key], `${id}.${key} не должен меняться`);
+    }
+  }
+  const mage = newChar('Маг', 'mage'); mage.lvl = 20;
+  const mageStats = calcStats(mage);
+  assert.ok(Math.abs(calcStats({ ...structuredClone(mage), prof: 'sorcerer' }).matk - mageStats.matk * 1.15) < 1e-9);
+  assert.ok(Math.abs(calcStats({ ...structuredClone(mage), prof: 'sorcerer' }).cast - mageStats.cast * 1.1) < 1e-9);
+  assert.equal(calcStats({ ...structuredClone(mage), prof: 'healer' }).maxMp, Math.round(mageStats.maxMp * 1.2));
+  assert.ok(Math.abs(calcStats({ ...structuredClone(mage), prof: 'healer' }).mdef - mageStats.mdef * 1.1) < 1e-9);
+});
+
+test('ранги умений профессии: открыты с 20+, стоят SP и учатся только после выбора', () => {
+  for (const prof of Object.values(PROFESSIONS)) for (const id of prof.skills) {
+    const ranks = skillRanks(id);
+    assert.ok(ranks.length >= 4, `${id}: мало рангов`);
+    assert.equal(ranks[0].lvl, SKILLS[id].lvl, `${id}: первый ранг не на уровне умения`);
+    assert.ok(ranks[0].lvl >= PROF_LVL, `${id}: доступен раньше профессии`);
+    assert.ok(ranks[0].sp > 0, `${id}: первый ранг бесплатный`);
+    for (let i = 1; i < ranks.length; i++) {
+      assert.equal(ranks[i].lvl, ranks[i - 1].lvl + 4, `${id}: шаг уровня`);
+      assert.ok(ranks[i].sp > ranks[i - 1].sp, `${id}: цена не растёт`);
+      assert.ok(ranks[i].mp > ranks[i - 1].mp, `${id}: расход маны не растёт`);
+      if (ranks[i].mul) assert.ok(ranks[i].mul > ranks[i - 1].mul, `${id}: сила не растёт`);
+    }
+  }
+  const a = newActor(1, 'Тест', newChar('Тест', 'warrior'));
+  a.P.lvl = 25; a.P.sp = 100000;
+  assert.deepEqual(skillsOf(a.P), ['power_strike', 'battle_cry', 'whirlwind']);
+  cmdLearn(a, 'shield_bash', 1, () => true);
+  assert.equal(a.P.skills.shield_bash, undefined, 'без профессии умение не учится');
+  cmdProf(a, 'knight', () => true);
+  assert.equal(a.P.prof, 'knight');
+  assert.deepEqual(skillsOf(a.P), ['power_strike', 'battle_cry', 'whirlwind', 'shield_bash', 'iron_will']);
+  const cost = skillRanks('shield_bash')[0].sp, sp = a.P.sp;
+  cmdLearn(a, 'shield_bash', 1, () => true);
+  assert.equal(a.P.skills.shield_bash, 1); assert.equal(a.P.sp, sp - cost);
+  // умение чужой профессии того же класса недоступно
+  cmdLearn(a, 'frenzy', 1, () => true); assert.equal(a.P.skills.frenzy, undefined);
+});
+
+test('удар щитом требует щит, ошибка записи откатывает профессию, повтор не проходит дважды', () => {
+  const a = newActor(1, 'Тест', newChar('Тест', 'warrior'));
+  a.P.lvl = 25; a.P.sp = 100000;
+  cmdProf(a, 'knight', () => { throw Error('disk'); });
+  assert.equal(a.P.prof, null, 'сбой записи не оставляет профессию');
+  a.profAt = 0;
+  cmdProf(a, 'knight', () => true); assert.equal(a.P.prof, 'knight');
+  cmdLearn(a, 'shield_bash', 1, () => true);
+  a.x = 0; a.z = 0; // проверяем оружие, а не запрет боя в городе
+  assert.match(skillError(a, 'shield_bash', Date.now()), /нужен щит/);
+  a.P.equip.shield = 'shield_iron';
+  assert.equal(skillError(a, 'shield_bash', Date.now()), null);
+  // частота: второй пакет подряд отбрасывается молча
+  const b = newActor(2, 'Тест2', newChar('Тест2', 'mage'));
+  b.P.lvl = 25;
+  cmdProf(b, 'sorcerer', () => true);
+  cmdProf(b, 'healer', () => true);
+  assert.equal(b.P.prof, 'sorcerer');
+});
+
+test('миграция: профессия переживает перезаход, чужая и неизвестная сбрасываются без потери прогресса', () => {
+  const original = newChar('Тест', 'warrior');
+  original.lvl = 25; original.coins = 4321; original.sp = 777;
+  assert.equal(loadChar('Тест', original).prof, null);
+  original.prof = 'knight'; original.skills = { power_strike: 2, shield_bash: 1 };
+  const saved = loadChar('Тест', original);
+  assert.equal(saved.prof, 'knight');
+  assert.deepEqual(saved.skills, { power_strike: 2, shield_bash: 1 });
+  assert.equal(saved.coins, 4321); assert.equal(saved.sp, 777);
+  // профессия мага у воина: сбрасывается вместе с её умениями, всё остальное цело
+  const broken = loadChar('Тест', { ...structuredClone(original), prof: 'sorcerer', skills: { power_strike: 2, lightning: 3 } });
+  assert.equal(broken.prof, null);
+  assert.deepEqual(broken.skills, { power_strike: 2 });
+  assert.equal(broken.coins, 4321);
+  assert.equal(loadChar('Тест', { ...structuredClone(original), prof: '__proto__' }).prof, null);
+  // ранг выше доступного по уровню обрезается
+  const early = loadChar('Тест', { ...structuredClone(original), lvl: 20, skills: { shield_bash: 5 } });
+  assert.equal(early.skills.shield_bash, 1);
+});
+
+test('цена умений профессии: первый ранг — десятки убийств, рост в полтора раза, базовая шкала не тронута', () => {
+  // Ориентир — обычный (не босс) моб своего уровня: именно на нём фармят после 20 уровня.
+  const nearby = Object.values(MOBS).filter(m => !m.boss && Math.abs(m.lvl - PROF_LVL) <= 1);
+  assert.ok(nearby.length, 'в мире нет обычного моба уровня профессии');
+  const perKill = Math.max(...nearby.map(m => spForKill(xpForKill(m, PROF_LVL))));
+  const kills = profSkillCost(1) / perKill;
+  assert.ok(kills >= 25 && kills <= 30, `первый ранг стоит ${kills.toFixed(1)} убийств, нужно 25–30`);
+  // Рост цены за ранг держится в заданной вилке, а максимальный ранг остаётся заметной целью.
+  for (let rank = 2; rank <= 5; rank++) {
+    const step = profSkillCost(rank) / profSkillCost(rank - 1);
+    assert.ok(step >= 1.5 && step <= 1.7, `ранг ${rank}: шаг ${step.toFixed(2)}`);
+  }
+  assert.ok(Math.abs(profSkillCost(2) / profSkillCost(1) - PROF_SP_STEP) < 0.02);
+  assert.ok(profSkillCost(5) / profSkillCost(1) > 5, 'максимальный ранг слишком дёшев');
+  // Умения профессии должны быть заметно дешевле базовой формулы на тех же уровнях.
+  for (const prof of Object.values(PROFESSIONS)) for (const id of prof.skills) {
+    for (const rank of skillRanks(id)) {
+      assert.equal(rank.sp, profSkillCost(rank.rank), `${id} ранг ${rank.rank}`);
+      assert.ok(rank.sp < Math.round(xpToNext(rank.lvl) * 0.18), `${id} ранг ${rank.rank}: не дешевле базовой формулы`);
+    }
+  }
+  // Базовые умения классов считаются по-старому: первый ранг первого уровня бесплатный, дальше опыт уровня.
+  for (const id of ['power_strike', 'battle_cry', 'whirlwind', 'fire_bolt', 'heal', 'ice_nova']) {
+    for (const rank of skillRanks(id)) assert.equal(rank.sp, rank.lvl === 1 ? 0 : Math.round(xpToNext(rank.lvl) * 0.18), `${id} ранг ${rank.rank}`);
+  }
 });

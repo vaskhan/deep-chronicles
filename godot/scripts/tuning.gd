@@ -34,3 +34,8 @@ const LABEL_RANGE_NPC = 60.0
 const TARGET_PICK_RANGE = 55.0
 const TALK_SEARCH_RANGE = 25.0
 const TALK_OPEN_RANGE = 8.0
+
+# --- Окно выбора профессии ---
+## Две карточки профессии с описанием, бонусами и умениями помещаются в эти размеры.
+const PROFESSION_WINDOW_WIDTH = 530.0
+const PROFESSION_WINDOW_HEIGHT = 600.0
