@@ -33,8 +33,17 @@ export function applyProf(P, id) {
   return null;
 }
 export const spForKill = xp => Math.max(1, Math.floor(xp * 0.12));
+// Умения профессий живут по отдельной, более дешёвой шкале. Базовая формула привязана к опыту
+// уровня и к 20+ уровню требует десятки тысяч SP — за профессию это слишком дорого: её умения
+// начинают качаться с нуля уже после 20 уровня. Первый ранг — примерно 25–30 убийств моба
+// своего уровня по текущей выдаче SP, дальше цена растёт в PROF_SP_STEP раз за ранг.
+export const PROF_SP_FIRST = 2400;
+export const PROF_SP_STEP = 1.6;
+export const profSkillCost = rank => Math.round(PROF_SP_FIRST * Math.pow(PROF_SP_STEP, rank - 1) / 10) * 10;
 export const skillRanks = id => (Object.hasOwn(SKILL_LEVELS, id) ? SKILL_LEVELS[id] : []).map((lvl, i) => {
-  const base = SKILLS[id], sk = { ...base, lvl, rank: i + 1, sp: lvl === 1 ? 0 : Math.round(xpToNext(lvl) * 0.18), mp: Math.round(base.mp * (1 + i * 0.12)) };
+  const base = SKILLS[id];
+  const cost = profOfSkill(id) ? profSkillCost(i + 1) : (lvl === 1 ? 0 : Math.round(xpToNext(lvl) * 0.18));
+  const sk = { ...base, lvl, rank: i + 1, sp: cost, mp: Math.round(base.mp * (1 + i * 0.12)) };
   if (base.mul) sk.mul = +(base.kind === 'buff' ? base.mul + i * 0.05 : base.mul * (1 + i * 0.18)).toFixed(3);
   if (base.amount) sk.amount = +(base.amount + i * 0.05).toFixed(3);
   return sk;

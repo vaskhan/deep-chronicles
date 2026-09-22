@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { newChar, loadChar, newActor, cmdLearn, cmdProf, creditLoot, cmdCraft, skillError } from '../server/sim/player.js';
-import { skillRanks, spForKill, effectiveSkill, profsFor, profError, applyProf, skillsOf } from '../src/progression.js';
+import { skillRanks, spForKill, effectiveSkill, profsFor, profError, applyProf, skillsOf, profSkillCost, PROF_SP_STEP } from '../src/progression.js';
+import { xpForKill } from '../src/sim.js';
 import { calcStats } from '../src/stats.js';
-import { ITEMS, SETS, RECIPES, MOBS, PROFESSIONS, PROF_LVL, SKILLS } from '../src/data.js';
+import { ITEMS, SETS, RECIPES, MOBS, PROFESSIONS, PROF_LVL, SKILLS, xpToNext } from '../src/data.js';
 import { sellPrice } from '../src/sim.js';
 import { buildProps, TOWNS, CRYPT } from '../src/world-core.js';
 import { artPlacements, presentationHeightAt } from '../tools/godot/placements.mjs';
@@ -209,4 +210,31 @@ test('миграция: профессия переживает перезахо
   // ранг выше доступного по уровню обрезается
   const early = loadChar('Тест', { ...structuredClone(original), lvl: 20, skills: { shield_bash: 5 } });
   assert.equal(early.skills.shield_bash, 1);
+});
+
+test('цена умений профессии: первый ранг — десятки убийств, рост в полтора раза, базовая шкала не тронута', () => {
+  // Ориентир — обычный (не босс) моб своего уровня: именно на нём фармят после 20 уровня.
+  const nearby = Object.values(MOBS).filter(m => !m.boss && Math.abs(m.lvl - PROF_LVL) <= 1);
+  assert.ok(nearby.length, 'в мире нет обычного моба уровня профессии');
+  const perKill = Math.max(...nearby.map(m => spForKill(xpForKill(m, PROF_LVL))));
+  const kills = profSkillCost(1) / perKill;
+  assert.ok(kills >= 25 && kills <= 30, `первый ранг стоит ${kills.toFixed(1)} убийств, нужно 25–30`);
+  // Рост цены за ранг держится в заданной вилке, а максимальный ранг остаётся заметной целью.
+  for (let rank = 2; rank <= 5; rank++) {
+    const step = profSkillCost(rank) / profSkillCost(rank - 1);
+    assert.ok(step >= 1.5 && step <= 1.7, `ранг ${rank}: шаг ${step.toFixed(2)}`);
+  }
+  assert.ok(Math.abs(profSkillCost(2) / profSkillCost(1) - PROF_SP_STEP) < 0.02);
+  assert.ok(profSkillCost(5) / profSkillCost(1) > 5, 'максимальный ранг слишком дёшев');
+  // Умения профессии должны быть заметно дешевле базовой формулы на тех же уровнях.
+  for (const prof of Object.values(PROFESSIONS)) for (const id of prof.skills) {
+    for (const rank of skillRanks(id)) {
+      assert.equal(rank.sp, profSkillCost(rank.rank), `${id} ранг ${rank.rank}`);
+      assert.ok(rank.sp < Math.round(xpToNext(rank.lvl) * 0.18), `${id} ранг ${rank.rank}: не дешевле базовой формулы`);
+    }
+  }
+  // Базовые умения классов считаются по-старому: первый ранг первого уровня бесплатный, дальше опыт уровня.
+  for (const id of ['power_strike', 'battle_cry', 'whirlwind', 'fire_bolt', 'heal', 'ice_nova']) {
+    for (const rank of skillRanks(id)) assert.equal(rank.sp, rank.lvl === 1 ? 0 : Math.round(xpToNext(rank.lvl) * 0.18), `${id} ранг ${rank.rank}`);
+  }
 });
