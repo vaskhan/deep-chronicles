@@ -4,6 +4,7 @@ var materials: Dictionary = {}
 var shapes: Dictionary = {}
 var environment: WorldEnvironment
 var sun: DirectionalLight3D
+var sun_start_rotation: Vector3
 var portals: Array = []
 var underground = false
 var atmosphere: Dictionary = {}
@@ -33,6 +34,7 @@ func build():
 
 func _lighting():
 	environment = $WorldEnvironment; sun = $Sun
+	sun_start_rotation = sun.rotation
 	environment.environment = environment.environment.duplicate(true)
 
 # Переходы света плавные; подземелье сразу получает тёмный фон неба.
@@ -48,8 +50,8 @@ func set_region(pos: Vector3):
 		"meadow": {"fog": Color("a8bec5"), "density": 0.00016, "sun": Color("fff0cf"), "energy": 1.1, "ambient": 0.35},
 		"forest": {"fog": Color("6f9293"), "density": 0.00045, "sun": Color("e5ecd1"), "energy": 1.05, "ambient": 0.23},
 		"waste": {"fog": Color("c4a589"), "density": 0.00025, "sun": Color("ffdbb6"), "energy": 1.15, "ambient": 0.32},
-		"gorge_terraces": {"fog": Color("8fa3a0"), "density": 0.00045, "sun": Color("e9efe9"), "energy": 1.0, "ambient": 0.3},
-		"gorge_falls": {"fog": Color("a3b8bf"), "density": 0.0008, "sun": Color("dde8ef"), "energy": 0.95, "ambient": 0.33},
+		"gorge_terraces": {"fog": Color("6d8c8b"), "density": 0.0007, "sun": Color("ffe6bf"), "energy": 1.05, "ambient": 0.38},
+		"gorge_falls": {"fog": Color("7d9c9b"), "density": 0.0011, "sun": Color("ffe5c4"), "energy": 1.02, "ambient": 0.38},
 		"gorge_summit": {"fog": Color("c3d0dc"), "density": 0.00035, "sun": Color("f3f6ff"), "energy": 1.08, "ambient": 0.3},
 		"crypt": {"fog": Color("191e30"), "density": 0.008, "sun": Color("9fb1da"), "energy": 0.12, "ambient": 0.23},
 	}.get(id, {})
@@ -90,6 +92,10 @@ func _terrain():
 	material.set_shader_parameter("forest_normal", load("res://assets/terrain/pbr/forrest_ground_01_nor_gl_2k.jpg"))
 	material.set_shader_parameter("forest_roughness", load("res://assets/terrain/pbr/forrest_ground_01_rough_2k.jpg"))
 	material.set_shader_parameter("forest_height", load("res://assets/terrain/pbr/forrest_ground_01_disp_2k.jpg"))
+	for layer in ["rock_face", "mossy_rock", "dry_ground_01"]:
+		for channel in ["diff", "nor", "arm"]:
+			if layer == "dry_ground_01" and channel != "diff": continue
+			material.set_shader_parameter(layer + "_" + channel, load("res://assets/gorge/%s_%s.jpg" % [layer, channel]))
 	# Chunked meshes let the engine cull terrain behind the camera.
 	for cz in range(-1000, 1000, 100):
 		for cx in range(-1000, 1000, 100):
@@ -181,12 +187,18 @@ func _process(dt):
 		e.ambient_light_energy = lerpf(e.ambient_light_energy, atmosphere.ambient, blend)
 		sun.light_color = sun.light_color.lerp(atmosphere.sun, blend)
 		sun.light_energy = lerpf(sun.light_energy, atmosphere.energy, blend)
+		var direction = Vector3(Tuning.GORGE_SUN_PITCH, Tuning.GORGE_SUN_YAW, 0) if region_id in ["gorge_terraces", "gorge_falls"] else sun_start_rotation
+		sun.rotation.x = lerp_angle(sun.rotation.x, direction.x, blend)
+		sun.rotation.y = lerp_angle(sun.rotation.y, direction.y, blend)
 	for p in portals: p.rotate_y(dt * 0.35)
 
 func _models():
 	var groups: Dictionary = {}
 	for original_row in GameData.world.get("modelPlacements", []):
 		var row = original_row.duplicate()
+		if row[0] == "rock_a":
+			var pos = Vector3(row[1], row[2], row[3])
+			if GameData.zone_at(pos).id == "gorge" and GameData.gorge_tier(pos).id != "summit": row[0] = "moss_boulder"
 		if row[0] in ["oak", "pine"]:
 			var zone = GameData.zone_at(Vector3(row[1], row[2], row[3]))
 			var choice = posmod(hash("tree:%s:%s" % [row[1],row[3]]), 100)
@@ -200,7 +212,7 @@ func _models():
 	var sources: Dictionary = {}
 	for rows in groups.values():
 		var id = rows[0][0]
-		var path = "res://assets/props/%s.glb" % id
+		var path = ("res://assets/gorge/%s.glb" if id == "moss_boulder" else "res://assets/props/%s.glb") % id
 		if not ResourceLoader.exists(path): continue
 		if not sources.has(id):
 			var source = Art.packed(path).instantiate()
@@ -236,7 +248,7 @@ func _models():
 				var transform = Transform3D(basis, Vector3(r[1], r[2], r[3]) + basis * offset)
 				mm.set_instance_transform(i, transform * part.transform)
 			var node = MultiMeshInstance3D.new(); node.name = "Art_" + id; node.multimesh = mm
-			node.visibility_range_end = 360 if id in ["oak", "pine", "elm_field", "elm_slender", "alder_round", "pine_natural", "rock_a", "rock_b", "bush"] else 800
+			node.visibility_range_end = 360 if id in ["oak", "pine", "elm_field", "elm_slender", "alder_round", "pine_natural", "rock_a", "rock_b", "bush", "moss_boulder"] else 800
 			node.visibility_range_end_margin = 30
 			add_child(node)
 

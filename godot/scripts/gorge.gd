@@ -15,6 +15,8 @@ func build():
 	_pool(info.pool)
 	_waterfall(info.falls)
 	_mist(info.falls, info.pool)
+	var art = preload("res://scripts/gorge_art.gd").new()
+	add_child(art); art.build()
 
 ## Треугольник с заданной лицевой стороной: линтер сцены проверяет, что нормали не вывернуты.
 func _tri(st: SurfaceTool, verts: Array, normal: Vector3):
@@ -33,17 +35,20 @@ func _river(rows: Array):
 		var drop = float(b[2]) - float(a[2])
 		var run = Vector2(b[0] - a[0], b[1] - a[1]).length()
 		if absf(drop) > 3.0: travelled += run; continue
-		var steep_a = clampf(absf(drop) / maxf(run, 0.1) * 5.0, 0.0, 1.0)
-		var quad = []
-		for pair in [[a, travelled], [b, travelled + run]]:
-			var row = pair[0]; var across = Vector3(row[3], 0, row[4]) * 0.45
-			var centre = Vector3(row[0], float(row[2]), row[1])
-			for side in [0, 1]:
-				var p = centre + across * (1.0 - 2.0 * side)
-				quad.append({"p": p, "n": Vector3.UP, "uv": Vector2(side, pair[1] / 6.0), "color": Color(steep_a, 0, 0)})
+		var steep = clampf(absf(drop) / maxf(run, 0.1), 0.0, 1.0)
+		for step in 4:
+			var quad = []
+			for end in [step,step+1]:
+				var t = float(end)/4.0
+				var centre = Vector3(lerpf(a[0],b[0],t),0,lerpf(a[1],b[1],t))
+				centre.y = GameData.height_at(centre.x,centre.z)+0.42
+				var across = Vector3(lerpf(a[3],b[3],t),0,lerpf(a[4],b[4],t))*0.52
+				for side in [0,1]:
+					var p = centre+across*(1.0-2.0*side)
+					quad.append({"p":p,"n":Vector3.UP,"uv":Vector2(side,(travelled+run*t)/6.0),"color":Color(steep,0,0)})
+			_tri(st,[quad[0],quad[1],quad[2]],Vector3.UP)
+			_tri(st,[quad[1],quad[3],quad[2]],Vector3.UP)
 		travelled += run
-		_tri(st, [quad[0], quad[1], quad[2]], Vector3.UP)
-		_tri(st, [quad[1], quad[3], quad[2]], Vector3.UP)
 	var node = MeshInstance3D.new(); node.name = "River"; node.mesh = st.commit()
 	node.material_override = river_material; node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node)
@@ -75,7 +80,7 @@ func _waterfall(info: Dictionary):
 	if downstream.dot(axis) > 0.0: downstream = -downstream
 	var lip = Vector3(info.x, float(info.top), info.z) + downstream * 1.2
 	var height = float(info.top) - float(info.bottom)
-	for layer in [{"width": float(info.width), "push": 3.2, "veil": 0.0, "name": "Waterfall"}, {"width": float(info.width) * 1.45, "push": 4.4, "veil": 1.0, "name": "WaterfallVeil"}]:
+	for layer in [{"width": float(info.width) * 1.15, "push": 3.2, "veil": 0.0, "name": "Waterfall"}, {"width": float(info.width) * 1.45, "push": 4.4, "veil": 1.0, "name": "WaterfallVeil"}]:
 		var st = SurfaceTool.new(); st.begin(Mesh.PRIMITIVE_TRIANGLES)
 		var rows = 14; var cols = 8
 		var grid = []
@@ -95,18 +100,10 @@ func _waterfall(info: Dictionary):
 		var material = ShaderMaterial.new(); material.shader = preload("res://shaders/waterfall.gdshader")
 		material.set_shader_parameter("veil", layer.veil)
 		material.render_priority = 1 if layer.veil > 0.0 else 0
+		st.generate_tangents()
 		var node = MeshInstance3D.new(); node.name = layer.name; node.mesh = st.commit()
 		node.material_override = material; node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(node)
-	# Кромка: пенный гребень там, где река переваливает через уступ.
-	var crest = MeshInstance3D.new(); crest.name = "FallsCrest"; var capsule = CapsuleMesh.new()
-	capsule.radius = 0.55; capsule.height = float(info.width) * 1.05
-	crest.mesh = capsule; crest.position = lip + Vector3.UP * 0.15
-	crest.basis = Basis.looking_at(across, Vector3.UP) * Basis(Vector3.RIGHT, PI / 2)
-	var foam = StandardMaterial3D.new(); foam.albedo_color = Color(0.9, 0.95, 0.96, 0.8)
-	foam.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; foam.roughness = 0.4
-	crest.material_override = foam; crest.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(crest)
 	falls.downstream = downstream; falls.across = across
 
 ## Туман и брызги: клубы у подножия поднимаются и сносятся по течению, мелкая пыль у кромки.
@@ -114,9 +111,9 @@ func _mist(info: Dictionary, pool: Dictionary):
 	var base = Vector3(info.x, float(info.bottom) + 1.0, info.z) + falls.downstream * 3.0
 	var top = Vector3(info.x, float(info.top), info.z) + falls.downstream * 1.5
 	for cfg in [
-		{"name": "FallsMist", "pos": base, "amount": 60, "life": 5.5, "box": Vector3(9, 1.2, 4), "vel": Vector2(1.0, 2.2), "size": Vector2(6.0, 12.0), "alpha": 0.16},
-		{"name": "FallsSpray", "pos": base + Vector3.UP * 1.5, "amount": 120, "life": 1.6, "box": Vector3(6, 0.5, 2), "vel": Vector2(3.0, 6.5), "size": Vector2(1.4, 3.2), "alpha": 0.18},
-		{"name": "FallsLipSpray", "pos": top, "amount": 30, "life": 1.4, "box": Vector3(6, 0.2, 0.8), "vel": Vector2(0.6, 1.4), "size": Vector2(1.0, 2.2), "alpha": 0.14},
+		{"name": "FallsMist", "pos": base, "amount": 60, "life": 5.5, "box": Vector3(9, 1.2, 4), "vel": Vector2(1.0, 2.2), "size": Vector2(6.0, 12.0), "alpha": 0.055},
+		{"name": "FallsSpray", "pos": base + Vector3.UP * 1.5, "amount": 120, "life": 1.6, "box": Vector3(6, 0.5, 2), "vel": Vector2(3.0, 6.5), "size": Vector2(1.4, 3.2), "alpha": 0.10},
+		{"name": "FallsLipSpray", "pos": top, "amount": 30, "life": 1.4, "box": Vector3(6, 0.2, 0.8), "vel": Vector2(0.6, 1.4), "size": Vector2(1.0, 2.2), "alpha": 0.07},
 	]:
 		var particles = GPUParticles3D.new(); particles.name = cfg.name
 		particles.amount = cfg.amount; particles.lifetime = cfg.life; particles.preprocess = cfg.life

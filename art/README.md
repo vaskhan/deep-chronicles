@@ -48,7 +48,7 @@
 
 ## Нижнее Громовое ущелье — сканированные ресурсы
 
-- **Coastal Cliff 02**, Rob Tuytel / Poly Haven — https://polyhaven.com/a/coastal_cliff_02, **CC0-1.0**. Исходный glTF 1K, сетка сокращена до 9999 треугольников перед добавлением нижнего края, открытая нижняя граница продлена в грунт. Форма нормализована для модульной расстановки; UV сохранены.
+- **Coastal Cliff 02**, Rob Tuytel / Poly Haven — https://polyhaven.com/a/coastal_cliff_02, **CC0-1.0**. Исходный glTF 1K, сетка сокращена до 9999 треугольников; открытая нижняя граница погружается в склон при расстановке. Форма нормализована для модульной расстановки; UV сохранены.
 - **Fern 02**, Rob Tuytel (сканирование), Rico Cilliers (моделирование) / Poly Haven — https://polyhaven.com/a/fern_02, **CC0-1.0**. Первый куст набора инстансится в локальных участках; ветер и отсечение выполняет шейдер.
 - **Rock Moss Set 01**, авторы указаны в `godot/assets/gorge/manifest.json`, Poly Haven — https://polyhaven.com/a/rock_moss_set_01, **CC0-1.0**. Второй валун набора, бюджет 2400 треугольников. Заменяет внешний вид камней нижнего яруса без переноса точек.
 - **Rock Face**, **Mossy Rock**, **Dry Ground 01** / Poly Haven: https://polyhaven.com/a/rock_face, https://polyhaven.com/a/mossy_rock, https://polyhaven.com/a/dry_ground_01 — **CC0-1.0**. Девять исходных карт 1K diffuse / OpenGL normal / ARM из локального набора Poly Haven. ARM: красный — AO, зелёный — roughness, синий — metallic. Mipmaps и анизотропная фильтрация включены; цветовая корректировка только в шейдере.

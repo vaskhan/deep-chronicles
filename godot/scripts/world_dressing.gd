@@ -82,7 +82,9 @@ func _chunk(key: Vector2i):
    # Громовое ущелье: на мокрых террасах папоротник и трава, у водопада — редкий папоротник
    # в сырых нишах, на вершине — сухая трава клочьями между камней.
    var tier = str(GameData.gorge_tier(p).get("id","terraces"))
-   if tier == "terraces": kind = "fern" if rng.randf()<.6 else "grass"
+   if tier == "terraces":
+    if rng.randf()>.35: continue
+    kind = "shrub_hazel" if rng.randf()<.12 else "grass"
    elif tier == "falls":
     if rng.randf()>.45: continue
     kind = "fern" if rng.randf()<.7 else "grass"

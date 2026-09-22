@@ -11,17 +11,17 @@ float n(vec2 p) {
 }
 void fragment() {
  float t = TIME * speed;
- vec2 p = vec2(UV.x * 14.0, UV.y * 3.2 - t);
- float jets = n(p * vec2(1.0, 0.35)) * 0.55 + n(p * vec2(2.6, 0.9) + 7.0) * 0.3 + n(p * vec2(6.0, 2.0) + 3.0) * 0.15;
+ vec2 p = vec2(UV.x * 14.0, UV.y * 12.0 - t * 3.0);
+ float jets = n(p * vec2(1.0, 0.7)) * 0.55 + n(p * vec2(2.6, 1.8) + 7.0) * 0.3 + n(p * vec2(6.0, 2.0) + 3.0) * 0.15;
  float side = min(UV.x, 1.0 - UV.x);
  float edge = smoothstep(0.0, mix(0.12, 0.35, veil), side + (jets - 0.5) * 0.12);
- float foam = smoothstep(0.45, 0.8, jets) + smoothstep(0.72, 1.0, UV.y) * 0.8;
+ float foam = smoothstep(0.30, 0.72, jets) + smoothstep(0.72, 1.0, UV.y) * 0.8;
  vec3 water = mix(vec3(0.34, 0.52, 0.55), vec3(0.93, 0.97, 0.98), clamp(foam, 0.0, 1.0));
  ALBEDO = water;
- EMISSION = water * 0.12;
+ EMISSION = water * 0.035;
  NORMAL_MAP = normalize(vec3((jets - 0.5) * 1.4, 0.0, 1.0)) * 0.5 + 0.5;
  ROUGHNESS = 0.35;
  SPECULAR = 0.6;
- float body = mix(0.9, 0.38, veil) * edge * mix(0.75, 1.0, jets);
+ float body = mix(0.98, 0.24, veil) * edge * mix(0.75, 1.0, jets);
  ALPHA = clamp(body * (1.0 - smoothstep(0.9, 1.0, UV.y) * 0.6), 0.0, 1.0);
 }

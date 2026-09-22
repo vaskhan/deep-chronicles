@@ -134,8 +134,8 @@
   "files": {
     "coastal_cliff_02.glb": {
       "source": "coastal_cliff_02",
-      "sha256": "7fc334b2aeb066df9e6cf41c5d3be8ba6358e3a082326da690fc290e70ca55ed",
-      "bytes": 2917104
+      "sha256": "1bfc63a57dc486fc6c23340751e224f6114fee47bb6afe7b0bb9321e2614cad4",
+      "bytes": 2653928
     },
     "coastal_cliff_02_coastal_cliff_02_arm_1k.jpg": {
       "source": "coastal_cliff_02",
@@ -240,11 +240,11 @@
   },
   "preparation": {
     "script": "tools/godot/prepare-gorge.py",
-    "cliff_triangles_before_skirt": 9999,
     "boulder_triangle_budget": 2400,
     "textures": "1K; OpenGL normals; ARM = AO / roughness / metallic",
     "lod": "Godot import meshes/generate_lods=true; distance culling; fern MultiMesh tiles 32 m",
-    "cliff_geometry": "Нормализованный скан, нижний край продлён в грунт. UV2.x отмечает добавленную поверхность для трипланарного материала; исходные UV сохранены.",
-    "waterfall_audio": "../audio/manifest.json#kurt-stream"
+    "cliff_geometry": "Скан нормализован для модульной расстановки; исходные UV сохранены. Открытые края перекрываются рельефом, дополнительная геометрия не достраивается.",
+    "waterfall_audio": "../audio/manifest.json#kurt-stream",
+    "cliff_triangles": 9999
   }
 }

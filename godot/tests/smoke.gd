@@ -487,7 +487,7 @@ func _test_audio_bank():
 		for stream in variants:
 			loaded += 1
 			if not stream or stream.get_length() <= 0: valid = false
-	check(valid and loaded == 67, "all 67 licensed recordings and music tracks decode as real audio streams")
+	check(valid and loaded == 68, "all 68 licensed recordings and music tracks decode as real audio streams")
 	var limiter_found = false
 	for i in AudioServer.get_bus_effect_count(0):
 		var effect = AudioServer.get_bus_effect(0, i)
@@ -1090,5 +1090,9 @@ func _test_gorge():
 	await _dev({"x": look.x, "z": look.y, "hp": 99999})
 	game.camera_distance = 34; game.camera_pitch = 0.28; game.camera_yaw = atan2(-axis.x, -axis.y)
 	await create_timer(1.0).timeout
+	check(game.game_audio.waterfall.playing and game.game_audio.waterfall.bus == "Ambience", "waterfall recording plays near the falls on the ambience bus")
+	check(gorge.find_child("GorgeArt", false, false) != null, "scanned cliffs and fern patches are built in the gorge")
 	await _screenshot("gorge-falls.png")
+	await _dev({"x": gate.x + 2, "z": gate.z + 2, "hp": 99999})
+	check(await wait_for(func(): return not game.game_audio.waterfall.playing), "teleporting out of the gorge stops the waterfall voice")
 	game.camera_distance = 28; game.camera_pitch = 0.56
