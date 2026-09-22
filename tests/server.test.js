@@ -665,20 +665,23 @@ test('соседи того же семейства вступаются за с
   try {
     a.send({ t: 'register', name: 'ЗовСтаи', pass: 'test-secret', cls: 'mage' });
     await a.wait('authok');
-    for (let attempt = 0; attempt < 6; attempt++) {
-      // встаём по ту сторону от жертвы: сородич остаётся вне своего радиуса агрессии
-      a.send({ t: 'dev', hp: 99999, x: spawns[first].x, z: spawns[first].z - 16 });
+    // Пауки агрессивны сами: встаём вне их радиуса агрессии (14), но в пределах огненной стрелы.
+    const AWAY = 24;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const ax = spawns[first].x - spawns[second].x, az = spawns[first].z - spawns[second].z;
+      const len = Math.hypot(ax, az) || 1;
+      a.send({ t: 'dev', hp: 99999, x: spawns[first].x + (ax / len) * AWAY, z: spawns[first].z + (az / len) * AWAY });
       await pause(400);
       let victim = null, ally = null, x = 0, z = 0;
       // мобы бродят вокруг своих точек — ждём мгновения, когда расстановка нужная
-      for (let i = 0; i < 60 && !(victim && ally); i++) {
+      for (let i = 0; i < 50 && !(victim && ally); i++) {
         const s = await a.wait('snap');
         x = s.me.x; z = s.me.z;
         const v = (s.m || []).find((r) => r[0] === victimId && !(r[5] & 8));
         const k = (s.m || []).find((r) => r[0] === allyId && !(r[5] & 8));
         if (!v || !k) continue;
-        // жертва в пределах огненной стрелы, сородич вне собственной агрессии, но в радиусе крика
-        if (dist(v, x, z) > 20 || dist(k, x, z) < 16) continue;
+        // жертва в пределах огненной стрелы и вне своей агрессии, сородич — вне своей, но в радиусе крика
+        if (dist(v, x, z) > 27 || dist(v, x, z) < 15 || dist(k, x, z) < 16) continue;
         if (Math.hypot(k[1] - v[1], k[3] - v[3]) > SOCIAL_R) continue;
         victim = v; ally = k;
       }
