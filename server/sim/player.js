@@ -4,8 +4,12 @@ import { migrateProgression, effectiveSkill, learnError, skillRanks } from '../.
 import { CLASSES, ITEMS, SKILLS, SHOP, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
 import { calcStats, equipFromBag, unequipSlot, migrate, MAX_ENCH } from '../../src/stats.js';
 import { TOWNS, TELEPORTS, heightAt, zoneAt } from '../../src/world-core.js';
-import { sellPrice, crystalsFor, enchSucceeds, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
+import { sellPrice, crystalsFor, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
+import { DEFAULT_RATES, rateSellPrice, rateBuyPrice, rateRecipe, enchSucceedsRated } from '../../src/rates.js';
 
+// Рейты задаются один раз при старте сервера (server/rates.js); по умолчанию ×1 — прежний баланс.
+let RATES = DEFAULT_RATES;
+export const setRates = (rates) => { RATES = rates || DEFAULT_RATES; };
 export const SAVE_VERSION = 3; // всё, что старее, пересоздаётся (v2 выдавала новичку оружие 8 уровня, надеть его было нельзя)
 const NPC_RANGE = 8; // на каком расстоянии можно говорить с NPC
 
@@ -153,7 +157,7 @@ export function cmdEnch(a, scrollId, ref) {
   if (cur >= MAX_ENCH) return say(a, 'Максимальное усиление', 'bad');
   if (!takeItem(a.P, scrollId)) return say(a, 'Нет свитка', 'bad');
   a.dirty = true;
-  if (enchSucceeds(cur)) {
+  if (enchSucceedsRated(cur, RATES)) {
     if (ref.slot) a.P.enc[ref.slot] = cur + 1; else entry.e = cur + 1;
     say(a, `Усиление удалось: ${it.name} +${cur + 1}`, 'rare');
     ev(a, { k: 'ench', ok: true, color: sc.color });
@@ -174,7 +178,7 @@ export function cmdBuy(a, npcs, id, n) {
   const it = ITEMS[id];
   if (!it || !SHOP.includes(id)) return say(a, 'Такого товара нет', 'bad');
   n = clamp(n | 0 || 1, 1, 99);
-  const cost = it.price * n;
+  const cost = rateBuyPrice(it.price, RATES) * n;
   if (a.P.coins < cost) return say(a, 'Недостаточно монет', 'bad');
   a.P.coins -= cost; addItem(a.P, id, n);
   a.dirty = true; say(a, `Куплено: ${it.name}${n > 1 ? ` ×${n}` : ''} за ${cost} мон.`, 'good');
@@ -184,7 +188,7 @@ export function cmdSell(a, npcs, idx, n) {
   const e = a.P.inv[idx | 0]; const it = ITEMS[e?.id];
   if (!it) return say(a, 'Нет такой вещи', 'bad');
   n = clamp(n | 0 || 1, 1, e.n);
-  const gain = sellPrice(it) * n;
+  const gain = rateSellPrice(sellPrice(it), RATES) * n;
   if (gain <= 0) return say(a, 'Этот предмет нельзя продать', 'bad');
   e.n -= n; if (e.n <= 0) a.P.inv.splice(idx | 0, 1);
   a.P.coins += gain;
@@ -259,7 +263,7 @@ export function cmdCraft(a, npcs, id, request, save) {
   if (a.dead || !npcNear(a, npcs, 'merchant')) return say(a, 'Для изготовления подойдите к торговцу живым', 'bad');
   if (typeof request !== 'string' || request.length < 8 || request.length > 80) return;
   if (a.P.craftReceipts?.includes(request)) return say(a, 'Этот заказ уже выполнен');
-  const recipe = Object.hasOwn(RECIPES, id) ? RECIPES[id] : null, item = ITEMS[id];
+  const recipe = Object.hasOwn(RECIPES, id) ? rateRecipe(RECIPES[id], RATES) : null, item = ITEMS[id];
   if (!recipe || !item) return say(a, 'Нет такого рецепта', 'bad');
   if (a.P.lvl < item.lvl) return say(a, `Нужен уровень ${item.lvl}`, 'bad');
   if (a.P.coins < recipe.coins) return say(a, 'Недостаточно монет', 'bad');

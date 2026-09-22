@@ -1,9 +1,10 @@
 // Session parties; no authority, membership or reward recipient comes from the client.
 import { flatDist, xpForKill } from '../../src/sim.js';
 import { spForKill } from '../../src/progression.js';
+import { DEFAULT_RATES, rateXp, rateSp, partyMultiplier } from '../../src/rates.js';
 export const PARTY = Object.freeze({ maxMembers: 6, rewardRange: 60, inviteMs: 30000 });
 export const LOOT_MODES = ['random', 'last_hit', 'pickup'];
-export function createParties(players, send) {
+export function createParties(players, send, rates = DEFAULT_RATES) {
   const groups = new Map(), membership = new Map(), invitations = new Map();
   let seq = 0;
   const groupOf = id => groups.get(membership.get(id));
@@ -76,7 +77,9 @@ export function createParties(players, send) {
     // Solo rules stay unchanged; parties cannot receive rewards remotely or dead.
     const eligible = g ? nearby : [winner];
     if (!eligible.length) return { shares: [], recipient: winner, allowed: [], mode: 'last_hit' };
-    const xp = xpForKill(mob.def, Math.max(...eligible.map(p => p.a.P.lvl))), sp = spForKill(xp);
+    // Рейты и бонус группы применяются ДО дележа: суммы остаются целыми и сходятся с наградой.
+    const base = xpForKill(mob.def, Math.max(...eligible.map(p => p.a.P.lvl))), bonus = partyMultiplier(eligible.length, rates);
+    const xp = rateXp(base * bonus, rates), sp = rateSp(spForKill(base) * bonus, rates);
     const shares = eligible.map((p, i) => ({ player: p, xp: Math.floor(xp / eligible.length) + (i < xp % eligible.length ? 1 : 0),
       sp: Math.floor(sp / eligible.length) + (i < sp % eligible.length ? 1 : 0) }));
     const mode = g?.mode || 'last_hit';

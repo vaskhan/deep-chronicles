@@ -1,0 +1,16 @@
+{
+  "_": "Коэффициенты сервера. 1 = текущий классический баланс. Описание и примеры: docs/RATES.md. Любое значение можно переопределить переменной окружения: RATE_XP, RATE_SP, RATE_COINS, RATE_DROP_CHANCE, RATE_DROP_AMOUNT, RATE_CRAFT_COST, RATE_ENCHANT_CHANCE, RATE_SELL_PRICE, RATE_BUY_PRICE, RATE_RESPAWN, RATE_PARTY_BONUS.",
+  "rates": {
+    "xp": 1,
+    "sp": 1,
+    "coins": 1,
+    "dropChance": 1,
+    "dropAmount": 1,
+    "craftCost": 1,
+    "enchantChance": 1,
+    "sellPrice": 1,
+    "buyPrice": 1,
+    "respawn": 1,
+    "partyBonus": 1
+  }
+}

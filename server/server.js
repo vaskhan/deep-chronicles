@@ -13,6 +13,7 @@ import { calcDmg, missChance, evaChance, flatDist, clamp } from '../src/sim.js';
 import { createParties } from './sim/party.js';
 import { createGroundLoot } from './sim/loot.js';
 import { createMobs } from './sim/mobs.js';
+import { loadRates, logRates } from './rates.js';
 import * as PL from './sim/player.js';
 
 const acc = openDb(process.env.DB || path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'realms.db'));
@@ -31,7 +32,10 @@ const wss = new WebSocketServer({ port: PORT, host: process.env.HOST, maxPayload
 const players = new Map();
 let seq = 0;
 
-const world = createMobs();
+// Рейты читаются один раз при старте: server/rates.json + переменные RATE_*. См. docs/RATES.md.
+const RATES_INFO = loadRates(), RATES = RATES_INFO.rates;
+PL.setRates(RATES);
+const world = createMobs(RATES);
 const groundLoot = createGroundLoot();
 const cryptDoor = { x: CRYPT.x, z: CRYPT.z + 8.5 };
 const dungeonExit = { x: DUNGEON.x0 + DUNGEON.cell / 2, z: DUNGEON.z0 + DUNGEON.cell / 2 };
@@ -52,7 +56,7 @@ function lookOf(P) {
       helmKind: g('head')?.set ?? null, shieldKind: g('shield') ? (g('shield').grade === 'd' ? 'wood' : 'plate') : null, legKind: matKind(g('legs')) },
   };
 }
-const parties = createParties(players, send);
+const parties = createParties(players, send, RATES);
 const online = () => [...players.values()].filter((p) => p.key).length;
 const broadcast = (m) => { const s = JSON.stringify(m); for (const p of players.values()) if (p.key || m.t === 'online') send(p, s); };
 
@@ -73,7 +77,7 @@ wss.on('connection', (ws, req) => {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0 };
   players.set(p.id, p);
-  send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1 } });
+  send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, rates: 1 }, rates: RATES });
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (!m || typeof m !== 'object') return;
@@ -519,7 +523,7 @@ setInterval(() => {
 setInterval(() => { for (const p of players.values()) store(p); }, 30_000);
 // пинг, чтобы nginx не рвал простаивающие соединения
 setInterval(() => { for (const p of players.values()) if (p.ws.readyState === 1) p.ws.ping(); }, 25000);
-wss.on('listening', () => console.log(`realms-ws :${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`));
+wss.on('listening', () => { console.log(`realms-ws :${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`); logRates(RATES_INFO); });
 
 // Save active profiles before systemd or a local runner restarts the process.
 let stopping = false;

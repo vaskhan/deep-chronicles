@@ -2,9 +2,11 @@
 // Клиент получает их готовыми в снапшоте и только рисует.
 import { MOBS } from '../../src/data.js';
 import { buildProps } from '../../src/world-core.js';
-import { newMob, mobStep, mobRadius, xpForKill, rollCoins, rollDrops, flatDist } from '../../src/sim.js';
+import { newMob, mobStep, mobRadius, xpForKill, rollCoins, flatDist } from '../../src/sim.js';
+import { DEFAULT_RATES, rateXp, rateCoins, rollDropsRated, rateRespawnMs } from '../../src/rates.js';
 
-export function createMobs() {
+// rates — серверные коэффициенты (src/rates.js); по умолчанию ×1, то есть прежний баланс.
+export function createMobs(rates = DEFAULT_RATES) {
   const { spawns, npcs } = buildProps();
   const list = spawns.map((sp, i) => newMob(i + 1, sp));
   const byId = new Map(list.map((m) => [m.id, m]));
@@ -28,17 +30,19 @@ export function createMobs() {
   const kill = (m, now) => {
     m.dead = true; m.hp = 0; m.state = 'dead'; m.target = null;
     m.windup = null; m.attackT = 0; m.moving = false;
-    m.respawnAt = now + (m.def.respawn || 25) * 1000; m.diedAt = now;
+    m.respawnAt = now + rateRespawnMs((m.def.respawn || 25) * 1000, rates); m.diedAt = now;
     let top = null, best = 0;
     for (const [id, d] of m.hitBy) if (d > best) { best = d; top = id; }
     m.hitBy.clear();
     return top;
   };
 
+  // Точка выдачи награды: здесь и только здесь работают рейты монет и дропа.
+  // Фактический опыт делит server/sim/party.js — там же применяется рейт опыта.
   const rewardFor = (m, lvl) => ({
-    xp: xpForKill(m.def, lvl),
-    coins: rollCoins(m.def),
-    drops: rollDrops(m.def),
+    xp: rateXp(xpForKill(m.def, lvl), rates),
+    coins: rateCoins(rollCoins(m.def), rates),
+    drops: rollDropsRated(m.def, rates),
   });
 
   // кого видно игроку: живые и недавно умершие (чтобы клиент доиграл падение)
