@@ -59,6 +59,22 @@ docker run --rm -v realms-data:/data -v /root/backup:/backup --entrypoint node n
 `X-Forwarded-For $remote_addr` (**именно его читает лимит попыток входа**),
 `proxy_read_timeout 3600s`, SPA-фолбэк на `index.html`.
 
+## Перенос базы в том (делается один раз)
+
+Том, созданный вручную, принадлежит `root`, а процесс в контейнере работает под `node` (UID 1000):
+SQLite тогда не может создать WAL и падает с `attempt to write a readonly database`. Поэтому после
+наполнения тома правим владельца каталога, а не только файла:
+
+```bash
+systemctl stop realms-ws && systemctl disable realms-ws   # старая служба на хосте
+node --no-warnings --input-type=module -e "import{DatabaseSync}from'node:sqlite';const d=new DatabaseSync('/opt/realms/data/realms.db',{readOnly:true});d.exec(\"VACUUM INTO '/root/realms-migrate.db'\");d.close()"
+docker volume create realms-data
+docker run --rm -v realms-data:/data -v /root:/src alpine sh -c 'cp /src/realms-migrate.db /data/realms.db && chown -R 1000:1000 /data'
+```
+
+`VACUUM INTO` вливает WAL, поэтому копия консистентна. Новый пустой том такого шага не требует:
+права наследуются из образа, где `/data` уже принадлежит `node`.
+
 ## Важное
 
 - **`DEV_CMD` в проде нет** — отладочная команда `dev` доступна только автотестам.
@@ -68,6 +84,14 @@ docker run --rm -v realms-data:/data -v /root/backup:/backup --entrypoint node n
   Удалять базу — значит обнулить прогресс всем.
 - Сейв версии, отличной от `SAVE_VERSION`, молча пересоздаётся. Поднимая версию, считайте,
   что персонажи будут сброшены.
+
+## Переезд в контейнеры 22.09.2026
+
+Мир переведён с systemd-процесса под root на контейнер `realms-ws` (образ
+`realms-ws:4816656a98f0-20260922T081623997Z`). База переехала в том `realms-data`: после запуска
+сервер сообщил **30 аккаунтов, 225 мобов**, контейнер `healthy`, внешний Godot probe подтвердил TLS
+и все feature-флаги. Старый юнит `realms-ws` остановлен и `disable`, файл `/opt/realms/data`
+сохранён как бэкап вместе с `/root/pre-docker-backup/`.
 
 ## Выпуск дропа 18.09.2026
 
