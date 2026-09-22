@@ -1007,3 +1007,57 @@ test('разница уровней: слабый моб высокому уро
     await server.stop('server-level-gap.log');
   }
 });
+
+// Громовое ущелье (src/gorge.js): перенос у Хранителя врат, настоящий бой со стайным мобом зоны,
+// награда по ступеням разницы уровней (src/rates.js::levelFactor) — полная и урезанная.
+test('Громовое ущелье: телепорт у Хранителя врат, моб зоны убивается, награда по ступеням разницы уровней', async () => {
+  const { buildProps, TELEPORTS } = await import('../src/world-core.js');
+  const { MOBS } = await import('../src/data.js');
+  const { rankedDef } = await import('../src/elites.js');
+  const { levelFactor, DEFAULT_RATES } = await import('../src/rates.js');
+  const { spawns, npcs } = buildProps();
+  const gate = npcs.find(n => n.role === 'gatekeeper'), tp = TELEPORTS.find(t => t.id === 'gorge');
+  // обычные (без ранга) скальные пауки первой стаи: ранг утроил бы награду
+  const plain = spawns.map((sp, i) => ({ ...sp, id: i + 1 })).filter(sp => sp.mob === 'cliff_spider' && !rankedDef(MOBS.cliff_spider, sp, sp.id).rank);
+  assert.ok(plain.length >= 2, 'в ущелье есть обычные скальные пауки');
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'Горец', pass: 'secret1', cls: 'warrior' }); await a.wait('authok');
+    await at(a, gate.x, gate.z);
+    a.send({ t: 'dev', coins: 5000 }); await untilP(a, p => p.coins === 5000, 'монеты на перенос');
+    a.send({ t: 'tp', id: 'gorge' });
+    const arrived = await untilP(a, p => p.x === tp.x && p.z === tp.z, 'перенос в ущелье');
+    assert.equal(arrived.coins, 5000 - tp.cost);
+    a.send({ t: 'dev', lvl: 26, hp: 99999, item: 'sword_dragon' });
+    const p = await untilP(a, p => p.lvl === 26 && p.inv.some(e => e.id === 'sword_dragon'), 'уровень 26 и меч в сумке');
+    a.send({ t: 'equip', idx: p.inv.findIndex(e => e.id === 'sword_dragon') });
+    await untilP(a, p => p.equip.weapon === 'sword_dragon', 'меч надет');
+    // убить конкретного моба по id и вернуть событие награды
+    const kill = async (target) => {
+      await at(a, target.x + 1, target.z + 1);
+      a.send({ t: 'atk', id: target.id, kind: 'm' });
+      let mx = target.x, mz = target.z;
+      for (let i = 0; i < 1500; i++) {
+        a.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
+        // профиль в бою приходит часто (здоровье, опыт) — разбираем его здесь, чтобы не копился в очереди
+        const m = await a.wait('ev', 'snap', 'you');
+        if (m.t === 'snap') { const r = (m.m || []).find(r => r[0] === target.id); if (r) { mx = r[1]; mz = r[3]; } a.send({ t: 'dev', hp: 99999 }); }
+        const reward = m.t === 'ev' && m.e.find(e => e.k === 'kill' && e.mob === 'cliff_spider');
+        if (reward) return reward;
+      }
+      throw new Error('моб ущелья не умер за отведённое время');
+    };
+    const def = MOBS.cliff_spider;
+    const full = await kill(plain[0]);
+    assert.equal(levelFactor(def.lvl, 26, DEFAULT_RATES), 1);
+    assert.equal(full.xp, def.xp, 'разница в один уровень — полная награда');
+    assert.ok(full.coins >= def.coins[0] && full.coins <= def.coins[1], `монеты ${full.coins} в пределах вида`);
+    // разница шесть уровней: ступень 4–6, награда урезана тем же множителем, что в src/rates.js
+    a.send({ t: 'dev', lvl: 31 }); await untilP(a, p => p.lvl === 31, 'уровень 31');
+    const cut = await kill(plain[1]);
+    const factor = levelFactor(def.lvl, 31, DEFAULT_RATES);
+    assert.ok(factor > 0 && factor < 1);
+    assert.equal(cut.xp, Math.round(def.xp * factor), 'опыт режется ступенью разницы уровней');
+    assert.ok(cut.coins <= Math.round(def.coins[1] * factor) + 1, 'монеты режутся той же ступенью');
+  } finally { a.ws.close(); await a.closed(); }
+});

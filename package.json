@@ -11,7 +11,7 @@
     "test:native": "node tools/godot/test.mjs",
     "dev": "node tools/godot/run.mjs",
     "build": "node tools/godot/build.mjs",
-    "test:unit": "node --test tests/unit.test.js tests/progression.test.js tests/movement.test.js tests/party.test.js tests/tuning.test.js tests/effects.test.js tests/rates.test.js",
+    "test:unit": "node --test tests/unit.test.js tests/progression.test.js tests/movement.test.js tests/party.test.js tests/tuning.test.js tests/effects.test.js tests/rates.test.js tests/gorge.test.js",
     "test": "npm run test:pipeline && npm run test:unit && npm run test:server && npm run native:lint && npm run test:native",
     "server": "node --no-warnings server/server.js",
     "test:server": "node --no-warnings --test tests/server.test.js",

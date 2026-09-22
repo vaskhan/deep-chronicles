@@ -431,6 +431,7 @@ func _run():
 	await _test_mob_telegraph()
 	await _test_timed_effects()
 	await _test_pack()
+	await _test_gorge()
 	# Real screenshot from the rendering backend, when running with a display.
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
@@ -1021,3 +1022,71 @@ func _test_pack():
 		game.camera_distance = 28; game.camera_pitch = 0.56
 		return
 	check(false, "kin answered the call for help")
+
+func _gorge_elite():
+	for mob in game.mobs.values():
+		if mob.visible and not mob.dead and not mob.rank.is_empty() and data.zone_at(mob.position).id == "gorge": return mob
+	return null
+
+## Громовое ущелье: перенос у Хранителя врат, своя зона и воздух, река с водопадом,
+## стая в бою и элита. Кадры gorge-*.png — для визуальной проверки зоны.
+func _test_gorge():
+	var gate = null
+	for n in data.world.npcs:
+		if n.role == "gatekeeper": gate = n; break
+	var tp = null
+	for t in data.world.teleports:
+		if t.id == "gorge": tp = t
+	if not tp: check(false, "gorge teleport exists"); return
+	await _dev({"x": gate.x + 2, "z": gate.z + 2, "coins": 5000, "hp": 99999, "lvl": 27})
+	game.hud.show_window("teleport")
+	check(_find_button("teleport", "gorge") != null, "gatekeeper lists the Thunder Gorge teleport")
+	_click("teleport", "gorge")
+	check(await wait_for(func(): return Vector2(game.hero.position.x - tp.x, game.hero.position.z - tp.z).length() < 2), "teleport places the hero at the gorge mouth")
+	game.hud.close_window()
+	await create_timer(0.3).timeout
+	check(data.zone_at(game.hero.position).id == "gorge" and game.world.region_id == "gorge_terraces", "gorge zone and its lower-terrace air are active")
+	var gorge = game.world.find_child("ThunderGorge", true, false)
+	check(gorge != null and ["River", "Waterfall", "WaterfallVeil", "FallsPool", "FallsMist"].all(func(n): return gorge.find_child(n, false, false) != null), "gorge river, waterfall, pool and mist are built")
+	check(absf(game.hero.position.y - data.height_at(tp.x, tp.z)) < 1.5, "hero stands on the gorge ground")
+	game.camera_distance = 30; game.camera_pitch = 0.42; game.camera_yaw = atan2(-float(data.world.gorge.axis.x), -float(data.world.gorge.axis.z))
+	await create_timer(1.2).timeout
+	await _screenshot("gorge-arrival.png")
+	# Элита: в поле зрения у устья десятки мобов ущелья, ранг приходит с сервера.
+	check(await wait_for(func(): return _gorge_elite() != null, 14), "server sends a ranked gorge mob with its aura")
+	var elite = _gorge_elite()
+	if elite:
+		check(str(data.catalog.MOBS[elite.base_model].get("model", "")) != "" and elite.art_model and elite.art_base == str(data.catalog.MOBS[elite.base_model].model), "gorge mob reuses its manifest base model")
+		await _dev({"x": elite.position.x + 9, "z": elite.position.z + 9, "hp": 99999})
+		game.set_target(elite); game.camera_distance = 15; game.camera_pitch = 0.55
+		await create_timer(0.8).timeout
+		await _screenshot("gorge-elite.png")
+		game.set_target(null)
+	# Стая: удар по одному поднимает сородичей, все бегут к герою.
+	var spawns = data.world.spawns
+	var victim_id = -1
+	for i in spawns.size():
+		if spawns[i].get("pack", "") == "gorge2": victim_id = i + 1; break
+	if victim_id < 0: check(false, "gorge pack exists"); return
+	var kin = []
+	for i in spawns.size():
+		if spawns[i].get("pack", "") == "gorge2" and i + 1 != victim_id: kin.append(i + 1)
+	await _dev({"x": spawns[victim_id - 1].x - 8, "z": spawns[victim_id - 1].z - 8, "hp": 99999})
+	check(await wait_for(func(): return game.mobs.has(victim_id) and game.mobs[victim_id].visible and not game.mobs[victim_id].dead, 12), "gorge pack is visible")
+	if not game.mobs.has(victim_id): return
+	game.set_target(game.mobs[victim_id]); game.attack()
+	var engaged = await wait_for(func(): return kin.filter(func(id): return game.mobs.has(id) and not game.mobs[id].dead and game.mobs[id].position.distance_to(game.hero.position) < 6.0).size() >= 2, 12)
+	check(engaged, "the whole gorge pack joins the fight")
+	game.camera_distance = 16; game.camera_pitch = 0.6
+	await create_timer(0.4).timeout
+	await _screenshot("gorge-pack.png")
+	game._cancel_attack(); game.set_target(null)
+	# Общий план: водопад с уступа — отдельный кадр с интерфейсом.
+	var falls = data.world.gorge.falls
+	var axis = Vector2(float(data.world.gorge.axis.x), float(data.world.gorge.axis.z))
+	var look = Vector2(falls.x, falls.z) - axis * 30.0 + Vector2(axis.y, -axis.x) * 25.0
+	await _dev({"x": look.x, "z": look.y, "hp": 99999})
+	game.camera_distance = 34; game.camera_pitch = 0.28; game.camera_yaw = atan2(-axis.x, -axis.y)
+	await create_timer(1.0).timeout
+	await _screenshot("gorge-falls.png")
+	game.camera_distance = 28; game.camera_pitch = 0.56
