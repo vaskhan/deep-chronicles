@@ -20,6 +20,8 @@ func build():
 	var town_decor = preload("res://scripts/town_decor.gd").new()
 	add_child(town_decor); town_decor.build()
 	_watchfires()
+	var gorge = preload("res://scripts/gorge.gd").new()
+	add_child(gorge); gorge.build()
 	_portal(GameData.position_at(150, 258.5), Color("9c75ff"))
 	_portal(Vector3(2205, 0, -195), Color("c6a4ff"))
 	for t in GameData.world.towns: _portal(GameData.position_at(t.x + 18*t.scale, t.z + 16*t.scale), Color("70d5f0"))
@@ -37,6 +39,8 @@ func _lighting():
 func set_region(pos: Vector3):
 	var zone = GameData.zone_at(pos)
 	var id = "town" if zone.get("town", false) else str(zone.id)
+	# В Громовом ущелье свой воздух на каждом ярусе: сырая дымка террас, водяная пыль у водопада, ясный холод вершины.
+	if id == "gorge": id = "gorge_" + str(GameData.gorge_tier(pos).get("id", "terraces"))
 	if id == region_id: return
 	region_id = id; underground = id == "crypt"
 	atmosphere = {
@@ -44,6 +48,9 @@ func set_region(pos: Vector3):
 		"meadow": {"fog": Color("a8bec5"), "density": 0.00016, "sun": Color("fff0cf"), "energy": 1.1, "ambient": 0.35},
 		"forest": {"fog": Color("6f9293"), "density": 0.00045, "sun": Color("e5ecd1"), "energy": 1.05, "ambient": 0.23},
 		"waste": {"fog": Color("c4a589"), "density": 0.00025, "sun": Color("ffdbb6"), "energy": 1.15, "ambient": 0.32},
+		"gorge_terraces": {"fog": Color("8fa3a0"), "density": 0.00045, "sun": Color("e9efe9"), "energy": 1.0, "ambient": 0.3},
+		"gorge_falls": {"fog": Color("a3b8bf"), "density": 0.0008, "sun": Color("dde8ef"), "energy": 0.95, "ambient": 0.33},
+		"gorge_summit": {"fog": Color("c3d0dc"), "density": 0.00035, "sun": Color("f3f6ff"), "energy": 1.08, "ambient": 0.3},
 		"crypt": {"fog": Color("191e30"), "density": 0.008, "sun": Color("9fb1da"), "energy": 0.12, "ambient": 0.23},
 	}.get(id, {})
 	var e = environment.environment

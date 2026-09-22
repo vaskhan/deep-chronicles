@@ -145,6 +145,56 @@
         "hit": "hit",
         "death": "death"
       }
+    },
+    "cliff_spider": {
+      "base": "spider",
+      "height": 1.85,
+      "tint": "a9b6ba"
+    },
+    "grotto_weaver": {
+      "base": "spider",
+      "height": 2.15,
+      "tint": "83719e"
+    },
+    "fang_warrior": {
+      "base": "orc",
+      "height": 3.3,
+      "tint": "d0a27a"
+    },
+    "fang_shaman": {
+      "base": "orc",
+      "height": 3.0,
+      "tint": "b884a8"
+    },
+    "river_drowned": {
+      "base": "ghoul",
+      "height": 2.9,
+      "tint": "95cbc2"
+    },
+    "pool_drowned": {
+      "base": "ghoul",
+      "height": 3.1,
+      "tint": "74a6c2"
+    },
+    "stone_guard": {
+      "base": "golem",
+      "height": 4.6,
+      "tint": "a9bcc6"
+    },
+    "outpost_guard": {
+      "base": "skeleton",
+      "height": 2.9,
+      "tint": "cfdbe4"
+    },
+    "summit_wraith": {
+      "base": "wraith",
+      "height": 3.2,
+      "tint": "cdefff"
+    },
+    "outpost_warlock": {
+      "base": "lich",
+      "height": 3.1,
+      "tint": "92a8e6"
     }
   },
   "props": {

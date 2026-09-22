@@ -37,14 +37,38 @@ func height_at(x: float, z: float) -> float:
 func position_at(x: float, z: float) -> Vector3:
 	return Vector3(x, height_at(x, z), z)
 
+var gorge_polygon := PackedVector2Array()
+var gorge_box := Rect2()
+func in_gorge(x: float, z: float) -> bool:
+	if gorge_polygon.is_empty():
+		if not world.has("gorge"): return false
+		for v in world.gorge.polygon: gorge_polygon.append(Vector2(v[0], v[1]))
+		gorge_box = Rect2(gorge_polygon[0], Vector2.ZERO)
+		for v in gorge_polygon: gorge_box = gorge_box.expand(v)
+	var p = Vector2(x, z)
+	return gorge_box.has_point(p) and Geometry2D.is_point_in_polygon(p, gorge_polygon)
+
+## Ярус ущелья по положению: та же ось u, что в src/gorge.js (изгиб на u не влияет).
+func gorge_tier(pos: Vector3) -> Dictionary:
+	if not in_gorge(pos.x, pos.z): return {}
+	var u = Vector2(pos.x - world.gorge.origin.x, pos.z - world.gorge.origin.z).dot(Vector2(world.gorge.axis.x, world.gorge.axis.z))
+	for t in world.gorge.tiers:
+		if u < float(t.u1): return t
+	return world.gorge.tiers[-1]
+
 func zone_at(pos: Vector3) -> Dictionary:
 	if pos.x > 2100: return {"id": "crypt", "name": "Катакомбы", "lv": "18–28"}
 	for t in world.towns:
 		if Vector2(pos.x - t.x, pos.z - t.z).length() < t.r + 20:
 			return {"id": t.id, "name": t.name, "lv": "мирная зона", "town": true}
+	# Громовое ущелье очерчено контуром стен (src/gorge.js), а не кругом.
+	if in_gorge(pos.x, pos.z):
+		for z in world.zones:
+			if z.id == "gorge": return z
 	var best = world.zones[0]
 	var distance = INF
 	for z in world.zones:
+		if z.get("shaped", false): continue
 		var d = Vector2(pos.x - z.x, pos.z - z.z).length() / z.r
 		if d < distance: best = z; distance = d
 	return best
@@ -184,5 +208,10 @@ func effect_color(kind: String) -> Color:
 ## Полное имя эффекта: «Ледяная волна · Замедление». id эффекта — «умение» или «умение:вид».
 func effect_title(id: String, kind: String) -> String:
 	var skill = catalog.SKILLS.get(id.split(":")[0], {})
+	# Умения мобов: id начинается с вида моба (src/mob-skills.js), имя — из его onHit/guard.
+	var mob = catalog.MOBS.get(id.split(":")[0], {})
+	if skill.is_empty() and not mob.is_empty():
+		var ability = mob.get("guard", {}) if id.ends_with(":guard") else mob.get("onHit", {})
+		if ability.has("name"): return "%s · %s" % [str(ability.name), effect_label(kind)]
 	if skill.is_empty(): return effect_label(kind)
 	return "%s · %s" % [str(skill.get("name", id)), effect_label(kind)]

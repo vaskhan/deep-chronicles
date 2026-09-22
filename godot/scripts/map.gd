@@ -33,6 +33,7 @@ func _bake_terrain():
 			match zone.id:
 				"forest": color = Color("344e39")
 				"waste": color = Color("aa9365")
+				"gorge": color = Color("7d8a86")
 				"harbor", "ford": color = Color("929073")
 			var slope = GameData.height_at(p.x-3,p.z-3)-GameData.height_at(p.x+3,p.z+3)
 			color *= clampf(.94+slope*.035,.6,1.18)
@@ -135,6 +136,7 @@ func _draw():
 			var p = point(camp.x, camp.z)
 			draw_circle(p, 3, Color("ca9970"))
 			draw_string(font, p + Vector2(6, -3), camp.name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("e4ccb0"))
+	if player_position.x < 2100: _draw_gorge(font)
 	var crypt=point(150,250);draw_circle(crypt,4,Color("c899f4"))
 	if not compact:draw_string(font,crypt+Vector2(10,4),"Катакомбы",HORIZONTAL_ALIGNMENT_LEFT,-1,14)
 	for pos in mob_markers:
@@ -150,6 +152,25 @@ func _draw():
 	draw_circle(player,7,Color("23352e"));draw_circle(player,4,Color("91ffe1"))
 	if compact:draw_string(font,Vector2(size.x*.5-4,14),"С",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("eee0b9"))
 	elif player_position.x>2100:draw_string(font,Vector2(20,35),"Вы в катакомбах",HORIZONTAL_ALIGNMENT_LEFT,-1,22,Color("bf92ff"))
+
+## Громовое ущелье: река, водопад и ярусы. На полной карте — подписи всех ярусов,
+## на миникарте — подпись яруса, если он в кадре.
+func _draw_gorge(font: Font):
+	var info: Dictionary = GameData.world.get("gorge", {})
+	if info.is_empty(): return
+	var line = PackedVector2Array()
+	for row in info.river: line.append(point(row[0], row[1]))
+	draw_polyline(line, Color("5aa7c4"), maxf(1.5, 7.0 * size.x / extent.x), true)
+	var falls = point(info.falls.x, info.falls.z)
+	draw_circle(falls, 4 if compact else 5, Color("dff6ff"))
+	draw_arc(falls, 6 if compact else 8, 0, TAU, 16, Color("5aa7c4"), 1.5, true)
+	for tier in info.tiers:
+		var p = point(tier.x, tier.z)
+		if not Rect2(Vector2(-40, -20), size + Vector2(80, 40)).has_point(p): continue
+		var title = "%s · %s–%s" % [tier.name, int(tier.lv[0]), int(tier.lv[1])]
+		if compact: draw_string(font, p + Vector2(-44, 0), title, HORIZONTAL_ALIGNMENT_LEFT, 150, 10, Color("f1e6c8"))
+		elif not city_focus: draw_string(font, p + Vector2(8, 4), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8e2cf"))
+	if not compact and not city_focus: draw_string(font, falls + Vector2(9, -6), "Водопад", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("dff6ff"))
 
 func change_zoom(factor: float):
 	zoom = clampf(zoom * factor, 0.5, 8.0)

@@ -58,8 +58,9 @@ func _chunk(key: Vector2i):
  var groups: Dictionary = {}
  for i in 1250:
   var p = GameData.position_at(root.position.x+rng.randf()*TILE,root.position.z+rng.randf()*TILE)
-  if absf(p.x)>790 or absf(p.z)>790 or p.y < -5.6 or p.y>65: continue
+  if absf(p.x)>790 or absf(p.z)>790 or p.y < -5.6: continue
   var zone = GameData.zone_at(p)
+  if p.y>(76.0 if zone.id=="gorge" else 65.0): continue
   if zone.get("town",false): continue
   if Vector2(p.x-150,p.z-250).length()<24: continue
   if absf(GameData.height_at(p.x+1,p.z)-p.y)>1.0 or absf(GameData.height_at(p.x,p.z+1)-p.y)>1.0: continue
@@ -77,7 +78,18 @@ func _chunk(key: Vector2i):
     for tree in tree_grid.get(cell+Vector2i(dx,dz),[]):
      near_tree=minf(near_tree,Vector2(p.x,p.z).distance_to(tree))
   var kind = "grass"
-  if zone.id == "waste":
+  if zone.id == "gorge":
+   # Громовое ущелье: на мокрых террасах папоротник и трава, у водопада — редкий папоротник
+   # в сырых нишах, на вершине — сухая трава клочьями между камней.
+   var tier = str(GameData.gorge_tier(p).get("id","terraces"))
+   if tier == "terraces": kind = "fern" if rng.randf()<.6 else "grass"
+   elif tier == "falls":
+    if rng.randf()>.45: continue
+    kind = "fern" if rng.randf()<.7 else "grass"
+   else:
+    if rng.randf()>.3: continue
+    kind = "dry"
+  elif zone.id == "waste":
    if rng.randf()>.26: continue
    kind = "shrub_dry" if rng.randf()<.15 else "dry"
   elif zone.id == "forest":

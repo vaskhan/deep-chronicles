@@ -13,10 +13,42 @@ static func packed(path: String) -> PackedScene:
 	if not scenes.has(path): scenes[path] = load(path)
 	return scenes[path]
 
+## Запись манифеста с учётом псевдонима: {"base": "spider", "tint": "...", "height": ...}
+## берёт модель, риг и клипы основы, а рост и окраску — свои. Так новые мобы переиспользуют
+## готовые GLB без копий файлов (первый проход Громового ущелья).
+static func entry_of(id: String) -> Dictionary:
+	var entry: Dictionary = manifest().actors.get(id, {})
+	if entry.has("base"):
+		var merged: Dictionary = manifest().actors.get(str(entry.base), {}).duplicate()
+		merged.merge(entry, true)
+		return merged
+	return entry
+
+## Вид-основа модели: для псевдонима — исходная модель, иначе сам id.
+static func base_of(id: String) -> String:
+	return str(manifest().actors.get(id, {}).get("base", id))
+
+static var tinted: Dictionary = {}
+## Окраска умножением на цвет. Материалы кэшируются по (материал, цвет): сотня мобов
+## одного вида делит один набор материалов, а исходные материалы основы не меняются.
+static func _tint(root: Node3D, color: Color):
+	for mesh in root.find_children("*", "MeshInstance3D", true, false):
+		for i in mesh.get_surface_override_material_count():
+			var original = mesh.get_active_material(i)
+			if not original is BaseMaterial3D: continue
+			var key = "%s:%s" % [original.get_instance_id(), color.to_html()]
+			if not tinted.has(key):
+				var copy: BaseMaterial3D = original.duplicate()
+				copy.albedo_color = original.albedo_color * color
+				tinted[key] = copy
+			mesh.set_surface_override_material(i, tinted[key])
+
 static func actor(id: String) -> Node3D:
-	var entry = manifest().actors.get(id, {})
+	var entry = entry_of(id)
 	if entry.is_empty() or not ResourceLoader.exists(entry.path): return null
 	var result = packed(entry.path).instantiate()
+	if entry.has("tint"): _tint(result, Color(str(entry.tint)))
+	var anim_id = base_of(id)
 	if entry.get("rig", "") == "canonical":
 		if canonical_clips.is_empty():
 			var source_scene = packed("res://generated/anims/AnimationLibrary_Godot_Standard.nofingers.gltf").instantiate()
@@ -26,13 +58,13 @@ static func actor(id: String) -> Node3D:
 		var player = AnimationPlayer.new(); player.name = "AnimationPlayer"; result.add_child(player)
 		var library = AnimationLibrary.new()
 		var clips = {"idle": "Idle", "walk": "Walk", "run": "Jog_Fwd", "attack": "Sword_Attack", "attack_alt": "Sword_Attack", "cast": "Spell_Simple_Idle", "cast_enter": "Spell_Simple_Enter", "release": "Spell_Simple_Shoot", "hit": "Hit_Chest", "death": "Death01"}
-		if id in ["warrior", "warrior_chain"]: clips.idle = "Sword_Idle"; clips.attack_alt = "Punch_Cross"
-		if id in ["mage", "gatekeeper", "priest", "wraith", "lich"]: clips.idle = "Spell_Simple_Idle"
-		if id == "mage": clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
-		if id == "merchant": clips.idle = "Idle_Talking"
-		if id in ["goblin", "orc", "ghoul", "treant", "golem"]:
+		if anim_id in ["warrior", "warrior_chain"]: clips.idle = "Sword_Idle"; clips.attack_alt = "Punch_Cross"
+		if anim_id in ["mage", "gatekeeper", "priest", "wraith", "lich"]: clips.idle = "Spell_Simple_Idle"
+		if anim_id == "mage": clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id == "merchant": clips.idle = "Idle_Talking"
+		if anim_id in ["goblin", "orc", "ghoul", "treant", "golem"]:
 			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"; clips.idle = "Idle"
-		if id in ["wraith", "lich"]: clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id in ["wraith", "lich"]: clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
 		for key in clips:
 			var clip = canonical_clips[clips[key]].duplicate()
 			clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "walk", "run", "cast"] else Animation.LOOP_NONE

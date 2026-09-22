@@ -72,7 +72,7 @@ func follow(hero, camera, dt: float):
 
 func creature(actor, action: String):
 	if not is_instance_valid(actor): return
-	var id = actor.base_model
+	var id = actor.art_base if not str(actor.art_base).is_empty() else actor.base_model
 	if id == "rabbit": return
 	var family = "insect" if id in ["spider", "scorpion"] else ("undead" if id in ["skeleton", "ghoul", "wraith", "lich"] else ("heavy" if id in ["golem", "treant", "orc"] else "beast"))
 	var cue = family + "_attack" if action == "attack" else ("death" if action == "death" else "beast_hurt")

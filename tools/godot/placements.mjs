@@ -42,6 +42,9 @@ export function artPlacements(shapes, towns, crypt) {
       add('portal', r, r[3]-.3, 6*scale, 1.5, 6*scale); omitted.add(i);
     } else if (kind === 'sandstone' && r[0] === 'ico') {
       add('rock_b', r, r[3]-r[7]*.6, r[6]*2, r[7]*2, r[8]*2); omitted.add(i);
+    } else if (kind === 'granite' && r[0] === 'ico') {
+      // Громовое ущелье: валуны у подошвы стен и в русле — серый мшистый камень (песчаник rock_b тут чужой).
+      add('rock_a', r, r[3]-r[7]*.6, r[6]*2, r[7]*2, r[8]*2); omitted.add(i);
     }
   }
   // Low planting beds around the square stay clear of all four radial roads.
