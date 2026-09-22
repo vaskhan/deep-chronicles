@@ -522,3 +522,185 @@ test('пати делит реальные XP/SP, защищает группо�
     assert.equal(bb.p.cls,'mage');
   } finally { for(const c of [a,b,outsider])c.ws.close();await Promise.all([a.closed(),b.closed(),outsider.closed()]); }
 });
+
+test('эффект во времени тикает без новых команд, ослабляет цель и спадает сам', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const spawns = buildProps().spawns;
+  // Голем не агрессивен и достаточно живуч, чтобы пережить всё кровотечение целиком.
+  const index = spawns.findIndex((s) => s.mob === 'golem');
+  const mobId = index + 1, spawn = spawns[index];
+  const a = client(); await a.open();
+  const events = [];
+  a.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'ev') events.push(...m.e); });
+  try {
+    a.send({ t: 'register', name: 'МагПечати', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    a.send({ t: 'dev', lvl: 30, sp: 100000, hp: 99999, x: spawn.x + 9, z: spawn.z });
+    await pause(300);
+    a.send({ t: 'learn', id: 'curse', rank: 1 });
+    await untilP(a, (p) => p.skills.curse === 1, 'изучена Печать немощи');
+    await at(a, spawn.x + 9, spawn.z);
+    a.send({ t: 'atk', id: mobId, kind: 'm', hold: true });
+    a.send({ t: 'skill', id: 'curse' });
+    // наложение: и урон со временем, и ослабление атаки — два отдельных эффекта на одной цели
+    const applied = [];
+    for (let i = 0; i < 80 && applied.length < 2; i++) {
+      await pause(100);
+      for (const e of events) if (e.k === 'fx' && e.up && e.m === mobId && !applied.includes(e.kind)) applied.push(e.kind);
+    }
+    assert.deepEqual(applied.sort(), ['debuff', 'dot'], 'печать наложила урон со временем и ослабление');
+    assert.ok(events.filter((e) => e.k === 'fx' && e.up && e.m === mobId && e.kind === 'dot').length === 1, 'эффект не задвоился');
+    const applyEvent = events.find((e) => e.k === 'fx' && e.up && e.kind === 'dot');
+    assert.ok(applyEvent.dur > 5000, 'клиенту пришёл реальный срок действия');
+    // цель видна в снапшоте со своими эффектами
+    let row = null;
+    for (let i = 0; i < 40 && !row; i++) { const s = await a.wait('snap'); row = (s.m || []).find((r) => r[0] === mobId && r.length > 7); }
+    assert.ok(row, 'снапшот моба несёт список эффектов');
+    assert.deepEqual(row[7].map((e) => e[1]).sort(), ['debuff', 'dot']);
+    assert.ok(row[7].every((e) => e[2] > 0), 'у каждого эффекта есть остаток срока');
+    // тики идут сами: новых команд нет, а урон продолжает приходить
+    const before = events.filter((e) => e.k === 'hit' && e.m === mobId && e.dot).length;
+    await pause(3500);
+    const ticks = events.filter((e) => e.k === 'hit' && e.m === mobId && e.dot);
+    assert.ok(ticks.length > before, `урон со временем не тикал: ${ticks.length}`);
+    assert.ok(ticks.every((e) => e.dmg > 0));
+    // спад приходит сам, без единой команды
+    for (let i = 0; i < 100 && !events.some((e) => e.k === 'fx' && !e.up && e.m === mobId); i++) await pause(150);
+    const ended = events.filter((e) => e.k === 'fx' && !e.up && e.m === mobId);
+    assert.equal(ended.length, 2, 'оба эффекта спали сами');
+    // в очереди ещё лежат снимки, снятые до спада, — ждём первый снимок уже без эффектов
+    let after = null;
+    for (let i = 0; i < 120 && after !== 7; i++) { const s = await a.wait('snap'); const r = (s.m || []).find((x) => x[0] === mobId); if (r) after = r.length; }
+    assert.equal(after, 7, `снапшот вернулся к прежней длине строки, получено ${after}`);
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('лечение со временем и вампиризм работают на самом игроке', async () => {
+  const a = client(); await a.open();
+  const events = [];
+  a.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'ev') events.push(...m.e); });
+  try {
+    a.send({ t: 'register', name: 'ЖрецГлубин', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    a.send({ t: 'dev', lvl: 20, sp: 100000, hp: 40, x: -430, z: 388 });
+    await pause(300);
+    a.send({ t: 'learn', id: 'heal', rank: 1 });
+    await untilP(a, (p) => p.skills.heal === 1, 'изучено Исцеление');
+    a.send({ t: 'dev', hp: 40 });
+    await pause(200);
+    a.send({ t: 'skill', id: 'heal' });
+    for (let i = 0; i < 60 && !events.some((e) => e.k === 'fx' && e.up && e.kind === 'hot'); i++) await pause(100);
+    const hot = events.find((e) => e.k === 'fx' && e.up && e.kind === 'hot');
+    assert.ok(hot, 'исцеление оставило лечение со временем');
+    assert.ok(String(hot.id).startsWith('heal'), hot.id);
+    let mine = null;
+    for (let i = 0; i < 40 && !mine; i++) { const s = await a.wait('snap'); if (s.me && s.me.fx) mine = s.me.fx; }
+    assert.ok(mine.some((e) => e[1] === 'hot' && e[2] > 0), 'снапшот игрока несёт свои эффекты с таймером');
+    for (let i = 0; i < 60 && !events.some((e) => e.k === 'heal' && e.hot); i++) await pause(100);
+    assert.ok(events.some((e) => e.k === 'heal' && e.hot && e.amount > 0), 'лечение со временем реально вернуло здоровье');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('элитный моб сильнее и даёт больше награды, чем обычный того же вида', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const { rankedDef, ELITE } = await import('../src/elites.js');
+  const { MOBS } = await import('../src/data.js');
+  const spawns = buildProps().spawns;
+  const defs = spawns.map((sp, i) => rankedDef(MOBS[sp.mob], sp, i + 1));
+  const eliteIndex = defs.findIndex((d, i) => d.rank === 'elite' && spawns[i].mob === 'rabbit');
+  assert.ok(eliteIndex >= 0, 'в мире нет элитного кролика для сравнения');
+  const plainIndex = spawns.findIndex((sp, i) => sp.mob === 'rabbit' && !defs[i].rank && !sp.camp);
+  const a = client(); await a.open();
+  const seen = new Map();
+  a.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'mobs') for (const row of m.n) seen.set(row[0], row); });
+  const killAt = async (index) => {
+    const id = index + 1, spawn = spawns[index];
+    await at(a, spawn.x + 1, spawn.z + 1);
+    a.send({ t: 'atk', id, kind: 'm' });
+    for (let i = 0; i < 200; i++) {
+      a.send({ t: 'st', x: spawn.x + 1, y: 0, z: spawn.z + 1, r: 0, a: 0 });
+      const m = await a.wait('ev', 'snap');
+      if (m.t === 'ev') { const kill = m.e.find((e) => e.k === 'kill'); if (kill) return kill; }
+    }
+    throw new Error('моб не умер за отведённое время');
+  };
+  try {
+    a.send({ t: 'register', name: 'ОхотникНаЭлиту', pass: 'test-secret', cls: 'warrior' });
+    await a.wait('authok');
+    a.send({ t: 'dev', hp: 99999 });
+    await pause(200);
+    const plain = await killAt(plainIndex);
+    const elite = await killAt(eliteIndex);
+    assert.equal(elite.xp, plain.xp * ELITE.reward, `опыт элиты ${elite.xp} против обычного ${plain.xp}`);
+    assert.ok(elite.coins >= MOBS.rabbit.coins[0] * ELITE.reward, `монеты элиты ${elite.coins}`);
+    assert.ok(elite.coins <= MOBS.rabbit.coins[1] * ELITE.reward);
+    // клиент получает ранг, готовое имя и увеличенный размер, а не вычисляет их сам
+    const row = seen.get(eliteIndex + 1);
+    assert.ok(row && row.length === 5, 'элита пришла расширенной строкой в mobs');
+    assert.equal(row[2], 'elite');
+    assert.ok(String(row[3]).includes('элита'), row[3]);
+    assert.ok(row[4] > MOBS.rabbit.size, 'размер элиты больше обычного');
+    assert.equal(seen.get(plainIndex + 1).length, 2, 'обычный моб прежней строкой');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('соседи того же семейства вступаются за сородича', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const { SOCIAL_R } = await import('../src/pack.js');
+  const { MOBS } = await import('../src/data.js');
+  const spawns = buildProps().spawns;
+  const kin = (m) => MOBS[m].fam || m;
+  // пара сородичей, чьи точки спавна стоят ближе радиуса крика
+  let first = -1, second = -1;
+  for (let i = 0; i < spawns.length && first < 0; i++) for (let j = i + 1; j < spawns.length; j++) {
+    const x = spawns[i], y = spawns[j];
+    if (x.camp || y.camp || !MOBS[x.mob].social || !MOBS[y.mob].social) continue;
+    if (kin(x.mob) !== kin(y.mob) || Math.hypot(x.x - y.x, x.z - y.z) > SOCIAL_R) continue;
+    first = i; second = j; break;
+  }
+  assert.ok(first >= 0, 'в мире нет пары сородичей в радиусе стаи');
+  const victimId = first + 1, allyId = second + 1;
+  const a = client(); await a.open();
+  const dist = (r, x, z) => Math.hypot(r[1] - x, r[3] - z);
+  try {
+    a.send({ t: 'register', name: 'ЗовСтаи', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    for (let attempt = 0; attempt < 6; attempt++) {
+      // встаём по ту сторону от жертвы: сородич остаётся вне своего радиуса агрессии
+      a.send({ t: 'dev', hp: 99999, x: spawns[first].x, z: spawns[first].z - 16 });
+      await pause(400);
+      let victim = null, ally = null, x = 0, z = 0;
+      // мобы бродят вокруг своих точек — ждём мгновения, когда расстановка нужная
+      for (let i = 0; i < 60 && !(victim && ally); i++) {
+        const s = await a.wait('snap');
+        x = s.me.x; z = s.me.z;
+        const v = (s.m || []).find((r) => r[0] === victimId && !(r[5] & 8));
+        const k = (s.m || []).find((r) => r[0] === allyId && !(r[5] & 8));
+        if (!v || !k) continue;
+        // жертва в пределах огненной стрелы, сородич вне собственной агрессии, но в радиусе крика
+        if (dist(v, x, z) > 20 || dist(k, x, z) < 16) continue;
+        if (Math.hypot(k[1] - v[1], k[3] - v[3]) > SOCIAL_R) continue;
+        victim = v; ally = k;
+      }
+      if (!victim || !ally) continue;
+      const startDistance = dist(ally, x, z);
+      const hits = [];
+      const listener = (raw) => { const m = JSON.parse(raw); if (m.t === 'ev') for (const e of m.e) if (e.k === 'hit' && e.m === victimId) hits.push(e); };
+      a.ws.on('message', listener);
+      a.send({ t: 'atk', id: victimId, kind: 'm', hold: true });
+      a.send({ t: 'skill', id: 'fire_bolt' });
+      let closed = false;
+      for (let i = 0; i < 70 && !closed; i++) {
+        const s = await a.wait('snap');
+        a.send({ t: 'st', x, y: 0, z, r: 0, a: 0 });
+        const now = (s.m || []).find((r) => r[0] === allyId);
+        if (now && startDistance - dist(now, x, z) > 8) closed = true;
+      }
+      a.ws.off('message', listener);
+      if (!hits.length) continue; // выстрел не дошёл — пробуем снова из новой расстановки
+      assert.ok(closed, `сородич не пошёл на помощь: было ${startDistance.toFixed(1)}`);
+      return;
+    }
+    throw new Error('не удалось поймать пару сородичей в нужной расстановке');
+  } finally { a.ws.close(); await a.closed(); }
+});
