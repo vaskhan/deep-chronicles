@@ -36,7 +36,9 @@ export function normalizeRates(raw = {}) {
   if (raw && source !== raw) warnings.push('Настройки рейтов должны быть объектом — взяты значения по умолчанию');
   for (const [key, value] of Object.entries(source)) {
     if (!Object.hasOwn(RATE_KEYS, key)) { warnings.push(`Неизвестный коэффициент «${key}» — пропущен`); continue; }
-    const spec = RATE_KEYS[key], parsed = typeof value === 'string' ? Number(value.replace(',', '.').trim()) : Number(value);
+    const spec = RATE_KEYS[key];
+    // null, true, [] и прочее к числу не приводим: молчаливый 0 сломал бы баланс.
+    const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.replace(',', '.').trim()) : NaN;
     if (!Number.isFinite(parsed)) { warnings.push(`${key}: «${value}» не число — оставлено ×1`); continue; }
     const limited = clampRate(parsed, spec);
     if (parsed < spec.min || parsed > spec.max) warnings.push(`${key}: ${parsed} вне пределов ${spec.min}…${spec.max} — зажато до ${limited}`);
