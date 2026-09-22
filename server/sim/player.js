@@ -247,7 +247,7 @@ export function cmdLearn(a, id, rank, save) {
 export function cmdProf(a, id, save) {
   if (a.dead || a.cast) return say(a, 'Сейчас нельзя выбрать профессию', 'bad');
   const now = Date.now();
-  if (now - (a.profAt || 0) < PROF_CD) return;
+  if (now - (a.profAt || 0) < PROF_CD) return say(a, 'Слишком часто. Подождите секунду', 'bad');
   a.profAt = now;
   const before = a.P.prof;
   const error = applyProf(a.P, id);
