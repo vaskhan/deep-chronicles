@@ -132,6 +132,7 @@ func _run():
 		check(is_instance_valid(game.hud.window) and game.get_viewport().get_visible_rect().encloses(game.hud.window.get_global_rect()), kind + " window fits the viewport")
 		if DisplayServer.get_name() != "headless": await _screenshot(kind + ".png")
 	game.hud.close_window()
+	await _test_rates_line()
 	game.hud.show_window("settings")
 	for slider in game.hud.window.find_children("*", "HSlider", true, false):
 		if slider.get_meta("audio_bus", "") == "Effects":
@@ -701,6 +702,22 @@ func _test_chat_scroll():
 	chat.input.text = "draft during disconnect"; chat.submit()
 	check(chat.input.text == "draft during disconnect", "disconnected chat preserves unsent draft")
 	net.authed = was_authed; chat.input.clear()
+
+func _rate_labels() -> Array:
+	return game.hud.window.find_children("*", "Label", true, false).filter(func(l): return l.text.begins_with("Рейты: ") or l.text.begins_with("Ещё: "))
+
+func _test_rates_line():
+	game.hud.show_window("menu"); await process_frame
+	var live = _rate_labels()
+	check(live.size() == 1 and live[0].text == "Рейты: опыт ×1, SP ×1, монеты ×1, дроп ×1", "game menu shows the live server rate line: %s" % [live.map(func(l): return l.text)])
+	var real_rates = Network.rates
+	Network.rates = {"xp": 2, "sp": 2, "coins": 3, "dropChance": 2, "dropAmount": 2, "craftCost": 1, "enchantChance": 1, "sellPrice": 1, "buyPrice": 1, "respawn": 1.5, "partyBonus": 1}
+	game.hud.show_window("menu"); await process_frame
+	var custom = _rate_labels()
+	check(custom.size() == 2 and custom[0].text == "Рейты: опыт ×2, SP ×2, монеты ×3, дроп ×2" and custom[1].text == "Ещё: количество дропа ×2, респавн ×1,5", "server rates render in Russian with extra coefficients: %s" % [custom.map(func(l): return l.text)])
+	if DisplayServer.get_name() != "headless": await _screenshot("menu-rates.png")
+	Network.rates = real_rates
+	game.hud.close_window()
 
 func _grip_drag(grip: Control, delta: Vector2):
 	var start = grip.get_global_rect().get_center()

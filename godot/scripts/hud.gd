@@ -420,6 +420,7 @@ func show_window(kind: String, refresh = false):
 		"menu":
 			_label(list, "Персонаж: %s · %s" % [profile.name, GameData.catalog.CLASSES[profile.cls].name], 20)
 			_wrapped(list, "Сервер: %s\n%s · Игроков в мире: %s" % [Network.endpoint, "Подключено" if Network.authed else "Переподключение…", Network.online_count])
+			for line in rates_lines(): _wrapped(list, line)
 			var grid = GridContainer.new(); grid.columns = 2; list.add_child(grid)
 			for entry in [["Сумка · Tab / I", "inventory"], ["Персонаж · C", "character"], ["Умения · K", "skills"], ["Группа / Пати", "party"], ["Панель действий", "actions"], ["Оружие и броня", "equipment"], ["Карта мира · M", "map"], ["Настройки", "settings"], ["Управление", "controls"]]:
 				_button(grid, entry[0], func(): show_window(entry[1])).size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -434,6 +435,31 @@ func show_window(kind: String, refresh = false):
 				_wrapped(list, line)
 	window_scroll.set_deferred("scroll_vertical", scroll_y)
 	if search_cursor >= 0 and kind == "inventory": bag_search.grab_focus(); bag_search.caret_column = search_cursor
+
+# Строка действующих рейтов сервера. Только показ: значения приходят в кадре hi,
+# клиент по ним ничего не считает. Пустой список — сервер без поддержки рейтов.
+const RATE_LABELS = {"xp": "опыт", "sp": "SP", "coins": "монеты", "dropChance": "дроп", "dropAmount": "количество дропа",
+	"craftCost": "цена крафта", "enchantChance": "шанс заточки", "sellPrice": "цена продажи", "buyPrice": "цена покупки",
+	"respawn": "респавн", "partyBonus": "бонус группы"}
+const RATE_MAIN = ["xp", "sp", "coins", "dropChance"]
+
+func rate_text(value: float) -> String:
+	return ("%.2f" % value).rstrip("0").rstrip(".").replace(".", ",")
+
+func rates_lines() -> Array:
+	var rates = Network.rates
+	if rates.is_empty(): return []
+	var main = []
+	for key in RATE_MAIN:
+		if rates.has(key): main.append("%s ×%s" % [RATE_LABELS[key], rate_text(float(rates[key]))])
+	if main.is_empty(): return []
+	var lines = ["Рейты: " + ", ".join(main)]
+	var extra = []
+	for key in RATE_LABELS:
+		if key in RATE_MAIN or not rates.has(key) or is_equal_approx(float(rates[key]), 1.0): continue
+		extra.append("%s ×%s" % [RATE_LABELS[key], rate_text(float(rates[key]))])
+	if not extra.is_empty(): lines.append("Ещё: " + ", ".join(extra))
+	return lines
 
 func _wrapped(parent: Node, text: String, font_size = 13) -> Label:
 	var label = _label(parent, text, font_size); label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
