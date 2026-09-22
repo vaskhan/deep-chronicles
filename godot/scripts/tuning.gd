@@ -34,3 +34,9 @@ const LABEL_RANGE_NPC = 60.0
 const TARGET_PICK_RANGE = 55.0
 const TALK_SEARCH_RANGE = 25.0
 const TALK_OPEN_RANGE = 8.0
+
+# --- Эффекты во времени и ранговые мобы ---
+## Сколько значков эффектов помещается в строку у героя и у цели.
+const EFFECT_ICONS_MAX = 8
+## Радиус ауры элиты и чемпиона в долях радиуса моба.
+const ELITE_AURA_SCALE = 1.6

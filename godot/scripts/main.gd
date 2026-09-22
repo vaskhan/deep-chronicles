@@ -131,6 +131,7 @@ func _message(m: Dictionary):
 			hero.setup(profile.cls, profile.name); hero.position = GameData.position_at(profile.x, profile.z)
 			hero.apply_look(_look_of(profile)); hero.dead = profile.get("dead", false)
 			buffs.clear(); cooldowns.clear(); cast_time = 0; has_destination = false; attacking = false
+			hud.active_effects = []; hud.target_effects = []
 			initial_camera = true
 			hud.login_pass.clear()
 			if not same_character: hud.chat.clear_history()
@@ -156,6 +157,10 @@ func _message(m: Dictionary):
 				if mobs.has(id): continue
 				var actor = Actor.new(); actor.entity_id = id; actor.kind = "m"; add_child(actor)
 				var def = GameData.catalog.MOBS[mob_kind]
+				# Элита и чемпион: ранг, готовое имя и увеличенный размер считает сервер (src/elites.js)
+				if row.size() > 4:
+					actor.rank = str(row[2])
+					def = def.duplicate(true); def.name = str(row[3]); def.size = float(row[4])
 				actor.setup(mob_kind, "%s · %s" % [def.name, int(def.lvl)], def); actor.hide(); mobs[id] = actor
 		"look":
 			var id = int(m.id)
@@ -176,6 +181,7 @@ func _message(m: Dictionary):
 			_sync_ground(m.get("g", []))
 			if m.has("me"):
 				profile.hp = m.me.hp; profile.mp = m.me.mp; profile.dead = m.me.dead; hero.dead = m.me.dead
+				hero.effects = m.me.get("fx", [])
 		"pickup_err":
 			pending_pickup = ""; pickup_sent_at = 0; hud.log_line(m.reason)
 		"ev":
@@ -233,7 +239,7 @@ func _event(e: Dictionary):
 				var spell_target = mobs.get(int(e.to.get("m", -1))) if e.to.has("m") else (hero if int(e.to.get("p", -1)) == own_id else players.get(int(e.to.get("p", -1))))
 				if is_instance_valid(spell_target): combat_fx.projectile(source, spell_target, Color("9fbdff")); game_audio.play_at("fire", source.position, -5)
 		"hit", "miss":
-			if is_instance_valid(source) and source.cast_remaining <= 0 and source.action_until <= 0:
+			if is_instance_valid(source) and source.cast_remaining <= 0 and source.action_until <= 0 and not e.has("dot"):
 				source.play_action("attack", 0.65)
 				if source.base_model == "mage" and is_instance_valid(victim):
 					combat_fx.projectile(source, victim, Color("9fbdff")); game_audio.play_at("fire", source.position, -5)
@@ -267,7 +273,7 @@ func _event(e: Dictionary):
 		"hurt":
 			hud.log_line("Уклонение" if e.get("dodge", false) else "Получен урон: %s" % int(e.get("dmg", 0)), "combat")
 			_float(hero.position, "Уклонение" if e.get("dodge", false) else "−%s" % int(e.get("dmg", 0)), Color("ff7777"))
-			if not e.get("dodge", false):
+			if not e.get("dodge", false) and not e.has("dot"):
 				combat_fx.burst(hero.position, Color("d59072"), "impact", 0.6); game_audio.play_at("impact", hero.position, -3)
 				hero.receive_hit()
 			if not is_instance_valid(target): set_target(mobs.get(int(e.get("from", -1)), players.get(int(e.get("fromP", -1)))))
@@ -317,6 +323,19 @@ func _event(e: Dictionary):
 				else:
 					combat_fx.swing(source, color); combat_fx.burst(source.position, color, "buff" if e.id == "battle_cry" else "impact", float(sk.get("radius", 2)))
 				game_audio.play_at({"fire_bolt": "fire", "heal": "heal", "ice_nova": "frost", "battle_cry": "buff"}.get(e.id, "swing"), source.position)
+		"fx":
+			# Наложение и спад эффекта во времени. Сила, урон и срок — серверные, клиент рисует ауру.
+			var bearer = mobs.get(int(e.get("m", -1))) if e.has("m") else (hero if int(e.get("p", -1)) == own_id else players.get(int(e.get("p", -1))))
+			if not is_instance_valid(bearer): return
+			var key = "%s:%s" % [bearer.get_instance_id(), str(e.id)]
+			var kind = str(e.get("kind", ""))
+			if bool(e.get("up", false)):
+				combat_fx.aura(bearer, key, GameData.effect_color(kind), float(e.get("dur", 1000)) / 1000.0)
+				game_audio.play_at("buff" if kind in ["buff", "hot", "drain"] else "frost", bearer.position, -6)
+				if bearer == hero: hud.log_line("%s · %s с" % [GameData.effect_title(str(e.id), kind), maxi(1, ceili(float(e.get("dur", 1000)) / 1000.0))], "combat")
+			else:
+				combat_fx.stop_aura(key)
+				if bearer == hero: hud.log_line("%s: действие закончилось" % GameData.effect_title(str(e.id), kind), "combat")
 		"ench": _effect(hero.position, Color("ffc96d") if e.ok else Color("787c89"), 2)
 		"dead":
 			combat_fx.stop_cast(hero); hero.cancel_presentation(); game_audio.play_at("death", hero.position)
@@ -367,6 +386,8 @@ func _process(dt):
 	if ui_timer >= 0.2:
 		ui_timer = 0; stats = GameData.stats(profile, buffs)
 		hud.active_buffs = buffs
+		hud.active_effects = hero.effects
+		hud.target_effects = target.effects if is_instance_valid(target) and not target.dead else []
 		hud.update_values(profile, stats, hero.position, target, cooldowns, cast_time)
 		hud.minimap.update_entities(mobs, players, target)
 		if is_instance_valid(hud.map_control): hud.map_control.update_entities(mobs, players, target)
@@ -543,7 +564,7 @@ func _chat(text: String):
 
 func _return_to_login(forget: bool, reconnect = true):
 	if forget: Network.logout()
-	last_pm = ""; buffs.clear(); hud.active_buffs = []; hud.enchant_scroll = ""; hud.selected_item = {}; hud.chat.clear_history()
+	last_pm = ""; buffs.clear(); hud.active_buffs = []; hud.active_effects = []; hud.target_effects = []; hud.enchant_scroll = ""; hud.selected_item = {}; hud.chat.clear_history()
 	pvp_enabled = false; hud.pvp_enabled = false; joystick = Vector2.ZERO
 	hud.login_pass.clear()
 	_clear_entities(); profile = {}; hud.close_window(); hud.game_ui.hide(); hud.login_panel.show()

@@ -40,12 +40,17 @@ var item_details: VBoxContainer
 var minimap: Control
 var chat: VBoxContainer
 var xp_text: Label
-var buff_text: Label
+## Строки значков эффектов во времени: у героя (слева сверху) и у выбранной цели.
+var effects_row: HBoxContainer
+var target_effects_row: HBoxContainer
 var target_bar: ProgressBar
 var cast_text: Label
 var cast_duration = 1.0
 var cast_name = ""
 var active_buffs: Array = []
+## Эффекты героя и цели из снапшота сервера: [[id, вид, осталось мс], …].
+var active_effects: Array = []
+var target_effects: Array = []
 var selected_item: Dictionary = {}
 var bag_filter = 0
 var bag_query = ""
@@ -59,7 +64,6 @@ var pvp_enabled = false
 var target_panel: PanelContainer
 var target_hint: Label
 var status_panel: PanelContainer
-var buffs_row: HBoxContainer
 var hotbar_labels: Array = []
 const Settings = preload("res://scripts/interface_settings.gd")
 var hotbar_bindings: Array = []
@@ -212,8 +216,8 @@ func _game_hud():
 	xp_bar.add_theme_stylebox_override("fill", _style(Color("615d93"), Color.TRANSPARENT, 0))
 	xp_text = _label(xp_bar, "", 10); xp_text.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); xp_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; xp_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	zone = _label(v, "", 10); status_label = _label(v, "", 10)
-	buffs_row = HBoxContainer.new(); game_ui.add_child(buffs_row); buffs_row.position = Vector2(232 if touch else 204, 8)
-	buff_text = _label(buffs_row, "", 11)
+	effects_row = HBoxContainer.new(); game_ui.add_child(effects_row); effects_row.position = Vector2(232 if touch else 204, 8)
+	effects_row.add_theme_constant_override("separation", 3)
 	target_panel = PanelContainer.new(); game_ui.add_child(target_panel); target_panel.hide()
 	target_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
 	target_panel.offset_left = -120; target_panel.offset_right = 120; target_panel.offset_top = 6; target_panel.offset_bottom = 58
@@ -221,6 +225,8 @@ func _game_hud():
 	target_info = _label(target_v, "", 12); target_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	target_bar = ProgressBar.new(); target_bar.show_percentage = false; target_bar.custom_minimum_size = Vector2(222, 11); target_v.add_child(target_bar)
 	target_hint = _label(target_v, "", 10); target_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	target_effects_row = HBoxContainer.new(); target_v.add_child(target_effects_row)
+	target_effects_row.alignment = BoxContainer.ALIGNMENT_CENTER; target_effects_row.add_theme_constant_override("separation", 3)
 	var map_panel = PanelContainer.new(); game_ui.add_child(map_panel)
 	map_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	map_panel.offset_left = -176; map_panel.offset_right = -8; map_panel.offset_top = 8; map_panel.offset_bottom = 145
@@ -318,10 +324,8 @@ func update_values(p: Dictionary, s: Dictionary, pos: Vector3, target, cooldowns
 	mp_text.text = "MP  %s / %s" % [int(p.mp), int(s.maxMp)]
 	profile = p; current_stats = s
 	xp_text.text = "EXP  %.2f%%" % (100.0 * p.xp / GameData.xp_next(int(p.lvl))) if p.lvl < 40 else "Максимальный уровень"
-	var buff_lines: Array[String] = []
-	for buff in active_buffs:
-		if buff.until > Time.get_ticks_msec(): buff_lines.append("%s · %s с" % [GameData.catalog.SKILLS[buff.id].name, ceili((buff.until - Time.get_ticks_msec()) / 1000.0)])
-	buff_text.text = "\n".join(buff_lines); buff_text.visible = not buff_lines.is_empty()
+	_render_effects(effects_row, active_effects)
+	_render_effects(target_effects_row, target_effects)
 	xp_bar.max_value = GameData.xp_next(int(p.lvl)); xp_bar.value = p.xp
 	var z = GameData.zone_at(pos)
 	zone.text = z.name + " · " + str(z.lv)
@@ -723,8 +727,34 @@ func pointer_over_ui(pos: Vector2) -> bool:
 		if child is Control and child.visible and child.mouse_filter != Control.MOUSE_FILTER_IGNORE and child.get_global_rect().has_point(pos): return true
 	return false
 
+## Значки эффектов во времени с таймером. Список приходит с сервера: клиент ничего не считает,
+## он только подписывает вид, оставшиеся секунды и красит рамку по виду эффекта.
+func _render_effects(row: HBoxContainer, list: Array) -> void:
+	if not is_instance_valid(row): return
+	var shown = list.slice(0, Tuning.EFFECT_ICONS_MAX)
+	var signature = ""
+	for entry in shown: signature += "%s/%s|" % [str(entry[0]), str(entry[1])]
+	if str(row.get_meta("signature", "")) != signature:
+		row.set_meta("signature", signature)
+		for child in row.get_children(): row.remove_child(child); child.queue_free()
+		for entry in shown:
+			var color = GameData.effect_color(str(entry[1]))
+			var panel = PanelContainer.new(); row.add_child(panel)
+			panel.add_theme_stylebox_override("panel", _style(Color(0.05, 0.05, 0.06, 0.62), color, 0))
+			panel.tooltip_text = GameData.effect_title(str(entry[0]), str(entry[1]))
+			var box = VBoxContainer.new(); panel.add_child(box); box.add_theme_constant_override("separation", 0)
+			var title = _label(box, GameData.effect_label(str(entry[1])), 10)
+			title.add_theme_color_override("font_color", color); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			var timer = _label(box, "", 10); timer.name = "Timer"; timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	for i in shown.size():
+		if i >= row.get_child_count(): break
+		var timer = row.get_child(i).find_child("Timer", true, false)
+		if timer: timer.text = "%s с" % maxi(0, ceili(float(shown[i][2]) / 1000.0))
+	row.visible = not shown.is_empty()
+
 func default_bindings() -> Array:
-	return GameData.catalog.CLASSES[profile.cls].skills.duplicate() + ["potion_hp", "potion_mp", "attack", "target", "talk", "pickup", "skills"]
+	# Десять ячеек ровно: умения класса вперёд, остальное — сколько поместится.
+	return (GameData.catalog.CLASSES[profile.cls].skills.duplicate() + ["potion_hp", "potion_mp", "attack", "target", "talk", "pickup", "skills"]).slice(0, 10)
 
 func binding_choices() -> Array:
 	return GameData.catalog.CLASSES[profile.cls].skills.duplicate() + ["potion_hp", "potion_mp", "scroll_escape"] + ACTION_NAMES.keys()

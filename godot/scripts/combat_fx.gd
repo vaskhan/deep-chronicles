@@ -4,6 +4,7 @@ const MAX_EFFECTS = 40
 var active: Array = []
 var casts: Dictionary = {}
 var telegraphs: Dictionary = {}
+var auras: Dictionary = {}
 var counts: Dictionary = {}
 var glow: GradientTexture2D
 
@@ -44,6 +45,7 @@ func _spawn(kind: String, pos: Vector3, duration: float) -> Dictionary:
 func _dispose(fx: Dictionary):
 	if fx.has("owner_id") and casts.get(fx.owner_id) == fx: casts.erase(fx.owner_id)
 	if fx.has("owner_id") and telegraphs.get(fx.owner_id) == fx: telegraphs.erase(fx.owner_id)
+	if fx.has("aura_key") and auras.get(fx.aura_key) == fx: auras.erase(fx.aura_key)
 	if is_instance_valid(fx.node): fx.node.queue_free()
 
 func stop_cast(actor):
@@ -81,6 +83,23 @@ func telegraph(actor, attack: Dictionary, aimed_at_me: bool):
 	fx.warning = Label3D.new(); fx.warning.text = "!"; fx.warning.font_size = 58; fx.warning.pixel_size = 0.013
 	fx.warning.billboard = BaseMaterial3D.BILLBOARD_ENABLED; fx.warning.modulate = Color("ffb77d")
 	fx.warning.position.y = actor.label.position.y + 0.3; fx.node.add_child(fx.warning)
+
+## Аура эффекта во времени: живёт, пока эффект активен. Урон, лечение и срок считает сервер,
+## клиент только рисует. key — «объект:эффект», по нему аура и снимается при спаде.
+func aura(actor, key: String, color: Color, duration: float):
+	stop_aura(key)
+	if not is_instance_valid(actor): return
+	var fx = _spawn("aura", actor.global_position, clampf(duration, 0.35, 60.0))
+	fx.actor = weakref(actor); fx.aura_key = key; auras[key] = fx
+	fx.ring = _ring(fx.node, color, 0.7); fx.ring.position.y = 0.12
+	fx.parts = []
+	for i in 6:
+		var mesh = PrismMesh.new(); mesh.size = Vector3(0.07, 0.24, 0.07)
+		fx.parts.append(_mesh(fx.node, mesh, color.lightened(0.15)))
+
+func stop_aura(key: String):
+	if not auras.has(key): return
+	var fx = auras[key]; active.erase(fx); _dispose(fx)
 
 func begin_cast(actor, color: Color, duration: float):
 	if not is_instance_valid(actor): return
@@ -159,6 +178,13 @@ func _process(dt):
 						for i in range(1, fx.points.size()):
 							for v in [fx.points[i - 1][0], fx.points[i - 1][1], fx.points[i][1], fx.points[i - 1][0], fx.points[i][1], fx.points[i][0]]: mesh.surface_add_vertex(v)
 						mesh.surface_end()
+			"aura":
+				fx.ring.rotation.y = fx.age * 2.0
+				fx.ring.scale = Vector3.ONE * (0.92 + sin(fx.age * 4.0) * 0.07)
+				for i in fx.parts.size():
+					var a = fx.age * 2.6 + i * TAU / fx.parts.size()
+					fx.parts[i].position = Vector3(cos(a) * 0.78, 0.35 + sin(fx.age * 4.0 + i) * 0.28, sin(a) * 0.78)
+					fx.parts[i].rotation.y = -a
 			"projectile":
 				var victim = fx.target.get_ref()
 				if is_instance_valid(victim): fx.end = victim.global_position + Vector3.UP
@@ -175,7 +201,9 @@ func _process(dt):
 						part.position = Vector3(cos(a) * 0.9, 0.3 + u * 2.8, sin(a) * 0.9)
 					else: part.position = direction * u * fx.radius + Vector3.UP * (1 if fx.kind in ["impact", "critical"] else 0.15)
 					part.rotation = Vector3(u * 2, i, u)
-		if fx.kind not in ["cast", "telegraph"]:
+		if fx.kind == "aura":
+			for mesh in fx.node.find_children("*", "MeshInstance3D", true, false): mesh.material_override.albedo_color.a = clampf((1.0 - u) * 4.0, 0.0, 1.0)
+		elif fx.kind not in ["cast", "telegraph"]:
 			for mesh in fx.node.find_children("*", "MeshInstance3D", true, false): mesh.material_override.albedo_color.a = 1.0 - u
 		if u >= 1:
 			active.erase(fx); _dispose(fx)
@@ -183,4 +211,4 @@ func _process(dt):
 
 func clear():
 	for fx in active: _dispose(fx)
-	active.clear(); casts.clear(); telegraphs.clear()
+	active.clear(); casts.clear(); telegraphs.clear(); auras.clear()
