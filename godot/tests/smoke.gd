@@ -572,8 +572,10 @@ func _test_mob_telegraph():
 		mob = game.mobs.get(int(warning.m))
 		var telegraph = game.combat_fx.telegraphs.get(mob.get_instance_id()) if is_instance_valid(mob) else null
 		# Остаток сектора на экране: жизнь эффекта равна замаху плюс 0.25 с послесвечения.
-		if telegraph == null or float(telegraph.life) - float(telegraph.age) >= float(warning.get("t", 0.0)) * 0.6: break
-		print("TELEGRAPH_SKIP stale=", snappedf(float(telegraph.age), 0.01))
+		# Пропавший сектор — тот же случай: под нагрузкой тест проснулся уже после
+		# удара, замах закончился и `mob_strike` снял телеграф. Берём следующий.
+		if telegraph != null and float(telegraph.life) - float(telegraph.age) >= float(warning.get("t", 0.0)) * 0.6: break
+		print("TELEGRAPH_SKIP stale=", snappedf(float(telegraph.age), 0.01) if telegraph else "consumed")
 	check(announced, "an aggressive server mob announces its wind-up before damage")
 	if warning.is_empty(): return
 	game.set_target(mob)
