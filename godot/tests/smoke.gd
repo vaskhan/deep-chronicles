@@ -192,6 +192,7 @@ func _run():
 	_test_gait()
 	check(game.hud.pickup_button.visible and game.hud.pickup_button.text.contains("Поднять"), "pickup has an explicit permanent action button")
 	await _screenshot("chat-actions.png")
+	await _town_overview()
 	var fixes_before_move = received.filter(func(m): return m.t == "fix").size()
 	var start = game.hero.position
 	game.joystick = Vector2.RIGHT
@@ -311,7 +312,9 @@ func _run():
 	game.camera_distance = 28; game.camera_pitch = 0.56; game.camera_yaw = 0.45
 	game._cancel_attack()
 	await create_timer(0.25).timeout
-	check(game.hud.minimap.mob_markers.size() == game.mobs.values().filter(func(m): return m.visible and not m.dead and Time.get_ticks_msec() - m.seen < 1500).size(), "minimap removes dead and stale mobs")
+	# Сравнение ждёт ближайшего обновления карты: окно «свежести» 1500 мс иначе истекает
+	# между перерисовкой и самой проверкой, и живой маркер считается лишним.
+	check(await wait_for(func(): return game.hud.minimap.mob_markers.size() == game.mobs.values().filter(func(m): return m.visible and not m.dead and Time.get_ticks_msec() - m.seen < 1500).size()), "minimap removes dead and stale mobs")
 	# A second ordinary WS client proves the native client interoperates with the existing protocol.
 	peer = WebSocketPeer.new(); peer.connect_to_url(net.endpoint)
 	check(await wait_for(func(): return peer.get_ready_state() == WebSocketPeer.STATE_OPEN), "second player connects")
@@ -626,6 +629,25 @@ func _bag(id: String) -> int:
 	for i in game.profile.inv.size():
 		if game.profile.inv[i].id == id: return i
 	return -1
+
+## Общий план города: окна закрыты, камера отодвинута и поднята. Кадр показывает, что после
+## слияния застройка, растительность и HUD остаются на местах; камера возвращается назад.
+func _town_overview():
+	game.hud.close_window()
+	await _dev({"x": -430, "z": 436})
+	var yaw = game.camera_yaw
+	var pitch = game.camera_pitch
+	var distance = game.camera_distance
+	game.camera_yaw = 0.9
+	game.camera_pitch = Tuning.CAMERA_PITCH_MAX * 0.62
+	game.camera_distance = Tuning.CAMERA_DISTANCE_MAX * 0.72
+	await create_timer(0.6).timeout
+	check(Vector2(game.hero.position.x + 430, game.hero.position.z - 436).length() < 6, "hero stands on the town square for the overview frame")
+	await _screenshot("town-overview.png")
+	game.camera_yaw = yaw
+	game.camera_pitch = pitch
+	game.camera_distance = distance
+	await create_timer(0.3).timeout
 
 func _dev(fields: Dictionary):
 	var command = fields.duplicate(); command.t = "dev"; net.send(command)
@@ -953,14 +975,17 @@ func _test_pack():
 	var victim_id = first + 1
 	var ally_id = second + 1
 	var away = Vector2(spawns[first].x - spawns[second].x, spawns[first].z - spawns[second].z).normalized()
-	for attempt in 6:
+	# Попытки растянуты: убитая в прошлой попытке жертва возрождается около 25 секунд,
+	# а сородич успевает отойти на прогулке. Короткий цикл сгорал вхолостую.
+	for attempt in 8:
 		await _dev({"hp": 9000, "x": spawns[first].x + away.x * 16, "z": spawns[first].z + away.y * 16})
-		if not await wait_for(func(): return game.mobs.has(victim_id) and game.mobs.has(ally_id) and game.mobs[victim_id].visible and game.mobs[ally_id].visible and not game.mobs[victim_id].dead and not game.mobs[ally_id].dead, 6): continue
+		if not await wait_for(func(): return game.mobs.has(victim_id) and game.mobs.has(ally_id) and game.mobs[victim_id].visible and game.mobs[ally_id].visible and not game.mobs[victim_id].dead and not game.mobs[ally_id].dead, 14): continue
 		var victim = game.mobs[victim_id]
 		var ally = game.mobs[ally_id]
-		# сородич должен стоять вне собственного радиуса агрессии, но внутри радиуса крика
-		if ally.position.distance_to(game.hero.position) < 16.0: continue
-		if ally.position.distance_to(victim.position) > 12.0: continue
+		# Сородич гуляет вокруг точки спавна: ждём, пока он окажется вне своего радиуса
+		# агрессии и внутри радиуса крика, а не отбрасываем попытку по первому же кадру.
+		if not await wait_for(func(): return ally.position.distance_to(game.hero.position) >= 16.0 and ally.position.distance_to(victim.position) <= 12.0, 8): continue
+		if victim.dead or ally.dead: continue
 		var started = ally.position.distance_to(game.hero.position)
 		# Сверху: в лесу низкая камера упирается в крону ближайшего дерева.
 		game.camera_distance = 17; game.camera_pitch = 1.05
