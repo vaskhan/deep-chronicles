@@ -5,17 +5,27 @@ import { MOVE_SCALE } from './movement.js';
 import { MOBS, ITEMS, MAX_LEVEL, xpToNext } from './data.js';
 import { MAX_ENCH, SAFE_ENCH, ENCH_CHANCE } from './stats.js';
 import { heightAt, obstacles, MAP, DUNGEON } from './world-core.js';
+import { effectMul } from './effects.js';
+import { rankedDef } from './elites.js';
 
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 export const rand = (a, b, rng = Math.random) => a + rng() * (b - a);
 export const irand = (a, b, rng = Math.random) => Math.floor(rand(a, b + 1, rng));
 
 // ---------- бой ----------
-export function calcDmg(atk, def, mul = 1, crit = 0, rng = Math.random) {
-  let d = atk * mul * (70 / (70 + def)) * rand(0.9, 1.1, rng) * 3;
+// spread — полная ширина разброса: 0.2 даёт привычные ±10 %.
+export function calcDmg(atk, def, mul = 1, crit = 0, rng = Math.random, spread = 0.2) {
+  let d = atk * mul * (70 / (70 + def)) * rand(1 - spread / 2, 1 + spread / 2, rng) * 3;
   const isCrit = rng() < crit; if (isCrit) d *= 2;
   return { d: Math.max(1, Math.round(d)), crit: isCrit };
 }
+// Удары мобов: чуть шире разброс и собственный крит вместо прежней фиксированной пятёрки.
+// Базовая формула та же calcDmg — множители не складываются с игроцкими.
+export const MOB_SPREAD = 0.3;
+export const MOB_CRIT = 0.08;
+export const mobCrit = (def) => def.crit ?? MOB_CRIT;
+// Атака моба с учётом наложенных на него ослаблений.
+export const mobAtk = (m, now) => m.def.patk * effectMul(m.effects || [], 'patk', now);
 // шанс промахнуться по мобу и шанс увернуться от моба — зеркальные формулы
 export const missChance = (mobLvl, acc) => clamp(0.06 + (mobLvl + 33 - acc) * 0.01, 0.01, 0.3);
 export const evaChance = (mobLvl, eva) => clamp(0.05 + (eva - (mobLvl + 33)) * 0.01, 0.02, 0.3);
@@ -51,8 +61,8 @@ export function xpForKill(mobDef, heroLvl) {
 }
 export const rollCoins = (mobDef, rng = Math.random) => irand(mobDef.coins[0], mobDef.coins[1], rng);
 export function rollDrops(mobDef, rng = Math.random) {
-  const out = [];
-  for (const [id, ch] of Object.entries(mobDef.drops || {})) if (rng() < ch) out.push(id);
+  const out = [], mul = mobDef.dropMul || 1;
+  for (const [id, ch] of Object.entries(mobDef.drops || {})) if (rng() < Math.min(1, ch * mul)) out.push(id);
   return out;
 }
 export const xpLossOnDeath = (lvl, isPk) => Math.round(xpToNext(lvl) * (isPk ? 0.12 : 0.04));
@@ -92,10 +102,10 @@ export function moveEntity(pos, dirX, dirZ, dist, radius) {
 export const flatDist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
 // ---------- мобы ----------
-export function newMob(id, spawn, rng = Math.random) {
-  const def = MOBS[spawn.mob];
+// def приходит извне, когда точка спавна получила ранг элиты или чемпиона (src/elites.js).
+export function newMob(id, spawn, rng = Math.random, def = MOBS[spawn.mob]) {
   return {
-    id, kind: spawn.mob, def,
+    id, kind: spawn.mob, def, camp: spawn.camp || null, effects: [],
     home: { x: spawn.x, z: spawn.z },
     x: spawn.x, y: heightAt(spawn.x, spawn.z), z: spawn.z, r: rand(0, 6.28, rng),
     hp: def.hp, recoverAfter: 0, state: 'idle', target: null, atkCd: 0, wanderT: rand(1, 6, rng), dest: null,
@@ -110,7 +120,7 @@ export function mobStep(m, ctx, dt) {
     if (ctx.now > m.respawnAt) {
       m.dead = false; m.hp = m.def.hp; m.recoverAfter = 0; m.state = 'idle'; m.target = null;
       m.windup = null; m.atkCd = 0; m.attackT = 0; m.moving = false;
-      m.x = m.home.x; m.z = m.home.z; m.y = heightAt(m.x, m.z); m.hitBy.clear();
+      m.x = m.home.x; m.z = m.home.z; m.y = heightAt(m.x, m.z); m.hitBy.clear(); m.effects = [];
     }
     return false;
   }
@@ -134,7 +144,7 @@ export function mobStep(m, ctx, dt) {
       return true;
     }
   }
-  const radius = mobRadius(m.def), speed = MOB_SPEED(m.def);
+  const radius = mobRadius(m.def), speed = MOB_SPEED(m.def) * effectMul(m.effects || [], 'speed', ctx.now);
   // цель: та, что уже выбрана, иначе ближайший живой игрок вне города
   const cur = m.target != null ? ctx.players.find((p) => p.id === m.target) : null;
   let near = cur && !cur.dead && !cur.inTown ? cur : null, nd = near ? flatDist(m, near) : Infinity;
@@ -185,4 +195,4 @@ export const sellPrice = (it) => Math.max(0, it.sell ?? Math.round((it.price ?? 
 export const crystalsFor = (grade, cur) => ({ d: 2, c: 6, b: 15 }[grade] * (cur + 1));
 // удачна ли попытка усиления: до SAFE_ENCH — всегда
 export const enchSucceeds = (cur, rng = Math.random) => cur < SAFE_ENCH || rng() < ENCH_CHANCE;
-export { MAX_ENCH, SAFE_ENCH, ENCH_CHANCE, MAX_LEVEL, xpToNext, ITEMS, MOBS };
+export { MAX_ENCH, SAFE_ENCH, ENCH_CHANCE, MAX_LEVEL, xpToNext, ITEMS, MOBS, rankedDef };

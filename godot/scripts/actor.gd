@@ -58,6 +58,11 @@ var model_rest_position = Vector3.ZERO
 var model_rest_rotation = Vector3.ZERO
 var health_bar: MeshInstance3D
 var health_fill: MeshInstance3D
+## Ранг моба с сервера: "" — обычный, "elite" — элита, "champion" — чемпион.
+var rank = ""
+var rank_aura: MeshInstance3D
+## Активные эффекты цели из снапшота: [[id, вид, осталось мс], …]. Считает их сервер.
+var effects: Array = []
 
 func setup(model_id: String, title: String, def: Dictionary = {}):
 	definition = def; display_name = title; base_model = model_id
@@ -97,6 +102,35 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	if kind == "m":
 		health_bar = _health_quad(Vector2(1.45, 0.10), Color("211617")); health_bar.position.y = label.position.y - 0.3
 		health_fill = _health_quad(Vector2(1.4, 0.065), Color("bf4338")); health_fill.position.y = health_bar.position.y; health_fill.position.z = 0.012
+	_apply_rank()
+
+## Элита и чемпион крупнее обычного моба и светятся аурой. Множители присылает сервер
+## в определении (src/elites.js); клиент только показывает их.
+func rank_color() -> Color:
+	return Color("ff77e0") if rank == "champion" else Color("ffb347")
+
+func _apply_rank():
+	if rank.is_empty() or kind != "m": return
+	var base_size = float(GameData.catalog.MOBS.get(base_model, {}).get("size", 1.0))
+	var factor = float(definition.get("size", base_size)) / maxf(0.01, base_size)
+	model.scale *= factor
+	radius *= factor
+	visual_height *= factor
+	label.position.y = visual_height + 0.45
+	if health_bar:
+		health_bar.position.y = label.position.y - 0.3; health_fill.position.y = health_bar.position.y
+	var mesh = TorusMesh.new()
+	mesh.inner_radius = radius * Tuning.ELITE_AURA_SCALE; mesh.outer_radius = mesh.inner_radius + 0.09
+	mesh.rings = 40; mesh.ring_segments = 6
+	rank_aura = MeshInstance3D.new(); rank_aura.mesh = mesh
+	var material = StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED; material.albedo_color = rank_color()
+	rank_aura.material_override = material
+	rank_aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rank_aura.position.y = 0.1
+	add_child(rank_aura)
 
 func _health_quad(size: Vector2, color: Color) -> MeshInstance3D:
 	var node = MeshInstance3D.new(); var quad = QuadMesh.new(); quad.size = size; node.mesh = quad
@@ -167,13 +201,16 @@ func snapshot(row: Array, timestamp: float):
 		snapshots.clear(); position = pos; rotation.y = row[4]
 	snapshots.append({"t": timestamp, "p": pos, "r": row[4]})
 	if snapshots.size() > 30: snapshots.pop_front()
+	# Девятый столбец снапшота — активные эффекты; сервер шлёт его только когда они есть.
+	effects = row[8] if row.size() > 8 else []
 	var flags = int(row[5]); moving = (flags & 1) != 0; casting = (flags & 4) != 0
 	var attack_flag = (flags & 2) != 0
 	if attack_flag and not previous_attack_flag and action_until <= 0 and windup_remaining <= 0: play_action("attack")
 	previous_attack_flag = attack_flag
 	dead = (flags & 8) != 0; hp = row[6]
-	if kind == "m" and dead and row.size() > 8: death_elapsed = maxf(death_elapsed,float(row[8])/1000.0)
-	status = int(row[7]) if row.size() > 7 else 0
+	# Восьмой столбец у мобов — возраст смерти, у игроков — PvP-статус.
+	if kind == "m" and dead and row.size() > 7: death_elapsed = maxf(death_elapsed,float(row[7])/1000.0)
+	status = int(row[7]) if kind != "m" and row.size() > 7 else 0
 	seen = Time.get_ticks_msec(); visible = true
 
 func measure_motion(before: Vector3, dt: float):
@@ -245,8 +282,13 @@ func _process(dt):
 		health_fill.visible = health_bar.visible; health_fill.mesh.size.x = maxf(0.01, 1.4 * hp / 100.0)
 	if label:
 		label.text = display_name + (" · повержен" if dead else "")
-		label.modulate = Color("ffe3a6") if selected else (Color("ff7373") if status == 2 else (Color("d49bff") if status == 1 else (Color("e7d8ab") if kind == "n" else Color.WHITE)))
+		var plain = rank_color() if not rank.is_empty() else (Color("e7d8ab") if kind == "n" else Color.WHITE)
+		label.modulate = Color("ffe3a6") if selected else (Color("ff7373") if status == 2 else (Color("d49bff") if status == 1 else plain))
 		if kind == "m": label.modulate.a = corpse_opacity
+	if is_instance_valid(rank_aura):
+		rank_aura.visible = visible and not dead
+		rank_aura.rotation.y += dt * 0.9
+		rank_aura.material_override.albedo_color = rank_color() * (0.75 + 0.25 * sin(Time.get_ticks_msec() * 0.004))
 
 func _update_corpse():
 	# Keep the body on the ground. Duplicate only this corpse's materials:

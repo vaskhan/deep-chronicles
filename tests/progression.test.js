@@ -16,7 +16,8 @@ test('миграция v3 сохраняет вещи/монеты и откры
   delete original.skills; delete original.sp; delete original.autoloot;
   const migrated = loadChar('Тест', original);
   assert.equal(migrated.coins, 9876); assert.deepEqual(migrated.equip, original.equip);
-  assert.deepEqual(migrated.skills, { fire_bolt: 1, heal: 1, ice_nova: 1 });
+  // Старый сейв без skills открывает первый ранг всех доступных по уровню умений класса, включая новые.
+  assert.deepEqual(migrated.skills, { fire_bolt: 1, heal: 1, ice_nova: 1, curse: 1 });
   assert.equal(migrated.sp, 0); assert.equal(migrated.autoloot, true);
   migrated.skills.fire_bolt = 2; migrated.sp = 222; migrated.autoloot = false;
   const second = loadChar('Тест', migrated);
@@ -189,12 +190,12 @@ test('ранги умений профессии: открыты с 20+, сто�
   }
   const a = newActor(1, 'Тест', newChar('Тест', 'warrior'));
   a.P.lvl = 25; a.P.sp = 100000;
-  assert.deepEqual(skillsOf(a.P), ['power_strike', 'battle_cry', 'whirlwind']);
+  assert.deepEqual(skillsOf(a.P), ['power_strike', 'battle_cry', 'whirlwind', 'blood_rage']);
   cmdLearn(a, 'shield_bash', 1, () => true);
   assert.equal(a.P.skills.shield_bash, undefined, 'без профессии умение не учится');
   cmdProf(a, 'knight', () => true);
   assert.equal(a.P.prof, 'knight');
-  assert.deepEqual(skillsOf(a.P), ['power_strike', 'battle_cry', 'whirlwind', 'shield_bash', 'iron_will']);
+  assert.deepEqual(skillsOf(a.P), ['power_strike', 'battle_cry', 'whirlwind', 'blood_rage', 'shield_bash', 'iron_will']);
   const cost = skillRanks('shield_bash')[0].sp, sp = a.P.sp;
   cmdLearn(a, 'shield_bash', 1, () => true);
   assert.equal(a.P.skills.shield_bash, 1); assert.equal(a.P.sp, sp - cost);
@@ -264,7 +265,7 @@ test('цена умений профессии: первый ранг — дес
     }
   }
   // Базовые умения классов считаются по-старому: первый ранг первого уровня бесплатный, дальше опыт уровня.
-  for (const id of ['power_strike', 'battle_cry', 'whirlwind', 'fire_bolt', 'heal', 'ice_nova']) {
+  for (const id of ['power_strike', 'battle_cry', 'whirlwind', 'blood_rage', 'fire_bolt', 'heal', 'ice_nova', 'curse']) {
     for (const rank of skillRanks(id)) assert.equal(rank.sp, rank.lvl === 1 ? 0 : Math.round(xpToNext(rank.lvl) * 0.18), `${id} ранг ${rank.rank}`);
   }
 });

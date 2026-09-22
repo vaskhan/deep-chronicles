@@ -111,8 +111,10 @@ func stats(p: Dictionary, buffs: Array = []) -> Dictionary:
 		for key in prof.bonus: s[key] *= prof.bonus[key]
 	s.load = floor(s.load * 10 + 0.5) / 10
 	if s.load > s.cap * 0.7: s.speed *= 0.6; s.regen = 0.5
+	# Зеркало src/stats.js: множитель применяют только эффекты с характеристикой.
+	# Урон и лечение со временем, вампиризм характеристик не меняют.
 	for buff in buffs:
-		if buff.until > Time.get_ticks_msec(): s[buff.stat] *= buff.mul
+		if buff.has("stat") and buff.until > Time.get_ticks_msec(): s[buff.stat] *= buff.mul
 	s.maxHp = floor(s.maxHp + 0.5); s.maxMp = floor(s.maxMp + 0.5)
 	s.speed *= float(catalog.UI_RULES.movementScale)
 	return s
@@ -168,3 +170,19 @@ func skills_of(p: Dictionary) -> Array:
 func skill(p: Dictionary, id: String) -> Dictionary:
 	var ranks = catalog.UI_RULES.skillRanks[id]
 	return ranks[clampi(int(p.get("skills", {}).get(id, 1)) - 1, 0, ranks.size() - 1)]
+
+# --- Эффекты во времени: подписи, цвета и названия умений. Правила — src/effects.js ---
+const EFFECT_LABELS = {"buff": "Усиление", "debuff": "Ослабление", "slow": "Замедление", "dot": "Урон", "hot": "Лечение", "drain": "Вампиризм"}
+const EFFECT_COLORS = {"buff": "ffcf7a", "debuff": "c58cff", "slow": "8fd6ff", "dot": "ff8a6a", "hot": "86f0b4", "drain": "ff6f8a"}
+
+func effect_label(kind: String) -> String:
+	return str(EFFECT_LABELS.get(kind, "Эффект"))
+
+func effect_color(kind: String) -> Color:
+	return Color(str(EFFECT_COLORS.get(kind, "ffffff")))
+
+## Полное имя эффекта: «Ледяная волна · Замедление». id эффекта — «умение» или «умение:вид».
+func effect_title(id: String, kind: String) -> String:
+	var skill = catalog.SKILLS.get(id.split(":")[0], {})
+	if skill.is_empty(): return effect_label(kind)
+	return "%s · %s" % [str(skill.get("name", id)), effect_label(kind)]

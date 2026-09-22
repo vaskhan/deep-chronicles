@@ -435,12 +435,12 @@ test('тело моба передаёт возраст смерти и оста
  world.kill(m,now);
  for(const age of [0,5000,9000,CORPSE.lifetimeMs]){
   const row=world.snapshotFor(m,10,now+age).find(r=>r[0]===m.id);
-  assert.ok(row);assert.equal(row[8],age);assert.ok(row[5]&8);
+  assert.ok(row);assert.equal(row[7],age);assert.ok(row[5]&8);
  }
  assert.ok(!world.snapshotFor(m,10,now+CORPSE.lifetimeMs+1).some(r=>r[0]===m.id));
  mobStep(m,{now:m.respawnAt+1,players:[],onHit(){}},.1);
  const row=world.snapshotFor(m,10,m.respawnAt+1).find(r=>r[0]===m.id);
- assert.equal(row[8],0);assert.equal(row[5]&8,0);
+ assert.equal(row[7],0);assert.equal(row[5]&8,0);
 });
 test('темп автоатаки: урон приходится на 35% полного взмаха, ускорение сохраняется',()=>{
  for(const aspd of [.64,.8,1.6]){

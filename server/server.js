@@ -9,7 +9,8 @@ import { zoneAt, TOWNS, DUNGEON, CRYPT, heightAt, obstacles } from '../src/world
 import { PVP, karmaForPk, karmaWashCost } from '../src/pvp.js';
 import { effectiveSkill, spForKill } from '../src/progression.js';
 import { CLASSES, SKILLS, ITEMS } from '../src/data.js';
-import { heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp } from '../src/sim.js';
+import { heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp, mobAtk, mobCrit, MOB_SPREAD } from '../src/sim.js';
+import { applyEffect, tickEffects, snapshotEffects, drainMul, drainHeal, makeBuff, makeDebuff, makeSlow, makeDot, makeHot, makeDrain } from '../src/effects.js';
 import { createParties } from './sim/party.js';
 import { createGroundLoot } from './sim/loot.js';
 import { createMovement } from './sim/movement.js';
@@ -75,7 +76,7 @@ wss.on('connection', (ws, req) => {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0 };
   players.set(p.id, p);
-  send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, professions: 1 } });
+  send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, professions: 1, timedEffects: 1, eliteMobs: 1, mobPacks: 1 } });
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (!m || typeof m !== 'object') return;
@@ -208,10 +209,50 @@ const targetPos = (ref) => mobOf(ref) || actorOf(ref);
 const targetRadius = (ref) => (ref?.m != null ? world.radiusOf(mobOf(ref)) : 0.6);
 const alive = (t) => t && !t.dead;
 
+// ===== эффекты во времени =====
+// Событие наложения и спада: его видят все в радиусе видимости, включая самого носителя.
+function fxEvent(pos, who, eff, up, now = Date.now()) {
+  const e = { k: 'fx', id: eff.id, kind: eff.kind, up, ...who };
+  if (up) e.dur = Math.max(0, Math.round(eff.until - now));
+  for (const q of players.values()) if (q.a && flatDist(q.a, pos) < VIEW) q.a.out.push(e);
+}
+// Наложить эффект на игрока: одинаковый id продлевает действие, а не суммируется.
+function affectActor(v, eff, now) {
+  if (v.dead) return;
+  v.effects = applyEffect(v.effects, eff); v.dirty = true;
+  fxEvent(v, { p: v.id }, eff, true, now);
+}
+// Наложить эффект на цель умения — моба или игрока.
+function affectTarget(ref, eff, now) {
+  const mb = mobOf(ref);
+  if (mb) { if (mb.dead) return; world.affect(mb, eff); return fxEvent(mb, { m: mb.id }, eff, true, now); }
+  const v = actorOf(ref);
+  // Замедление игрока сервер пока не накладывает: клиент ведёт собственное движение и
+  // получил бы ложный откат `fix`. Мобам замедление считает сервер целиком.
+  if (v && eff.kind !== 'slow') affectActor(v, eff, now);
+}
+// Эффекты умения на цель: урон со временем, ослабление характеристики, замедление.
+function skillEffects(a, ref, sk, id, atk, now) {
+  const t = targetPos(ref);
+  if (!alive(t)) return;
+  if (sk.dot) affectTarget(ref, makeDot(`${id}:dot`, sk.dot, atk, now, a.id), now);
+  if (sk.debuff) affectTarget(ref, makeDebuff(`${id}:weak`, { ...sk.debuff, name: sk.name }, now, a.id), now);
+  if (sk.slow) affectTarget(ref, makeSlow(`${id}:slow`, { ...sk.slow, name: sk.name }, now, a.id), now);
+}
+// Вампиризм: доля нанесённого урона возвращается атакующему здоровьем.
+function drain(a, dmg, now) {
+  const gain = drainHeal(dmg, drainMul(a.effects, now));
+  if (!gain) return;
+  const s = PL.statsOf(a, now);
+  a.P.hp = Math.min(s.maxHp, a.P.hp + gain); a.dirty = true;
+  a.out.push({ k: 'heal', kind: 'hp', amount: gain, drain: 1 });
+}
+
 // урон мобу от игрока; событие видят все вокруг
-function damageMob(a, mb, dmg, crit, now) {
+function damageMob(a, mb, dmg, crit, now, dot = false) {
   const died = world.hit(mb, dmg, a);
-  pushNear(a, { k: 'hit', m: mb.id, dmg, crit });
+  pushNear(a, dot ? { k: 'hit', m: mb.id, dmg, crit, dot: 1 } : { k: 'hit', m: mb.id, dmg, crit });
+  drain(a, dmg, now);
   if (!died) return;
   const topId = world.kill(mb, now);
   const winner = players.get(topId)?.key ? players.get(topId) : players.get(a.id);
@@ -238,9 +279,10 @@ function damagePlayer(mb, a, now) {
   if (a.dead) return;
   const s = PL.statsOf(a, now);
   if (Math.random() < evaChance(mb.def.lvl, s.eva)) return a.out.push({ k: 'hurt', dodge: true, from: mb.id });
-  const { d } = calcDmg(mb.def.patk, s.pdef, 1, 0.05);
+  // Та же формула, что у игрока: шире разброс и собственный крит моба (src/sim.js).
+  const { d, crit } = calcDmg(mobAtk(mb, now), s.pdef, 1, mobCrit(mb.def), Math.random, MOB_SPREAD);
   a.P.hp -= d;
-  a.out.push({ k: 'hurt', dmg: d, from: mb.id });
+  a.out.push({ k: 'hurt', dmg: d, from: mb.id, crit });
   if (a.P.hp <= 0) { PL.killPlayer(a, mb.def.name); onPlayerDied(a, null); }
 }
 
@@ -256,6 +298,7 @@ function damageActor(a, v, atk, mul, school, critChance, now) {
   if (status(v) === 0 && a.karma <= 0) { const was = flagged(a); a.flagUntil = now + PVP.flagMs; if (!was) sendMe(a); }
   pushNear(a, { k: 'hit', p: v.id, dmg: d, crit });
   v.out.push({ k: 'hurt', dmg: d, fromP: a.id, name: a.name });
+  drain(a, d, now);
   if (v.P.hp <= 0) { PL.killPlayer(v, a.name, a.karma > 0); onPlayerDied(v, a); }
 }
 
@@ -289,15 +332,22 @@ function applySkill(a, id, ref, now) {
     pushNear(a, { k: 'cast_fx', id, to: ref });
     if (ref.m != null) { const r = calcDmg(atk, t.def.pdef * (sk.school === 'm' ? 0.8 : 1), sk.mul, crit); damageMob(a, t, r.d, r.crit, now); }
     else damageActor(a, t, atk, sk.mul, sk.school, crit, now);
+    skillEffects(a, ref, sk, id, atk, now);
     a.attacking = true;
   } else if (sk.kind === 'heal') {
+    // Часть возвращается сразу, часть — лечением со временем: лечение стало растянутым.
     const amt = Math.round(s.maxHp * sk.amount);
     a.P.hp = Math.min(s.maxHp, a.P.hp + amt); a.dirty = true;
     a.out.push({ k: 'heal', kind: 'hp', amount: amt, skill: id });
+    if (sk.hot) affectActor(a, makeHot(`${id}:hot`, sk.hot, s.maxHp, now, a.id), now);
     pushNear(a, { k: 'cast_fx', id });
   } else if (sk.kind === 'buff') {
-    a.buffs.push({ stat: sk.stat, mul: sk.mul, until: now + sk.dur * 1000, name: sk.name });
-    a.out.push({ k: 'buff', id, dur: sk.dur, stat: sk.stat, mul: sk.mul });
+    // Усиление характеристики и вампиризм — один и тот же механизм эффектов во времени.
+    if (sk.stat) {
+      affectActor(a, makeBuff(id, { stat: sk.stat, mul: sk.mul, dur: sk.dur, name: sk.name }, now, a.id), now);
+      a.out.push({ k: 'buff', id, dur: sk.dur, stat: sk.stat, mul: sk.mul });
+    }
+    if (sk.drain) affectActor(a, makeDrain(`${id}:drain`, { ...sk.drain, name: sk.name }, now, a.id), now);
     pushNear(a, { k: 'cast_fx', id });
   } else if (sk.kind === 'aoe') {
     const atk = sk.school === 'm' ? s.matk : s.patk;
@@ -306,13 +356,15 @@ function applySkill(a, id, ref, now) {
     for (const mb of world.list) {
       if (mb.dead || flatDist(mb, a) > sk.radius + world.radiusOf(mb)) continue;
       const r = calcDmg(atk, mb.def.pdef * (sk.school === 'm' ? 0.8 : 1), sk.mul, s.crit);
-      damageMob(a, mb, r.d, r.crit, now); n++;
+      damageMob(a, mb, r.d, r.crit, now);
+      skillEffects(a, { m: mb.id }, sk, id, atk, now); n++;
     }
     // по площади задеваем только флагнутых и PK (или того, кого бьём)
     for (const v of actors()) {
       if (v === a || v.dead || flatDist(v, a) > sk.radius + 0.6) continue;
       if (status(v) === 0 && a.target?.p !== v.id) continue;
-      damageActor(a, v, atk, sk.mul, sk.school, Math.random() < s.crit ? 1 : 0, now); n++;
+      damageActor(a, v, atk, sk.mul, sk.school, Math.random() < s.crit ? 1 : 0, now);
+      skillEffects(a, { p: v.id }, sk, id, atk, now); n++;
     }
     if (!n) PL.say(a, `${sk.name}: никого рядом`);
   }
@@ -371,6 +423,36 @@ function guardsTick(now) {
       break;
     }
   }
+}
+
+// Тик эффектов во времени: сначала мобы, потом игроки. Урон и лечение считает только сервер.
+function effectsTick(now) {
+  world.effectsTick(now, (mb, h) => {
+    if (h.kind !== 'dot') return;
+    const src = players.get(h.from)?.a;
+    if (src) damageMob(src, mb, h.perTick * h.n, false, now, true); // источник ушёл — тик пропадает
+  }, (mb, eff) => fxEvent(mb, { m: mb.id }, eff, false, now));
+  for (const a of actors()) {
+    if (!a.effects.length) continue;
+    const r = tickEffects(a.effects, now);
+    a.effects = r.list;
+    if (!a.dead) for (const h of r.hits) {
+      if (h.kind === 'hot') {
+        const s = PL.statsOf(a, now), amount = Math.min(h.perTick * h.n, Math.round(s.maxHp - a.P.hp));
+        if (amount > 0) { a.P.hp += amount; a.dirty = true; a.out.push({ k: 'heal', kind: 'hp', amount, hot: 1 }); }
+      } else if (h.kind === 'dot') dotDamage(a, h, now);
+    }
+    for (const eff of r.expired) fxEvent(a, { p: a.id }, eff, false, now);
+  }
+}
+// Урон со временем по игроку: право на добивание и карму считает тот же путь, что и обычный удар.
+function dotDamage(v, h, now) {
+  const src = players.get(h.from)?.a || null;
+  const d = h.perTick * h.n;
+  v.P.hp -= d; v.dirty = true;
+  if (src && src !== v) v.hitBy.set(src.id, now);
+  v.out.push({ k: 'hurt', dmg: d, dot: 1, ...(src && src !== v ? { fromP: src.id, name: src.name } : {}) });
+  if (v.P.hp <= 0) { PL.killPlayer(v, src ? src.name : 'Яд', src ? src.karma > 0 : false); onPlayerDied(v, src && src !== v ? src : null); }
 }
 
 // ===== PvP: флаг, PK, карма =====
@@ -474,6 +556,7 @@ setInterval(() => {
     const event = { k: `mob_${phase}`, m: mb.id, p: attack.target, t: attack.duration, x: attack.x, z: attack.z, r: attack.r, reach: attack.reach, arc: attack.arc, landed };
     for (const a of list) if (flatDist(a, mb) < VIEW) a.out.push(event);
   });
+  effectsTick(now);
   guardsTick(now);
   // игроки
   for (const a of list) {
@@ -496,15 +579,23 @@ setInterval(() => {
     for (const q of list) {
       if (q === a || flatDist(a, q) > VIEW) continue;
       if (!p.known.has(q.id)) { p.known.add(q.id); send(p, { t: 'look', id: q.id, name: q.name, look: q.look }); }
-      o.push([q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~8) | (q.dead ? 8 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)]);
+      const row = [q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~8) | (q.dead ? 8 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)];
+      // девятый столбец появляется только у игроков с активными эффектами
+      if (q.effects.length) row.push(snapshotEffects(q.effects, now));
+      o.push(row);
     }
     for (const id of p.known) if (!players.has(id)) p.known.delete(id);
     const mobs = world.snapshotFor(a, VIEW, now);
     // впервые увиденный моб: клиенту нужен его вид, чтобы построить модель
     const fresh = [];
-    for (const row of mobs) if (!p.knownMobs.has(row[0])) { p.knownMobs.add(row[0]); fresh.push([row[0], world.byId.get(row[0]).kind]); }
+    // элите и чемпиону клиенту нужны ранг и готовое имя: подпись и ауру рисует он
+    for (const row of mobs) if (!p.knownMobs.has(row[0])) {
+      p.knownMobs.add(row[0]);
+      const mb = world.byId.get(row[0]);
+      fresh.push(mb.def.rank ? [mb.id, mb.kind, mb.def.rank, mb.def.name, mb.def.size] : [mb.id, mb.kind]);
+    }
     if (fresh.length) send(p, { t: 'mobs', n: fresh });
-    send(p, { t: 'snap', ts: now, o, m: mobs, g: groundLoot.snapshotFor(a, VIEW, p.key, now), me: { hp: Math.round(a.P.hp), mp: Math.round(a.P.mp), x: +a.x.toFixed(2), z: +a.z.toFixed(2), dead: a.dead } });
+    send(p, { t: 'snap', ts: now, o, m: mobs, g: groundLoot.snapshotFor(a, VIEW, p.key, now), me: { hp: Math.round(a.P.hp), mp: Math.round(a.P.mp), x: +a.x.toFixed(2), z: +a.z.toFixed(2), dead: a.dead, ...(a.effects.length ? { fx: snapshotEffects(a.effects, now) } : {}) } });
     if (a.out.length) { send(p, { t: 'ev', e: a.out }); a.out = []; }
     if (a.dirty) {
       a.dirty = false;

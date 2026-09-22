@@ -30,6 +30,7 @@ export function weightOf(P) {
   return Math.round(w * 10) / 10;
 }
 
+// buffs — список активных эффектов цели (src/effects.js); имя аргумента сохранено ради совместимости.
 export function calcStats(P, buffs = [], now = 0) {
   const c = CLASSES[P.cls], L = P.lvl - 1, A = c.attr, B = c.base, G = c.grow;
   const m = (v, ref) => 1 + (v - ref) * 0.01;
@@ -64,7 +65,10 @@ export function calcStats(P, buffs = [], now = 0) {
   s.load = weightOf(P); s.cap = Math.round(40 + A.con * 1.2);
   s.regen = 1;
   if (s.load > s.cap * 0.7) { s.speed *= 0.6; s.regen = 0.5; }
-  for (const b of buffs) if (b.until > now) s[b.stat] *= b.mul;
+  // Усиления и ослабления во времени (src/effects.js): множители применяются только
+  // к тем эффектам, у которых есть характеристика. Урон/лечение со временем и вампиризм
+  // характеристик не меняют и пропускаются.
+  for (const b of buffs) if (b.until > now && b.stat) s[b.stat] *= b.mul;
   s.maxHp = Math.round(s.maxHp); s.maxMp = Math.round(s.maxMp);
   s.speed *= MOVE_SCALE;
   return s;
