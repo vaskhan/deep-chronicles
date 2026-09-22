@@ -1,10 +1,37 @@
 // Общие правила обучения. Только сервер изменяет SP и изученные ранги.
-import { CLASSES, SKILLS, xpToNext } from './data.js';
+import { CLASSES, SKILLS, PROFESSIONS, PROF_LVL, xpToNext } from './data.js';
 export const SKILL_LEVELS = {
   power_strike: [1, 8, 18, 25, 32, 40], fire_bolt: [1, 8, 18, 25, 32, 40],
   battle_cry: [5, 12, 20, 28, 36], heal: [3, 10, 18, 25, 32, 40],
   whirlwind: [12, 20, 28, 36], ice_nova: [10, 18, 26, 34],
+  // умения профессий: первый ранг на уровне умения, дальше шаг в 4 уровня
+  shield_bash: [20, 24, 28, 32, 36], iron_will: [22, 26, 30, 34, 38],
+  frenzy: [20, 24, 28, 32, 36], cleave: [24, 28, 32, 36, 40],
+  lightning: [20, 24, 28, 32, 36], meteor: [26, 30, 34, 38],
+  heal_major: [20, 24, 28, 32, 36], blessing: [22, 26, 30, 34, 38],
 };
+// ===== профессии =====
+// Профессия хранится в профиле полем `prof` (null — не выбрана). Решение принимает только сервер.
+const profOf = id => (typeof id === 'string' && Object.hasOwn(PROFESSIONS, id) ? PROFESSIONS[id] : null);
+// какие профессии предлагать классу
+export const profsFor = cls => Object.entries(PROFESSIONS).filter(([, prof]) => prof.base === cls).map(([id, prof]) => ({ id, ...prof }));
+// владелец умения профессии: нужен для понятных отказов в learn
+export const profOfSkill = id => Object.values(PROFESSIONS).find(prof => prof.skills.includes(id)) || null;
+// все умения персонажа: базовые класса плюс умения выбранной профессии
+export const skillsOf = P => [...CLASSES[P.cls].skills, ...(profOf(P.prof)?.skills || [])];
+export function profError(P, id) {
+  const prof = profOf(id);
+  if (!prof || prof.base !== P.cls) return 'Эта профессия недоступна вашему классу';
+  if (P.prof) return `Профессия уже выбрана: ${PROFESSIONS[P.prof].name}`;
+  if (P.lvl < PROF_LVL) return `Профессию выбирают с ${PROF_LVL} уровня`;
+  return null;
+}
+// выбор профессии: текст ошибки или null. Профиль меняется только при успехе.
+export function applyProf(P, id) {
+  const error = profError(P, id); if (error) return error;
+  P.prof = id;
+  return null;
+}
 export const spForKill = xp => Math.max(1, Math.floor(xp * 0.12));
 export const skillRanks = id => (Object.hasOwn(SKILL_LEVELS, id) ? SKILL_LEVELS[id] : []).map((lvl, i) => {
   const base = SKILLS[id], sk = { ...base, lvl, rank: i + 1, sp: lvl === 1 ? 0 : Math.round(xpToNext(lvl) * 0.18), mp: Math.round(base.mp * (1 + i * 0.12)) };
@@ -16,17 +43,25 @@ export const effectiveSkill = (P, id) => skillRanks(id)[(P.skills?.[id] || 1) - 
 export function migrateProgression(P) {
   P.sp = Number.isSafeInteger(P.sp) && P.sp >= 0 ? P.sp : 0;
   P.autoloot = typeof P.autoloot === 'boolean' ? P.autoloot : true;
+  // Профессия чужого класса или неизвестный id — то же самое, что «не выбрана»: сброса прочего прогресса нет.
+  P.prof = profOf(P.prof)?.base === P.cls ? P.prof : null;
   const legacy = !P.skills || typeof P.skills !== 'object' || Array.isArray(P.skills);
   const learned = {};
-  for (const id of CLASSES[P.cls].skills) {
+  for (const id of skillsOf(P)) {
     const maximum = SKILL_LEVELS[id].filter(lvl => lvl <= P.lvl).length;
-    const rank = legacy ? (P.lvl >= SKILLS[id].lvl ? 1 : 0) : Math.max(0, Math.min(maximum, Number.isInteger(P.skills[id]) ? P.skills[id] : 0));
+    // Старые профили знали только базовые умения класса: умения профессии за них не выдаются.
+    const rank = legacy ? (CLASSES[P.cls].skills.includes(id) && P.lvl >= SKILLS[id].lvl ? 1 : 0)
+      : Math.max(0, Math.min(maximum, Number.isInteger(P.skills[id]) ? P.skills[id] : 0));
     if (rank) learned[id] = rank;
   }
   P.skills = learned; return P;
 }
 export function learnError(P, id, rank) {
-  if (!CLASSES[P.cls].skills.includes(id)) return 'Это умение не вашего класса';
+  if (!skillsOf(P).includes(id)) {
+    const owner = profOfSkill(id);
+    if (owner) return owner.base === P.cls ? `Это умение профессии «${owner.name}»` : 'Это умение не вашего класса';
+    return 'Это умение не вашего класса';
+  }
   const current = P.skills[id] || 0;
   if (!Number.isInteger(rank) || rank !== current + 1) return 'Ранг уже изучен или устарел. Обновите карточку';
   const next = skillRanks(id)[current];

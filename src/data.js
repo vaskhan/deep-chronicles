@@ -31,6 +31,26 @@ export const SKILLS = {
   fire_bolt: { name: 'Огненная стрела', key: '1', mp: 10, cd: 2.2, kind: 'dmg', school: 'm', mul: 2.2, range: 24, color: 0xff5010, cast: 0.8, lvl: 1 },
   heal: { name: 'Исцеление', key: '2', mp: 18, cd: 6, kind: 'heal', amount: 0.35, color: 0x60ff90, cast: 1.0, lvl: 3 },
   ice_nova: { name: 'Ледяная волна', key: '3', mp: 30, cd: 12, kind: 'aoe', school: 'm', mul: 1.8, radius: 9, color: 0x80d0ff, cast: 0.6, lvl: 10 },
+  // умения профессий: открываются только после выбора профессии и учатся за SP на общих правилах.
+  // needShield — требование к экипировке, проверяет сервер. icon — семейство существующей иконки.
+  shield_bash: { name: 'Удар щитом', mp: 20, cd: 9, kind: 'dmg', school: 'p', mul: 1.8, range: 3.5, needShield: true, color: 0xc0d0e0, lvl: 20, icon: 'shield_iron' },
+  iron_will: { name: 'Железная воля', mp: 30, cd: 60, kind: 'buff', stat: 'pdef', mul: 1.4, dur: 30, color: 0x90a0c0, lvl: 22, icon: 'battle_cry' },
+  frenzy: { name: 'Неистовство', mp: 25, cd: 60, kind: 'buff', stat: 'patk', mul: 1.5, dur: 15, color: 0xff3020, lvl: 20, icon: 'battle_cry' },
+  cleave: { name: 'Рассекающий удар', mp: 28, cd: 7, kind: 'dmg', school: 'p', mul: 3.2, range: 3.5, color: 0xff7040, lvl: 24, icon: 'power_strike' },
+  lightning: { name: 'Цепная молния', mp: 34, cd: 5, kind: 'dmg', school: 'm', mul: 3.0, range: 26, color: 0xa0c0ff, cast: 1.2, lvl: 20, icon: 'fire_bolt' },
+  meteor: { name: 'Метеор', mp: 60, cd: 18, kind: 'aoe', school: 'm', mul: 2.6, radius: 8, color: 0xff6020, cast: 1.8, lvl: 26, icon: 'ice_nova' },
+  heal_major: { name: 'Великое исцеление', mp: 40, cd: 10, kind: 'heal', amount: 0.7, color: 0x90ffb0, cast: 1.4, lvl: 20, icon: 'heal' },
+  blessing: { name: 'Благословение', mp: 35, cd: 90, kind: 'buff', stat: 'mdef', mul: 1.35, dur: 60, color: 0xfff0a0, cast: 1.0, lvl: 22, icon: 'heal' },
+};
+
+// Профессия выбирается один раз с PROF_LVL уровня и уже не меняется.
+// bonus — множители к готовым характеристикам (см. src/stats.js::calcStats), skills — два умения профессии.
+export const PROF_LVL = 20;
+export const PROFESSIONS = {
+  knight: { name: 'Страж', base: 'warrior', desc: 'Щит и тяжёлая броня: держит удар и прикрывает группу.', bonus: { maxHp: 1.15, pdef: 1.15 }, skills: ['shield_bash', 'iron_will'] },
+  berserker: { name: 'Берсерк', base: 'warrior', desc: 'Максимум урона ценой собственной защиты.', bonus: { patk: 1.12, crit: 1.25, pdef: 0.95 }, skills: ['frenzy', 'cleave'] },
+  sorcerer: { name: 'Чародей', base: 'mage', desc: 'Разрушительная магия и быстрые заклинания.', bonus: { matk: 1.15, cast: 1.1 }, skills: ['lightning', 'meteor'] },
+  healer: { name: 'Целитель', base: 'mage', desc: 'Сильное лечение и благословения на защиту.', bonus: { maxMp: 1.2, mdef: 1.1 }, skills: ['heal_major', 'blessing'] },
 };
 
 // грейды снаряжения

@@ -1,13 +1,14 @@
 // Персонаж на сервере: профиль, сумка, экипировка, магазин, заточка, опыт и смерть.
 // Клиент ничего из этого не считает — он только присылает команды и рисует события.
-import { migrateProgression, effectiveSkill, learnError, skillRanks } from '../../src/progression.js';
-import { CLASSES, ITEMS, SKILLS, SHOP, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
+import { migrateProgression, effectiveSkill, learnError, skillRanks, applyProf, skillsOf } from '../../src/progression.js';
+import { CLASSES, ITEMS, PROFESSIONS, SKILLS, SHOP, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
 import { calcStats, equipFromBag, unequipSlot, migrate, MAX_ENCH } from '../../src/stats.js';
 import { TOWNS, TELEPORTS, heightAt, zoneAt } from '../../src/world-core.js';
 import { sellPrice, crystalsFor, enchSucceeds, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
 
 export const SAVE_VERSION = 3; // всё, что старее, пересоздаётся (v2 выдавала новичку оружие 8 уровня, надеть его было нельзя)
 const NPC_RANGE = 8; // на каком расстоянии можно говорить с NPC
+const PROF_CD = 1000; // мс между попытками выбрать профессию: повтор пакета не проходит дважды
 
 export function newChar(name, cls) {
   const c = typeof cls === 'string' && Object.hasOwn(CLASSES, cls) ? cls : 'warrior';
@@ -52,7 +53,7 @@ export function newActor(id, name, P) {
     target: null,        // { m: mobId } | { p: playerId }
     attacking: false, atkTimer: 0, swing: null, cds: {}, buffs: [], cast: null,
     dead: false, dirty: true, out: [],
-    hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0,
+    hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0, profAt: 0,
   };
 }
 
@@ -206,9 +207,10 @@ export function skillError(a, id, now) {
   const sk = effectiveSkill(a.P, id);
   if (!sk) return 'Нет такого умения';
   if (a.dead || a.cast) return 'Сейчас нельзя';
-  if (!CLASSES[a.P.cls].skills.includes(id)) return 'Это умение не вашего класса';
+  if (!skillsOf(a.P).includes(id)) return 'Это умение не вашего класса';
   if (!a.P.skills[id]) return 'Сначала изучите умение за SP в карточке навыков';
   if (a.P.lvl < sk.lvl) return `${sk.name}: нужен уровень ${sk.lvl}`;
+  if (sk.needShield && !a.P.equip.shield) return `${sk.name}: нужен щит`;
   if ((a.cds[id] || 0) > now) return 'Умение ещё не готово';
   if (a.P.mp < sk.mp) return 'Недостаточно маны';
   if (inTown(a) && sk.kind !== 'heal' && sk.kind !== 'buff') return 'В городе сражаться нельзя';
@@ -241,6 +243,22 @@ export function cmdLearn(a, id, rank, save) {
   catch { Object.assign(a.P, before); return say(a, 'Не удалось сохранить обучение. SP возвращены', 'bad'); }
   a.dirty = true; say(a, `Изучено: ${next.name}, ранг ${rank}. Потрачено ${next.sp} SP`, 'good');
 }
+// Профессия выбирается один раз и навсегда: проверки, частота и сохранение — здесь, на сервере.
+export function cmdProf(a, id, save) {
+  if (a.dead || a.cast) return say(a, 'Сейчас нельзя выбрать профессию', 'bad');
+  const now = Date.now();
+  if (now - (a.profAt || 0) < PROF_CD) return;
+  a.profAt = now;
+  const before = a.P.prof;
+  const error = applyProf(a.P, id);
+  if (error) return say(a, error, 'bad');
+  try { if (!save()) throw Error('save failed'); }
+  catch { a.P.prof = before; return say(a, 'Не удалось сохранить профессию. Попробуйте ещё раз', 'bad'); }
+  a.dirty = true;
+  const prof = PROFESSIONS[id];
+  say(a, `Профессия выбрана: ${prof.name}. Новые умения ждут в карточке навыков (K)`, 'rare');
+}
+
 // Одна транзакционная точка выдачи для ручного подбора и автолута.
 export function creditLoot(a, drops, save) {
   const before = { coins: a.P.coins, inv: structuredClone(a.P.inv) };

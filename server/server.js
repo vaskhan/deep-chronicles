@@ -73,7 +73,7 @@ wss.on('connection', (ws, req) => {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0 };
   players.set(p.id, p);
-  send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1 } });
+  send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, professions: 1 } });
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (!m || typeof m !== 'object') return;
@@ -117,6 +117,7 @@ wss.on('connection', (ws, req) => {
         a.dirty = true; return;
       }
       case 'learn': return PL.cmdLearn(a, String(m.id || ''), m.rank, () => acc.store(p.key, PL.profileOf(a)));
+      case 'prof': return PL.cmdProf(a, String(m.id || ''), () => acc.store(p.key, PL.profileOf(a)));
       case 'skill': return onSkill(p, a, String(m.id || ''), now);
       case 'pickup': {
         const result = groundLoot.claim(String(m.id || ''), a, p.key, now);
