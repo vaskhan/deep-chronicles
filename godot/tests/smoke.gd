@@ -152,6 +152,7 @@ func _run():
 			if button.has_meta("buy"): products.append(button.get_meta("buy"))
 		check(products == data.catalog.SHOP_STOCK[shop_id], "native shop shows its own inventory: " + shop_id)
 	game.hud.shop_id = ""; game.hud.shop_name = "Рыночный торговец"; game.hud.close_window()
+	await _test_rates_line()
 	game.hud.show_window("settings")
 	for slider in game.hud.window.find_children("*", "HSlider", true, false):
 		if slider.get_meta("audio_bus", "") == "Effects":
@@ -274,7 +275,8 @@ func _run():
 				mob = m; combat_position = candidate; break
 		if mob: break
 	if mob:
-		await _dev({"x": combat_position.x, "z": combat_position.z, "hp": 500, "lvl": 18})
+		# Уровень берём по цели: разница больше девяти уровней обнуляет награду сервера.
+		await _dev({"x": combat_position.x, "z": combat_position.z, "hp": 500, "lvl": int(mob.definition.lvl) + 3})
 		# Use the same screen-space picking as the mouse/touch client.
 		await create_timer(0.25).timeout
 		game.pick(game.camera.unproject_position(mob.position + Vector3.UP * 1.1))
@@ -835,6 +837,24 @@ func _test_gait():
 	actor.interpolate(1250,.05); actor.interpolate(1300,.05); actor._process(.01)
 	check(actor.position.is_equal_approx(Vector3(.6,0,0)) and actor.last_clip == "idle", "remote movement neither overshoots its final snapshot nor runs after stopping")
 	actor.free()
+
+func _rate_labels() -> Array:
+	return game.hud.window.find_children("*", "Label", true, false).filter(func(l): return l.text.begins_with("Рейты: ") or l.text.begins_with("Ещё: ") or l.text.begins_with("Разница уровней: "))
+
+func _test_rates_line():
+	game.hud.show_window("menu"); await process_frame
+	var live = _rate_labels()
+	check(live.size() == 1 and live[0].text == "Рейты: опыт ×1, SP ×1, монеты ×1, дроп ×1", "game menu shows the live server rate line: %s" % [live.map(func(l): return l.text)])
+	var real_rates = Network.rates
+	Network.rates = {"xp": 2, "sp": 2, "coins": 3, "dropChance": 2, "dropAmount": 2, "craftCost": 1, "enchantChance": 1, "sellPrice": 1, "buyPrice": 1, "respawn": 1.5, "partyBonus": 1,
+		"levelGap4": 0.9, "levelGap5": 0.5, "levelGap6": 0.3, "levelGap7": 0.2, "levelGap8": 0.1, "levelGap9": 0.05, "levelGapAffectsCoins": 1, "levelGapAffectsDrop": 0}
+	game.hud.show_window("menu"); await process_frame
+	var custom = _rate_labels()
+	check(custom.size() == 3 and custom[0].text == "Рейты: опыт ×2, SP ×2, монеты ×3, дроп ×2" and custom[1].text == "Ещё: количество дропа ×2, респавн ×1,5"
+		and custom[2].text == "Разница уровней: до 3 — полная награда, 4–6 ×0,9 / ×0,5 / ×0,3, 7–9 ×0,2 / ×0,1 / ×0,05, от 10 — без награды, дроп без штрафа", "server rates render in Russian with extra coefficients: %s" % [custom.map(func(l): return l.text)])
+	if DisplayServer.get_name() != "headless": await _screenshot("menu-rates.png")
+	Network.rates = real_rates
+	game.hud.close_window()
 
 func _grip_drag(grip: Control, delta: Vector2):
 	var start = grip.get_global_rect().get_center()

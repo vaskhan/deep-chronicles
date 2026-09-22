@@ -2,12 +2,14 @@
 // урон, смерть, добыча, респавн. Клиент получает их готовыми в снапшоте и только рисует.
 import { MOBS } from '../../src/data.js';
 import { buildProps } from '../../src/world-core.js';
-import { CORPSE, newMob, mobStep, mobRadius, xpForKill, rollCoins, rollDrops, flatDist } from '../../src/sim.js';
+import { CORPSE, newMob, mobStep, mobRadius, xpForKill, rollCoins, flatDist } from '../../src/sim.js';
 import { rankedDef } from '../../src/elites.js';
 import { socialAllies } from '../../src/pack.js';
 import { tickEffects, applyEffect, snapshotEffects } from '../../src/effects.js';
+import { DEFAULT_RATES, rateXp, rateCoins, rollDropsRated, rateRespawnMs, coinLevelFactor, dropLevelFactor } from '../../src/rates.js';
 
-export function createMobs() {
+// rates — серверные коэффициенты (src/rates.js); по умолчанию ×1, то есть прежний баланс.
+export function createMobs(rates = DEFAULT_RATES) {
   const { spawns, npcs } = buildProps();
   // Ранг точки спавна детерминирован (src/elites.js): один и тот же мир при каждом запуске.
   const list = spawns.map((sp, i) => newMob(i + 1, sp, Math.random, rankedDef(MOBS[sp.mob], sp, i + 1)));
@@ -49,17 +51,23 @@ export function createMobs() {
   const kill = (m, now) => {
     m.dead = true; m.hp = 0; m.state = 'dead'; m.target = null;
     m.windup = null; m.attackT = 0; m.moving = false; m.effects = [];
-    m.respawnAt = now + (m.def.respawn || 25) * 1000; m.diedAt = now;
+    m.respawnAt = now + rateRespawnMs((m.def.respawn || 25) * 1000, rates); m.diedAt = now;
     let top = null, best = 0;
     for (const [id, d] of m.hitBy) if (d > best) { best = d; top = id; }
     m.hitBy.clear();
     return top;
   };
 
+  // Точка выдачи награды: здесь и только здесь работают рейты монет и дропа.
+  // Ранг (элита/чемпион) уже вшит в `m.def` при спавне (src/elites.js): опыт, монеты и
+  // `dropMul` умножены один раз там, штраф за разницу уровней — один раз здесь.
+  // Фактический опыт делит server/sim/party.js — там же применяется рейт опыта.
+  // lvl — уровень, по которому считается награда (в группе это максимальный среди имеющих право),
+  // поэтому штраф за разницу уровней одинаков для опыта, монет и дропа.
   const rewardFor = (m, lvl) => ({
-    xp: xpForKill(m.def, lvl),
-    coins: rollCoins(m.def),
-    drops: rollDrops(m.def),
+    xp: rateXp(xpForKill(m.def, lvl, rates), rates),
+    coins: rateCoins(rollCoins(m.def) * coinLevelFactor(m.def.lvl, lvl, rates), rates),
+    drops: rollDropsRated(m.def, rates, Math.random, dropLevelFactor(m.def.lvl, lvl, rates)),
   });
 
   // кого видно игроку: живые и недавно умершие (чтобы клиент доиграл падение)

@@ -48,7 +48,7 @@ WebSocket, JSON в каждом кадре, различитель — поле 
 
 | `t` | полезная нагрузка | когда |
 |---|---|---|
-| `hi` | `{online, features:{groundLoot:1,progression:1,autoloot:1,crafting:1,nativeOnly:1,professions:1,timedEffects:1,eliteMobs:1,mobPacks:1}}` | сразу после соединения (по нему же работает проба `server_probe.gd`) |
+| `hi` | `{online, features:{groundLoot:1,progression:1,autoloot:1,crafting:1,nativeOnly:1,professions:1,timedEffects:1,eliteMobs:1,mobPacks:1,rates:1}, rates:{xp,sp,coins,…}}` | сразу после соединения (по нему же работает проба `server_probe.gd`) |
 | `authok` | `{id, name, token, p, online}` | успешный вход; `p` — профиль целиком |
 | `autherr` | `{reason, kind}` | `kind:"auth"` — клиент забывает токен |
 | `kicked` | — | этим аккаунтом вошли в другом месте; клиент останавливает цикл |
@@ -121,6 +121,15 @@ WebSocket, JSON в каждом кадре, различитель — поле 
   `rank`, `name` и `size` в `mobs` и рисует по ним подпись, размер и ауру.
 - Добавил команду клиента — добавь в [`tests/server.test.js`](tests/server.test.js) проверку,
   что её нельзя подделать.
+
+## Рейты сервера
+
+`hi.features.rates = 1` означает, что рядом приходит объект `rates` — действующие коэффициенты
+опыта, SP, монет, дропа, цен, заточки, крафта, респавна, бонуса группы и ступени штрафа за
+разницу уровней (`levelGap4` … `levelGap9`). Значения считает и
+применяет только сервер (`src/rates.js`, настройки — `server/rates.json` и `RATE_*`); клиент
+показывает их строкой в меню игры и по ним ничего не вычисляет. Старый сервер без поля `rates`
+оставляет строку скрытой. Полное описание — [RATES](docs/RATES.md).
 
 ## Heartbeat и вытеснение сессии
 

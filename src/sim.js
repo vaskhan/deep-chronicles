@@ -7,6 +7,7 @@ import { MAX_ENCH, SAFE_ENCH, ENCH_CHANCE } from './stats.js';
 import { heightAt, obstacles, MAP, DUNGEON } from './world-core.js';
 import { effectMul } from './effects.js';
 import { rankedDef } from './elites.js';
+import { DEFAULT_RATES, levelFactor } from './rates.js';
 
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 export const rand = (a, b, rng = Math.random) => a + rng() * (b - a);
@@ -54,11 +55,8 @@ export function mobAttackContains(attack, player) {
   return Math.abs(Math.atan2(Math.sin(angle), Math.cos(angle))) <= attack.arc / 2;
 }
 
-// опыт с понижением за мобов сильно ниже игрока
-export function xpForKill(mobDef, heroLvl) {
-  const diff = mobDef.lvl - heroLvl;
-  return Math.round(mobDef.xp * (diff < -5 ? Math.max(0.1, 1 + (diff + 5) * 0.15) : 1));
-}
+// опыт с понижением за разницу уровней в обе стороны: правило и пределы — в src/rates.js
+export const xpForKill = (mobDef, heroLvl, rates = DEFAULT_RATES) => Math.round(mobDef.xp * levelFactor(mobDef.lvl, heroLvl, rates));
 export const rollCoins = (mobDef, rng = Math.random) => irand(mobDef.coins[0], mobDef.coins[1], rng);
 export function rollDrops(mobDef, rng = Math.random) {
   const out = [], mul = mobDef.dropMul || 1;

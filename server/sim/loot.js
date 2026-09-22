@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { LOOT } from '../../src/loot.js';
 import { flatDist, moveEntity } from '../../src/sim.js';
 import { ITEMS } from '../../src/data.js';
+import { countDrops } from '../../src/rates.js';
 
 // Claim removes the entry synchronously, before the server credits its recipient.
 // Ownership uses the account key, so reconnecting does not lose the reservation.
@@ -11,7 +12,7 @@ export function createGroundLoot() {
   function spawn(position, reward, owner, ownerName, now = Date.now(), allowed = []) {
     const items = [];
     if (reward.coins > 0) items.push({ item: 'coins', n: Math.floor(reward.coins) });
-    for (const item of reward.drops || []) if (ITEMS[item]) items.push({ item, n: 1 });
+    for (const stack of countDrops(reward.drops)) if (ITEMS[stack.item]) items.push(stack);
     return items.map((item, i) => {
       const angle = i * 2.39996, pos = { x: position.x, z: position.z, y: position.y || 0 };
       moveEntity(pos, Math.cos(angle), Math.sin(angle), 0.8 + i * 0.32, 0.6);
