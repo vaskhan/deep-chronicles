@@ -3,8 +3,8 @@ node_type: reference
 title: Сетевой протокол клиент ↔ сервер
 service: _platform
 status: active
-updated: 2026-09-18
-tags: [websocket, protocol, json, loot, pickup]
+updated: 2026-09-22
+tags: [websocket, protocol, json, loot, pickup, effects, elites]
 links:
   documents: [server/server.js, godot/scripts/network.gd, godot/scripts/main.gd]
   depends_on: [docs/gitmark/reference/architecture.md]
@@ -47,14 +47,14 @@ WebSocket, JSON в каждом кадре, различитель — поле 
 
 | `t` | полезная нагрузка | когда |
 |---|---|---|
-| `hi` | `{online, features:{groundLoot:1,progression:1,autoloot:1,crafting:1,nativeOnly:1}}` | сразу после соединения (по нему же работает проба `server_probe.gd`) |
+| `hi` | `{online, features:{groundLoot:1,progression:1,autoloot:1,crafting:1,nativeOnly:1,timedEffects:1,eliteMobs:1,mobPacks:1}}` | сразу после соединения (по нему же работает проба `server_probe.gd`) |
 | `authok` | `{id, name, token, p, online}` | успешный вход; `p` — профиль целиком |
 | `autherr` | `{reason, kind}` | `kind:"auth"` — клиент забывает токен |
 | `kicked` | — | этим аккаунтом вошли в другом месте; клиент останавливает цикл |
 | `you` | `{p}` | профиль целиком, когда он изменился (`a.dirty`) |
 | `snap` | `{ts, o[], m[], g[], me{}}` | каждый тик, см. ниже |
 | `ev` | `{e:[…]}` | пачка боевых событий за тик |
-| `mobs` | `{n:[[id, kind], …]}` | виды впервые увиденных мобов — чтобы клиент собрал модели |
+| `mobs` | `{n:[[id, kind], …]}` или `[[id, kind, rank, name, size]]` | виды впервые увиденных мобов; элита и чемпион приходят расширенной строкой |
 | `look` | `{id, name, look}` | внешний вид игрока при первом появлении и при смене экипировки |
 | `fix` | `{x, z}` | откат: сервер не поверил скорости |
 | `me` | `{karma, pk, pvp, flag}` | изменился PvP-статус |
@@ -75,17 +75,29 @@ WebSocket, JSON в каждом кадре, различитель — поле 
   (активен флаг), `2` красный (карма > 0).
 - `m` — мобы: `[id, x, y, z, r, flags, hpPct]`, флаги — битовая маска
   `1 = идёт, 2 = бьёт, 8 = мёртв`. Мёртвые держатся в снапшоте 4 секунды, чтобы доиграла
-  анимация смерти (`server/sim/mobs.js:49-51`). Клиент читает ещё бит `4 = кастует` (`actor.gd`).
+  анимация смерти (`server/sim/mobs.js`). Клиент читает ещё бит `4 = кастует` (`actor.gd`).
+  Восьмой столбец добавляется **только если на мобе есть эффекты во времени**:
+  `[[id, kind, осталось мс], …]`. У игроков тот же список стоит девятым столбцом, после
+  `status` — поэтому PvP-статус читается по индексу 7 только у игроков.
 - `g` — полный список наземной добычи в видимости: `{id,item,n,x,y,z,ownerName,protectedUntil,expiresAt,available}`. Отсутствующие в следующем снимке ID удаляются с экрана.
-- `me` — своё: `{hp, mp, x, z, dead}`.
+- `me` — своё: `{hp, mp, x, z, dead}` плюс `fx: [[id, kind, осталось мс], …]`, когда на герое есть эффекты во времени.
 - `ts` — серверное время; по нему клиент оценивает сдвиг часов и рисует чужих на 150 мс в прошлом.
 
 ### События в `ev`
 
-`hit {m|p, dmg, crit, by?}` · `miss` · `mdie` · `hurt {dmg, dodge?, from|fromP, name, guard?}` ·
-`heal {kind, amount, skill?}` · `cd {id, cd}` · `cast {id, t}` · `cast_fx {id, to?}` ·
-`buff {id, dur, stat, mul}` · `loot {id}` · `kill {mob, name, xp, sp, coins, ground, boss}` · `pickup {id, item, n}` · `lvl {lvl}` ·
+`hit {m|p, dmg, crit, dot?, by?}` · `miss` · `mdie` · `hurt {dmg, crit?, dot?, dodge?, from|fromP, name, guard?}` ·
+`heal {kind, amount, skill?, hot?, drain?}` · `cd {id, cd}` · `cast {id, t}` · `cast_fx {id, to?}` ·
+`buff {id, dur, stat, mul}` · `fx {id, kind, up, dur?, m|p}` ·
+`loot {id}` · `kill {mob, name, xp, sp, coins, ground, boss}` · `pickup {id, item, n}` · `lvl {lvl}` ·
 `dead {by, loss, pk}` · `move {x, z}` · `ench {ok, color}` · `msg {text, cls}` (`cls` ∈ good/bad/rare).
+
+`fx` — наложение (`up:true`, `dur` — реальный остаток в мс) и спад (`up:false`) эффекта во
+времени. `kind` ∈ `buff` / `debuff` / `slow` / `dot` / `hot` / `drain`; `id` — «умение» или
+«умение:вид», чтобы одно умение могло держать на цели несколько разных эффектов. Событие
+видят все в радиусе `VIEW`, включая носителя. `hit {dot:1}` и `hurt {dot:1}` — тик урона со
+временем: клиент не проигрывает по нему замах и удар. `heal {hot:1}` — тик лечения со
+временем, `heal {drain:1}` — возврат здоровья вампиризмом. Сила, длительность и сам урон
+считаются только на сервере (`src/effects.js`), клиент рисует значок и ауру.
 
 `pushNear` (`server/server.js:389-392`) дублирует событие всем в радиусе `VIEW`, дописывая
 `by: actorId` — так соседи видят чужой бой.
@@ -100,6 +112,11 @@ WebSocket, JSON в каждом кадре, различитель — поле 
 - **Идентификатор игрока — номер соединения**, он новый после каждого реконнекта. Личка при
   этом ищет собеседника по ключу аккаунта (`server/server.js:367`) — это разные пространства имён.
 - **Допуск `LAG_M = 4` м** к дистанции удара: клиент видит мир на ~250 мс в прошлом.
+- **Эффекты во времени не суммируются**: повторное наложение того же `id` продлевает срок и
+  обновляет силу, второй экземпляр не появляется. Замедление сервер накладывает только на
+  мобов: движение игрока ведёт клиент, и урезанная скорость вызвала бы ложный `fix`.
+- **Ранг моба считает сервер.** Клиент не вычисляет множители элит: он получает готовые
+  `rank`, `name` и `size` в `mobs` и рисует по ним подпись, размер и ауру.
 - Добавил команду клиента — добавь в [`tests/server.test.js`](tests/server.test.js) проверку,
   что её нельзя подделать.
 
