@@ -1057,8 +1057,10 @@ func _test_gorge():
 	var elite = _gorge_elite()
 	if elite:
 		check(str(data.catalog.MOBS[elite.base_model].get("model", "")) != "" and elite.art_model and elite.art_base == str(data.catalog.MOBS[elite.base_model].model), "gorge mob reuses its manifest base model")
-		await _dev({"x": elite.position.x + 9, "z": elite.position.z + 9, "hp": 99999})
-		game.set_target(elite); game.camera_distance = 15; game.camera_pitch = 0.55
+		# Герой ниже по оси ущелья, камера за ним смотрит вверх по оси — элита в кадре перед героем.
+		var up = Vector2(float(data.world.gorge.axis.x), float(data.world.gorge.axis.z))
+		await _dev({"x": elite.position.x - up.x * 10, "z": elite.position.z - up.y * 10, "hp": 99999})
+		game.set_target(elite); game.camera_distance = 16; game.camera_pitch = 0.42; game.camera_yaw = atan2(-up.x, -up.y)
 		await create_timer(0.8).timeout
 		await _screenshot("gorge-elite.png")
 		game.set_target(null)

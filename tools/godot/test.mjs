@@ -34,7 +34,8 @@ try {
   let output = '';
   for (const stream of [godot.stdout, godot.stderr]) stream.on('data', b => { output += b; process.stdout.write(b); });
   const code = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { godot.kill(); reject(new Error('Native smoke test timeout')); }, 90000);
+    // 150 с: шаг Громового ущелья (перенос, элита, стая, водопад) добавил к прогону около 20 с.
+    const timer = setTimeout(() => { godot.kill(); reject(new Error('Native smoke test timeout')); }, 150000);
     godot.on('error', reject); godot.on('exit', code => { clearTimeout(timer); resolve(code); });
   });
   fs.mkdirSync(path.join(root, '.native-run'), { recursive: true });
