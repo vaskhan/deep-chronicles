@@ -9,7 +9,8 @@ import { zoneAt, TOWNS, DUNGEON, CRYPT, heightAt, obstacles } from '../src/world
 import { PVP, karmaForPk, karmaWashCost } from '../src/pvp.js';
 import { effectiveSkill, spForKill } from '../src/progression.js';
 import { CLASSES, SKILLS, ITEMS } from '../src/data.js';
-import { heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp, mobAtk, mobCrit, MOB_SPREAD } from '../src/sim.js';
+import { heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp, mobAtk, mobPdef, mobCrit, MOB_SPREAD } from '../src/sim.js';
+import { mobHitEffects, guardTrigger } from '../src/mob-skills.js';
 import { applyEffect, tickEffects, snapshotEffects, drainMul, drainHeal, makeBuff, makeDebuff, makeSlow, makeDot, makeHot, makeDrain } from '../src/effects.js';
 import { createParties } from './sim/party.js';
 import { createGroundLoot } from './sim/loot.js';
@@ -257,7 +258,12 @@ function damageMob(a, mb, dmg, crit, now, dot = false) {
   const died = world.hit(mb, dmg, a);
   pushNear(a, dot ? { k: 'hit', m: mb.id, dmg, crit, dot: 1 } : { k: 'hit', m: mb.id, dmg, crit });
   drain(a, dmg, now);
-  if (!died) return;
+  if (!died) {
+    // страж прикрывается щитом, когда здоровье падает ниже порога (src/mob-skills.js)
+    const shield = guardTrigger(mb, now);
+    if (shield) affectTarget({ m: mb.id }, shield, now);
+    return;
+  }
   const topId = world.kill(mb, now);
   const winner = players.get(topId)?.key ? players.get(topId) : players.get(a.id);
   const plan = parties.rewardPlan(winner, players.get(a.id), mb);
@@ -287,7 +293,9 @@ function damagePlayer(mb, a, now) {
   const { d, crit } = calcDmg(mobAtk(mb, now), s.pdef, 1, mobCrit(mb.def), Math.random, MOB_SPREAD);
   a.P.hp -= d;
   a.out.push({ k: 'hurt', dmg: d, from: mb.id, crit });
-  if (a.P.hp <= 0) { PL.killPlayer(a, mb.def.name); onPlayerDied(a, null); }
+  if (a.P.hp <= 0) { PL.killPlayer(a, mb.def.name); onPlayerDied(a, null); return; }
+  // умение удара: яд, замедление атаки, проклятие защиты (src/mob-skills.js)
+  for (const eff of mobHitEffects(mb.kind, mb.def, mobAtk(mb, now), now)) affectActor(a, eff, now);
 }
 
 // PvP: сервер сам считает урон по защите жертвы
@@ -334,7 +342,7 @@ function applySkill(a, id, ref, now) {
     if (!alive(t) || flatDist(a, t) > sk.range + targetRadius(ref) + LAG_M + 2) return;
     const atk = sk.school === 'm' ? s.matk : s.patk, crit = Math.random() < s.crit + 0.05 ? 1 : 0;
     pushNear(a, { k: 'cast_fx', id, to: ref });
-    if (ref.m != null) { const r = calcDmg(atk, t.def.pdef * (sk.school === 'm' ? 0.8 : 1), sk.mul, crit); damageMob(a, t, r.d, r.crit, now); }
+    if (ref.m != null) { const r = calcDmg(atk, mobPdef(t, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, crit); damageMob(a, t, r.d, r.crit, now); }
     else damageActor(a, t, atk, sk.mul, sk.school, crit, now);
     skillEffects(a, ref, sk, id, atk, now);
     a.attacking = true;
@@ -359,7 +367,7 @@ function applySkill(a, id, ref, now) {
     pushNear(a, { k: 'cast_fx', id });
     for (const mb of world.list) {
       if (mb.dead || flatDist(mb, a) > sk.radius + world.radiusOf(mb)) continue;
-      const r = calcDmg(atk, mb.def.pdef * (sk.school === 'm' ? 0.8 : 1), sk.mul, s.crit);
+      const r = calcDmg(atk, mobPdef(mb, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, s.crit);
       damageMob(a, mb, r.d, r.crit, now);
       skillEffects(a, { m: mb.id }, sk, id, atk, now); n++;
     }
@@ -404,9 +412,9 @@ function autoAttack(a, dt, now) {
     damageActor(a, t, mage ? s.matk * 0.6 : s.patk, 1, mage ? 'm' : 'p', crit, now);
     return;
   }
-  if (mage) { const r = calcDmg(s.matk * 0.6, t.def.pdef, 1, s.crit); return damageMob(a, t, r.d, r.crit, now); }
+  if (mage) { const r = calcDmg(s.matk * 0.6, mobPdef(t, now), 1, s.crit); return damageMob(a, t, r.d, r.crit, now); }
   if (Math.random() < missChance(t.def.lvl, s.acc)) return pushNear(a, { k: 'miss', m: t.id });
-  const r = calcDmg(s.patk, t.def.pdef, 1, s.crit);
+  const r = calcDmg(s.patk, mobPdef(t, now), 1, s.crit);
   damageMob(a, t, r.d, r.crit, now);
 }
 
@@ -456,7 +464,7 @@ function dotDamage(v, h, now) {
   v.P.hp -= d; v.dirty = true;
   if (src && src !== v) v.hitBy.set(src.id, now);
   v.out.push({ k: 'hurt', dmg: d, dot: 1, ...(src && src !== v ? { fromP: src.id, name: src.name } : {}) });
-  if (v.P.hp <= 0) { PL.killPlayer(v, src ? src.name : 'Яд', src ? src.karma > 0 : false); onPlayerDied(v, src && src !== v ? src : null); }
+  if (v.P.hp <= 0) { PL.killPlayer(v, src ? src.name : (h.src || 'Яд'), src ? src.karma > 0 : false); onPlayerDied(v, src && src !== v ? src : null); }
 }
 
 // ===== PvP: флаг, PK, карма =====

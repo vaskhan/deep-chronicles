@@ -169,6 +169,31 @@ export const MOBS = {
   skeleton: { name: 'Скелет-страж', lvl: 18, hp: 700, patk: 56, pdef: 95, xp: 520, coins: [55, 100], shape: 'humanoid', color: 0xe0dcc8, size: 1.1, aggro: true, fam: 'undead', social: true, drops: { bone: 0.8, potion_mp: 0.1, scroll_ench_a: 0.04 } },
   ghoul: { name: 'Упырь', lvl: 21, hp: 950, patk: 68, pdef: 120, xp: 720, coins: [70, 140], shape: 'humanoid', color: 0x6a8a6a, size: 1.2, aggro: true, fam: 'undead', social: true, drops: { ectoplasm: 0.25, ring_silver: 0.02 } },
   wraith: { name: 'Призрак', lvl: 24, hp: 1100, patk: 80, pdef: 130, xp: 900, coins: [90, 160], shape: 'ghost', color: 0x90ffd0, size: 1.3, aggro: true, fam: 'undead', social: true, drops: { ectoplasm: 0.5, scroll_ench_w: 0.04, hat_mystic: 0.02 } },
+  // Громовое ущелье (src/gorge.js): 25–40 уровни, продолжение кривой обычных мобов
+  // (опыт ≈ 2.95·L^1.8, жизнь ≈ 1.25·опыт, атака ≈ 3.3·L, защита ≈ 5.4·L, монеты ≈ 0.14·опыт).
+  // model — готовая модель-основа из godot/assets/manifest.json, окраску и рост задаёт запись вида там же.
+  // onHit — эффект на героя при попадании (src/mob-skills.js), guard — щит на себя при потере здоровья.
+  cliff_spider: { name: 'Скальный паук', lvl: 25, hp: 1210, patk: 83, pdef: 135, xp: 970, coins: [98, 174], shape: 'spider', model: 'spider', color: 0x5d6a70, size: 1.35, aggro: true, fam: 'cliffspider', social: true,
+    onHit: { chance: 0.3, name: 'Яд скального паука', dot: { mul: 1.2, dur: 6, tick: 1.5 } }, drops: { crystal: 0.3, pelt: 0.4, gloves_chain: 0.02 } },
+  fang_warrior: { name: 'Воин племени Клыка', lvl: 27, hp: 1390, patk: 89, pdef: 146, xp: 1110, coins: [112, 199], shape: 'humanoid', model: 'orc', color: 0x7a5a3a, size: 1.45, aggro: true, crit: 0.12, fam: 'fang', social: true,
+    drops: { bone: 0.6, potion_hp: 0.25, helm_chain: 0.02, scroll_ench_a: 0.04 } },
+  river_drowned: { name: 'Речной утопленник', lvl: 28, hp: 1490, patk: 92, pdef: 151, xp: 1190, coins: [120, 213], shape: 'humanoid', model: 'ghoul', color: 0x5c8a86, size: 1.25, aggro: true, fam: 'drowned', social: true,
+    onHit: { chance: 0.35, name: 'Хватка утопленника', slow: { mul: 0.7, dur: 5 } }, drops: { ectoplasm: 0.3, potion_mp: 0.15, ring_silver: 0.02 } },
+  fang_shaman: { name: 'Шаман племени Клыка', lvl: 29, hp: 1265, patk: 105, pdef: 157, xp: 1265, coins: [127, 227], shape: 'humanoid', model: 'orc', color: 0x8a4a6a, size: 1.3, aggro: true, fam: 'fang', social: true,
+    onHit: { chance: 0.3, name: 'Проклятие Клыка', debuff: { stat: 'pdef', mul: 0.8, dur: 8 } }, drops: { crystal: 0.3, ectoplasm: 0.15, scroll_ench_w: 0.03, ear_silver: 0.02 } },
+  pool_drowned: { name: 'Утопленник омута', lvl: 31, hp: 1780, patk: 102, pdef: 167, xp: 1425, coins: [144, 256], shape: 'humanoid', model: 'ghoul', color: 0x3f6f7a, size: 1.35, aggro: true, fam: 'drowned', social: true,
+    onHit: { chance: 0.4, name: 'Холод омута', slow: { mul: 0.6, dur: 6 } }, drops: { ectoplasm: 0.4, legs_chain: 0.02, gloves_mystic: 0.02 } },
+  grotto_weaver: { name: 'Грот-ткач', lvl: 32, hp: 1890, patk: 106, pdef: 173, xp: 1510, coins: [152, 270], shape: 'spider', model: 'spider', color: 0x3c3448, size: 1.55, aggro: true, fam: 'cliffspider', social: true,
+    onHit: { chance: 0.35, name: 'Паутинный яд', dot: { mul: 1.6, dur: 8, tick: 2 } }, drops: { crystal: 0.45, pelt: 0.4, boots_mystic: 0.02, neck_silver: 0.015 } },
+  // танк: толще и крепче обычного, прячется за каменной кожей; награда выше за долгий бой
+  stone_guard: { name: 'Каменный страж', lvl: 34, hp: 3160, patk: 95, pdef: 248, xp: 2020, coins: [204, 362], shape: 'golem', model: 'golem', color: 0x6f7f86, size: 2.1, aggro: true, fam: 'stone', social: true,
+    guard: { below: 0.5, name: 'Каменная кожа', stat: 'pdef', mul: 1.6, dur: 8, cd: 20 }, drops: { crystal: 0.6, scroll_ench_w: 0.04, armor_chain: 0.015, robe_mystic: 0.015, shield_iron: 0.02 } },
+  outpost_guard: { name: 'Страж заставы', lvl: 36, hp: 2680, patk: 119, pdef: 194, xp: 1865, coins: [189, 335], shape: 'humanoid', model: 'skeleton', color: 0xb8c4cc, size: 1.2, aggro: true, fam: 'outpost', social: true,
+    guard: { below: 0.6, name: 'Щит заставы', stat: 'pdef', mul: 1.4, dur: 6, cd: 18 }, drops: { bone: 0.9, crystal: 0.3, scroll_ench_a: 0.05, helm_bone: 0.005, gloves_bone: 0.005 } },
+  summit_wraith: { name: 'Дух перевала', lvl: 38, hp: 2575, patk: 125, pdef: 205, xp: 2060, coins: [207, 369], shape: 'ghost', model: 'wraith', color: 0xbfe6ff, size: 1.35, aggro: true, fam: 'frost', social: true,
+    onHit: { chance: 0.3, name: 'Могильный холод', slow: { mul: 0.75, dur: 4 }, dot: { mul: 0.8, dur: 4, tick: 1 } }, drops: { ectoplasm: 0.6, scroll_ench_w: 0.05, hat_abyss: 0.005, gloves_abyss: 0.005, ring_lich: 0.004 } },
+  outpost_warlock: { name: 'Колдун заставы', lvl: 39, hp: 2155, patk: 142, pdef: 211, xp: 2155, coins: [217, 387], shape: 'humanoid', model: 'lich', color: 0x5a7ab0, size: 1.4, aggro: true, fam: 'outpost', social: true,
+    onHit: { chance: 0.3, name: 'Печать распада', debuff: { stat: 'pdef', mul: 0.75, dur: 8 }, dot: { mul: 1.0, dur: 6, tick: 1.5 } }, drops: { ectoplasm: 0.5, crystal: 0.4, scroll_ench_w: 0.06, boots_bone: 0.005, boots_abyss: 0.005, neck_lich: 0.004 } },
   lich: { name: 'Король-лич', lvl: 28, hp: 9000, patk: 120, pdef: 200, xp: 9000, coins: [1500, 2500], shape: 'humanoid', color: 0x8040c0, size: 2.6, aggro: true, boss: true, respawn: 300, drops: { lich_seal: 1, staff_abyss: 0.3, hat_abyss: 0.3, robe_abyss: 0.3, gloves_abyss: 0.3, boots_abyss: 0.3, shield_bone: 0.2, neck_lich: 0.2, ring_lich: 0.25, sword_dragon: 0.3, armor_bone: 0.3, helm_bone: 0.3, legs_bone: 0.3, gloves_bone: 0.3, boots_bone: 0.3, ear_lich: 0.25, scroll_ench_w: 0.5, ectoplasm: 1 } },
 };
 

@@ -27,6 +27,8 @@ export const MOB_CRIT = 0.08;
 export const mobCrit = (def) => def.crit ?? MOB_CRIT;
 // Атака моба с учётом наложенных на него ослаблений.
 export const mobAtk = (m, now) => m.def.patk * effectMul(m.effects || [], 'patk', now);
+// Защита моба с учётом щита на себя (src/mob-skills.js::guardTrigger) — по тому же правилу множителей.
+export const mobPdef = (m, now) => m.def.pdef * effectMul(m.effects || [], 'pdef', now);
 // шанс промахнуться по мобу и шанс увернуться от моба — зеркальные формулы
 export const missChance = (mobLvl, acc) => clamp(0.06 + (mobLvl + 33 - acc) * 0.01, 0.01, 0.3);
 export const evaChance = (mobLvl, eva) => clamp(0.05 + (eva - (mobLvl + 33)) * 0.01, 0.02, 0.3);
