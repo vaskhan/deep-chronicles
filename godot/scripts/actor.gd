@@ -202,7 +202,8 @@ func snapshot(row: Array, timestamp: float):
 	if attack_flag and not previous_attack_flag and action_until <= 0 and windup_remaining <= 0: play_action("attack")
 	previous_attack_flag = attack_flag
 	dead = (flags & 8) != 0; hp = row[6]
-	status = int(row[7]) if row.size() > 7 else 0
+	# У мобов восьмой столбец занят эффектами: PvP-статус есть только у игроков.
+	status = int(row[7]) if kind != "m" and row.size() > 7 else 0
 	seen = Time.get_ticks_msec(); visible = true
 
 func interpolate(time: float):

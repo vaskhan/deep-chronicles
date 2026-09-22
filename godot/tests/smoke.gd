@@ -210,7 +210,14 @@ func _run():
 	check(await wait_for(func(): return game.profile.get("skills", {}).get("battle_cry", 0) == 1 and game.profile.sp < 5000), "skills card learns the server rank and spends SP")
 	game.hud.close_window()
 	game.hud.skill_buttons[1].pressed.emit()
-	check(await wait_for(func(): return not game.hud.buff_text.text.is_empty() and game.stats.patk > data.stats(game.profile).patk), "buff and effective stats come from the server skill event")
+	check(await wait_for(func(): return game.hud.effects_row.get_child_count() > 0 and game.stats.patk > data.stats(game.profile).patk), "buff and effective stats come from the server skill event")
+	check(await wait_for(func(): return game.hero.effects.any(func(entry): return str(entry[1]) == "buff" and int(entry[2]) > 0)), "snapshot carries the hero's own timed effects with a remaining time")
+	var effect_icon = game.hud.effects_row.get_child(0)
+	var effect_timer = effect_icon.find_child("Timer", true, false)
+	check(is_instance_valid(effect_timer) and effect_timer.text.ends_with("с") and effect_icon.tooltip_text.contains("Боевой клич"), "effect icon counts the remaining seconds down and names the skill")
+	check(game.combat_fx.auras.size() > 0 and int(game.combat_fx.counts.get("aura", 0)) > 0, "timed effect spawns real particles through combat_fx")
+	check(game.hud.effects_row.visible and not game.hud.target_effects_row.visible, "target effect row stays hidden while the target carries nothing")
+	await _screenshot("effect-icons.png")
 	await _dev({"x": -418, "z": 410})
 	game.hud.show_window("teleport"); _click("teleport", "meadow")
 	check(await wait_for(func(): return absf(game.hero.position.x + 260) < 2), "teleport places the native hero in the correct world coordinates")
@@ -379,7 +386,10 @@ func _run():
 	game.hud.show_window("character"); await _screenshot("mage-b-gear.png"); game.hud.close_window()
 	await _test_combat_presentation()
 	await _test_starter_hunt()
+	await _test_elite()
 	await _test_mob_telegraph()
+	await _test_timed_effects()
+	await _test_pack()
 	# Real screenshot from the rendering backend, when running with a display.
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
@@ -639,11 +649,13 @@ func _test_hotbar_drag():
 		await _drag(icon, game.hud.skill_buttons[8])
 		check(game.hud.hotbar_bindings[8] == "power_strike", "real mouse drag assigns a learned skill from K to an empty hotbar cell")
 	game.hud.close_window(); await process_frame
+	var swapped_out = str(game.hud.hotbar_bindings[7])
 	await _drag(game.hud.skill_buttons[8], game.hud.skill_buttons[7])
-	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[8] == "talk", "real mouse drag swaps action cells")
+	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[8] == swapped_out, "real mouse drag swaps action cells")
 	game.hud.set_hotbar_locked(true); await process_frame
+	var locked_cell = str(game.hud.hotbar_bindings[6])
 	await _drag(game.hud.skill_buttons[7], game.hud.skill_buttons[6])
-	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[6] == "target", "locked hotbar rejects mouse drag")
+	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[6] == locked_cell, "locked hotbar rejects mouse drag")
 	game.hud.hotbar_bindings = game.hud.default_bindings(); game.hud._save_hotbar()
 
 func _test_chat_channels():
@@ -761,3 +773,103 @@ func _test_starter_hunt():
 			if mob.visible and not mob.dead and mob.position.distance_to(game.hero.position) < 30: near += 1
 		return near >= 8), "starter hunting clearing has at least eight live server mobs within thirty units")
 	await create_timer(0.3).timeout; await _screenshot("starter-hunt.png")
+
+func _ranked_mob():
+	for mob in game.mobs.values():
+		if mob.visible and not mob.rank.is_empty(): return mob
+	return null
+
+## Значки эффектов у цели: сервер накладывает урон со временем и ослабление, клиент их рисует.
+func _test_timed_effects():
+	# Цель должна пережить прямой удар, иначе проверять будет нечего: берём орка, а не кролика.
+	var spawn
+	var orc_id = 0
+	for i in data.world.spawns.size():
+		if data.world.spawns[i].mob == "orc": spawn = data.world.spawns[i]; orc_id = i + 1
+	if not spawn: check(false, "orc spawn exists for the timed effect test"); return
+	await _dev({"lvl": 25, "sp": 200000, "hp": 9000, "x": spawn.x, "z": spawn.z + 5})
+	net.send({"t": "learn", "id": "curse", "rank": 1})
+	check(await wait_for(func(): return int(game.profile.get("skills", {}).get("curse", 0)) == 1), "mage learns the timed-effect skill on the server")
+	check(await wait_for(func(): return game.mobs.has(orc_id) and game.mobs[orc_id].visible and not game.mobs[orc_id].dead), "a live server mob is within casting range")
+	if not game.mobs.has(orc_id): return
+	var mob = game.mobs[orc_id]
+	game.set_target(mob)
+	game.use_skill("curse")
+	check(await wait_for(func(): return mob.effects.size() >= 2, 12), "server puts both the damage over time and the weakening on the target")
+	var kinds = []
+	for entry in mob.effects: kinds.append(str(entry[1]))
+	kinds.sort()
+	check(kinds == ["debuff", "dot"], "target carries exactly the damage over time and the stat weakening")
+	check(mob.effects.all(func(entry): return int(entry[2]) > 0), "every target effect reports its remaining time")
+	check(await wait_for(func(): return game.hud.target_effects_row.visible and game.hud.target_effects_row.get_child_count() == mob.effects.size()), "target panel shows one icon per server effect")
+	var target_timer = game.hud.target_effects_row.get_child(0).find_child("Timer", true, false)
+	check(is_instance_valid(target_timer) and target_timer.text.ends_with("с"), "target effect icon counts down")
+	check(game.combat_fx.auras.size() >= 2, "each target effect keeps its own live aura")
+	game.camera_distance = 15; game.camera_pitch = 0.62
+	await create_timer(0.4).timeout
+	await _screenshot("target-effects.png")
+	# Спад приходит с сервера: значки гаснут сами, без единой команды клиента.
+	check(await wait_for(func(): return mob.dead or (mob.effects.is_empty() and not game.hud.target_effects_row.visible), 16), "effects expire on their own and the icons disappear")
+	game.camera_distance = 28; game.camera_pitch = 0.56
+
+## Элиты и чемпионы: ранг, размер, подпись и аура приходят с сервера.
+func _test_elite():
+	check(await wait_for(func(): return _ranked_mob() != null, 12), "server marks ranked mobs in the starter zone")
+	var elite = _ranked_mob()
+	if not elite: return
+	check(is_instance_valid(elite.rank_aura), "ranked mob wears its own aura ring")
+	check(float(elite.definition.size) > float(data.catalog.MOBS[elite.base_model].size), "ranked mob is bigger than the ordinary mob of its kind")
+	check(elite.display_name != str(data.catalog.MOBS[elite.base_model].name), "ranked mob carries the server name, not the plain one")
+	check(elite.label.modulate.is_equal_approx(elite.rank_color()), "rank colours the name plate")
+	await _dev({"x": elite.position.x + 7, "z": elite.position.z + 7, "hp": 9000})
+	game.set_target(elite)
+	game.camera_distance = 14; game.camera_pitch = 0.6
+	await create_timer(0.6).timeout
+	check(elite.rank_aura.visible, "aura is drawn while the elite is alive")
+	await _screenshot("elite-mob.png")
+	game.set_target(null)
+	game.camera_distance = 28; game.camera_pitch = 0.56
+
+## Стая: удар по одному мобу поднимает сородича того же семейства рядом.
+## Радиус крика — 12 единиц (src/pack.js); стоим дальше радиуса агрессии сородича,
+## чтобы он мог прийти только на зов, а не заметить героя сам.
+func _test_pack():
+	var spawns = data.world.spawns
+	var first = -1
+	var second = -1
+	for i in spawns.size():
+		if first >= 0: break
+		var a = spawns[i]
+		var da = data.catalog.MOBS[a.mob]
+		if a.has("camp") or not da.get("social", false): continue
+		for j in range(i + 1, spawns.size()):
+			var b = spawns[j]
+			var db = data.catalog.MOBS[b.mob]
+			if b.has("camp") or not db.get("social", false): continue
+			if str(da.get("fam", a.mob)) != str(db.get("fam", b.mob)): continue
+			if Vector2(a.x - b.x, a.z - b.z).length() > 12.0: continue
+			first = i; second = j; break
+	if first < 0: check(false, "world has a pair of kin inside the social radius"); return
+	var victim_id = first + 1
+	var ally_id = second + 1
+	var away = Vector2(spawns[first].x - spawns[second].x, spawns[first].z - spawns[second].z).normalized()
+	for attempt in 6:
+		await _dev({"hp": 9000, "x": spawns[first].x + away.x * 16, "z": spawns[first].z + away.y * 16})
+		if not await wait_for(func(): return game.mobs.has(victim_id) and game.mobs.has(ally_id) and game.mobs[victim_id].visible and game.mobs[ally_id].visible and not game.mobs[victim_id].dead and not game.mobs[ally_id].dead, 6): continue
+		var victim = game.mobs[victim_id]
+		var ally = game.mobs[ally_id]
+		# сородич должен стоять вне собственного радиуса агрессии, но внутри радиуса крика
+		if ally.position.distance_to(game.hero.position) < 16.0: continue
+		if ally.position.distance_to(victim.position) > 12.0: continue
+		var started = ally.position.distance_to(game.hero.position)
+		game.camera_distance = 20; game.camera_pitch = 0.55
+		game.set_target(victim); game.attack()
+		var answered = await wait_for(func(): return started - game.mobs[ally_id].position.distance_to(game.hero.position) > 8.0, 14)
+		if not answered: continue
+		check(true, "attacking one mob brings its kin from outside its own aggression range")
+		await create_timer(0.4).timeout
+		await _screenshot("mob-pack.png")
+		game._cancel_attack(); game.set_target(null)
+		game.camera_distance = 28; game.camera_pitch = 0.56
+		return
+	check(false, "kin answered the call for help")
