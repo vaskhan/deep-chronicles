@@ -250,5 +250,11 @@
       "path": "res://assets/props/dead_tree.glb",
       "triangles": 2200
     }
+  },
+  "environment": {
+    "gorge": {
+      "manifest": "res://assets/gorge/manifest.json",
+      "scene_script": "res://scripts/gorge_art.gd"
+    }
   }
 }

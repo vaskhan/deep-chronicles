@@ -1,0 +1,250 @@
+{
+  "sources": {
+    "coastal_cliff_02": {
+      "page": "https://polyhaven.com/a/coastal_cliff_02",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "authors": {
+        "Rob Tuytel": "All"
+      },
+      "api": "https://api.polyhaven.com/files/coastal_cliff_02",
+      "original_gltf_1k": {
+        "include": {
+          "coastal_cliff_02.bin": {
+            "size": 26773008,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_02/coastal_cliff_02.bin",
+            "md5": "e6324e54479fd0f9aefe707dfa9e728b"
+          },
+          "textures/coastal_cliff_02_arm_1k.jpg": {
+            "size": 697369,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/coastal_cliff_02/coastal_cliff_02_arm_1k.jpg",
+            "md5": "f6fc408070af611ce36d8624952e4ccb"
+          },
+          "textures/coastal_cliff_02_nor_gl_1k.jpg": {
+            "size": 924518,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/coastal_cliff_02/coastal_cliff_02_nor_gl_1k.jpg",
+            "md5": "bcb1e2089066001eceb38079f33f3a12"
+          },
+          "textures/coastal_cliff_02_diff_1k.jpg": {
+            "size": 759723,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/coastal_cliff_02/coastal_cliff_02_diff_1k.jpg",
+            "md5": "e4d66e6aab22152dcbdd101d23d19e61"
+          }
+        },
+        "size": 3220,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/coastal_cliff_02/coastal_cliff_02_1k.gltf",
+        "md5": "adb7787407c87cd1bd74c8e005577a7d"
+      }
+    },
+    "fern_02": {
+      "page": "https://polyhaven.com/a/fern_02",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "authors": {
+        "Rob Tuytel": "scanning",
+        "Rico Cilliers": "modeling"
+      },
+      "api": "https://api.polyhaven.com/files/fern_02",
+      "original_gltf_1k": {
+        "include": {
+          "textures/fern_02_arm_1k.jpg": {
+            "size": 280359,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_arm_1k.jpg",
+            "md5": "1bbb2b22951f450720d28e17d93a2987"
+          },
+          "textures/fern_02_diff_1k.jpg": {
+            "size": 315705,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_diff_1k.jpg",
+            "md5": "82c18a6cfd5ae91c37c0e078f591181c"
+          },
+          "textures/fern_02_nor_gl_1k.jpg": {
+            "size": 367222,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_nor_gl_1k.jpg",
+            "md5": "43aed63dff79554f6064627515afd9d7"
+          },
+          "fern_02.bin": {
+            "size": 176176,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/fern_02/fern_02.bin",
+            "md5": "c061e9255f7d36ae9ce0e92ef3e100b2"
+          }
+        },
+        "size": 6899,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf",
+        "md5": "cf276874d37bfb73c299504a6b355b77"
+      }
+    },
+    "rock_moss_set_01": {
+      "page": "https://polyhaven.com/a/rock_moss_set_01",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "authors": {
+        "Kless Gyzen": "All"
+      },
+      "api": "https://api.polyhaven.com/files/rock_moss_set_01",
+      "original_gltf_1k": {
+        "include": {
+          "textures/rock_moss_set_01_nor_gl_1k.jpg": {
+            "size": 209975,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_nor_gl_1k.jpg",
+            "md5": "eb7ebd31ad08e78d0497900652ff1568"
+          },
+          "rock_moss_set_01.bin": {
+            "size": 1466380,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_moss_set_01/rock_moss_set_01.bin",
+            "md5": "207a51c9f56d34732e9814bbf9cc07b1"
+          },
+          "textures/rock_moss_set_01_rough_1k.jpg": {
+            "size": 82624,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_rough_1k.jpg",
+            "md5": "ed9d8a2c863262f76f881346e8047c6a"
+          },
+          "textures/rock_moss_set_01_diff_1k.jpg": {
+            "size": 168099,
+            "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_diff_1k.jpg",
+            "md5": "b8742301e6b4bc5683d2de712e83f772"
+          }
+        },
+        "size": 9987,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_01/rock_moss_set_01_1k.gltf",
+        "md5": "75113cc1c21806cca5d8badad4737af7"
+      }
+    },
+    "rock_face": {
+      "page": "https://polyhaven.com/a/rock_face",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "provider": "Poly Haven",
+      "api": "https://api.polyhaven.com/files/rock_face"
+    },
+    "mossy_rock": {
+      "page": "https://polyhaven.com/a/mossy_rock",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "provider": "Poly Haven",
+      "api": "https://api.polyhaven.com/files/mossy_rock"
+    },
+    "dry_ground_01": {
+      "page": "https://polyhaven.com/a/dry_ground_01",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "provider": "Poly Haven",
+      "api": "https://api.polyhaven.com/files/dry_ground_01"
+    }
+  },
+  "files": {
+    "coastal_cliff_02.glb": {
+      "source": "coastal_cliff_02",
+      "sha256": "7fc334b2aeb066df9e6cf41c5d3be8ba6358e3a082326da690fc290e70ca55ed",
+      "bytes": 2917104
+    },
+    "coastal_cliff_02_coastal_cliff_02_arm_1k.jpg": {
+      "source": "coastal_cliff_02",
+      "sha256": "b977af7302f04d93c8e8b11a1cbcd8207920358d5ba078f00e2a00cacdc24f8f",
+      "bytes": 697369
+    },
+    "coastal_cliff_02_coastal_cliff_02_diff_1k.jpg": {
+      "source": "coastal_cliff_02",
+      "sha256": "a84ddc407fd82d9218e10241a0ffa5d040a3a1ba8599659f743e568b7ed9cc4b",
+      "bytes": 759723
+    },
+    "coastal_cliff_02_coastal_cliff_02_nor_gl_1k.jpg": {
+      "source": "coastal_cliff_02",
+      "sha256": "562bb505803d757bee0c4e4ef89b6405bffa6fdeedeab82b8eba993689537864",
+      "bytes": 924518
+    },
+    "dry_ground_01_arm.jpg": {
+      "source": "dry_ground_01",
+      "sha256": "e6627e56850bf5021162081bbd886fbb38465850dbcee854b9b5deedfb2c3fed",
+      "bytes": 184324
+    },
+    "dry_ground_01_diff.jpg": {
+      "source": "dry_ground_01",
+      "sha256": "75222fc97a82b635a09cf8f2891dd58bc42e49599b9fda920b2c50193fe85e9f",
+      "bytes": 604799
+    },
+    "dry_ground_01_nor.jpg": {
+      "source": "dry_ground_01",
+      "sha256": "8faf30f0656721f861dba573006c3f90e38fcda8dad481d2369145b114c6b45e",
+      "bytes": 243523
+    },
+    "fern_02.glb": {
+      "source": "fern_02",
+      "sha256": "066ba3039512e448edf65aa4457ee857e3c0022e9e6543f3ac71252e9acb7093",
+      "bytes": 1745540
+    },
+    "fern_02_fern_02_arm_1k.jpg": {
+      "source": "fern_02",
+      "sha256": "ebfb5d76ce9cbdaec20bcd22dce9b755f0b1b8650ef29ca13555e3e6961025d7",
+      "bytes": 280359
+    },
+    "fern_02_fern_02_diff_1k.png": {
+      "source": "fern_02",
+      "sha256": "6e61e248a33752ac8ab08e1267b53c6be2f9e27233d1002fca5c5d38b9d9a58c",
+      "bytes": 930802
+    },
+    "fern_02_fern_02_nor_gl_1k.jpg": {
+      "source": "fern_02",
+      "sha256": "45bce132c6e96a0864bc89ab5da51361ab3f4afa83a6669ae499ab5ca811f621",
+      "bytes": 367222
+    },
+    "moss_boulder.glb": {
+      "source": "rock_moss_set_01",
+      "sha256": "9fa0ee39a40e0c4fe551254bb17403f84160671ea996c50a3b9df0c4741839d8",
+      "bytes": 533884
+    },
+    "moss_boulder_rock_moss_set_01_diff_1k.jpg": {
+      "source": "rock_moss_set_01",
+      "sha256": "40cea65d8aa4ee73a93b04af19963834d061eee9779c3fc2c1cba76eef812ccc",
+      "bytes": 168099
+    },
+    "moss_boulder_rock_moss_set_01_nor_gl_1k.jpg": {
+      "source": "rock_moss_set_01",
+      "sha256": "eb4aad3f207f1dc5b624d74ae240372171626a66912bd71adf7bd3e518181d6e",
+      "bytes": 209975
+    },
+    "moss_boulder_rock_moss_set_01_rough_1k.jpg": {
+      "source": "rock_moss_set_01",
+      "sha256": "4d6ec46623abd8e2cdb855f59c7ce31873ad61b36b60e4de579e9e776a497c6b",
+      "bytes": 82624
+    },
+    "mossy_rock_arm.jpg": {
+      "source": "mossy_rock",
+      "sha256": "1c1b8da603c93e863ccb68a8f4fcc6ff02774b83d9a6e9422c7d4aa77397b6a3",
+      "bytes": 926941
+    },
+    "mossy_rock_diff.jpg": {
+      "source": "mossy_rock",
+      "sha256": "4dbf37f1b0465c9c8914213163923be159716f5b97fb6946437b6c5e143ef540",
+      "bytes": 1124438
+    },
+    "mossy_rock_nor.jpg": {
+      "source": "mossy_rock",
+      "sha256": "232cdd6a9fdfd01bb8bb1f8f604c53dbca79fa0d3d7995edf85c9945757aa8df",
+      "bytes": 995727
+    },
+    "rock_face_arm.jpg": {
+      "source": "rock_face",
+      "sha256": "3a0fce8658ba2bac6690f68e79630c16e004f1676c1588ef4d54906fc3907616",
+      "bytes": 458661
+    },
+    "rock_face_diff.jpg": {
+      "source": "rock_face",
+      "sha256": "cce4b50517161264bdef196f5e247e328ca3739083cd6044ad3cc54d88cb82e2",
+      "bytes": 732721
+    },
+    "rock_face_nor.jpg": {
+      "source": "rock_face",
+      "sha256": "e2682e1286c8b6aca7e01ba7b8fe1726cb6606042b9ee70d097aa67470d410ef",
+      "bytes": 1139857
+    }
+  },
+  "preparation": {
+    "script": "tools/godot/prepare-gorge.py",
+    "cliff_triangles_before_skirt": 9999,
+    "boulder_triangle_budget": 2400,
+    "textures": "1K; OpenGL normals; ARM = AO / roughness / metallic",
+    "lod": "Godot import meshes/generate_lods=true; distance culling; fern MultiMesh tiles 32 m",
+    "cliff_geometry": "Нормализованный скан, нижний край продлён в грунт. UV2.x отмечает добавленную поверхность для трипланарного материала; исходные UV сохранены.",
+    "waterfall_audio": "../audio/manifest.json#kurt-stream"
+  }
+}
