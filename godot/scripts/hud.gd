@@ -54,6 +54,8 @@ var bag_search: LineEdit
 var bag_grid: GridContainer
 var wallet_label: Label
 var shop_tab = "buy"
+var shop_id = ""
+var shop_name = "Рыночный торговец"
 var window_scroll: ScrollContainer
 var pvp_enabled = false
 var target_panel: PanelContainer
@@ -391,7 +393,7 @@ func show_window(kind: String, refresh = false):
 	var title = _label(row, titles.get(kind, kind), 12); title.size_flags_horizontal = Control.SIZE_EXPAND_FILL; title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.modulate = Color("d4c49b")
 	_button(row, "×", close_window).tooltip_text = "Закрыть · Esc"
 	if kind == "map":
-		map_control = load("res://scripts/map.gd").new(); window_body.add_child(map_control); map_control.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		map_control = load("res://scripts/map.gd").new(); map_control.player_position = minimap.player_position; window_body.add_child(map_control); map_control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_wrapped(window_body, "Красные — мобы · Голубые — игроки · Золотые — NPC · Бирюзовая — вы\nПоказаны живые существа в области видимости сервера.", 13)
 		return
 	window_scroll = ScrollContainer.new(); window_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -483,6 +485,7 @@ func _bonus_text(bonus: Dictionary) -> String:
 	return ", ".join(parts)
 
 func _shop(list):
+	_label(list, shop_name, 22)
 	_button(list, "Изготовить за материалы…", func(): show_window("craft"))
 	_label(list, "Ваши монеты: %s" % int(profile.coins), 20)
 	var tabs = _row(list)
@@ -490,7 +493,7 @@ func _shop(list):
 		var b = _button(tabs, entry[0], func(): shop_tab = entry[1]; show_window("shop"))
 		b.toggle_mode = true; b.button_pressed = shop_tab == entry[1]; b.set_meta("shop_tab", entry[1])
 	if shop_tab == "buy":
-		for id in GameData.catalog.SHOP:
+		for id in GameData.catalog.SHOP_STOCK.get(shop_id, GameData.catalog.SHOP):
 			var it = GameData.catalog.ITEMS[id]; var row = _item_row(list, id, "%s\n%s мон. · Ур. %s" % [it.name, int(it.price), int(it.get("lvl", 1))])
 			var b = _button(row, "Купить", func(): action.emit("buy", id)); b.disabled = profile.coins < it.price or not Network.authed; b.set_meta("buy", id)
 			if it.get("stack", false):

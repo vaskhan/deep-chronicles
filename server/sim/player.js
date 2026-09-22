@@ -1,7 +1,8 @@
 // Персонаж на сервере: профиль, сумка, экипировка, магазин, заточка, опыт и смерть.
 // Клиент ничего из этого не считает — он только присылает команды и рисует события.
+import { resetMovement } from './movement.js';
 import { migrateProgression, effectiveSkill, learnError, skillRanks } from '../../src/progression.js';
-import { CLASSES, ITEMS, SKILLS, SHOP, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
+import { CLASSES, ITEMS, SKILLS, SHOP, SHOP_STOCK, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
 import { calcStats, equipFromBag, unequipSlot, migrate, MAX_ENCH } from '../../src/stats.js';
 import { TOWNS, TELEPORTS, heightAt, zoneAt } from '../../src/world-core.js';
 import { sellPrice, crystalsFor, enchSucceeds, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
@@ -40,18 +41,22 @@ export function loadChar(name, save) {
   for (const [sl, id] of Object.entries(P.equip)) if (id && !ITEMS[id]) P.equip[sl] = null;
   for (const sl of Object.keys(P.enc)) P.enc[sl] = clamp(P.enc[sl] | 0, 0, MAX_ENCH);
   const s = calcStats(P);
-  P.hp = clamp(+P.hp || s.maxHp, 0, s.maxHp); P.mp = clamp(+P.mp || s.maxMp, 0, s.maxMp);
+  // Ноль — сохраненное значение ресурса, а не отсутствие поля.
+  P.hp = clamp(Number.isFinite(P.hp) ? P.hp : s.maxHp, 0, s.maxHp);
+  P.mp = clamp(Number.isFinite(P.mp) ? P.mp : s.maxMp, 0, s.maxMp);
+  P.dead = P.dead === true || P.hp === 0;
+  if (P.dead) P.hp = 0;
   return P;
 }
 
 // игрок на сервере: профиль + всё, что живёт только в сессии
 export function newActor(id, name, P) {
   return {
-    id, name, P,
+    id, name, P, movement: { at: Date.now(), credit: 0, fresh: true },
     x: P.x, y: heightAt(P.x, P.z), z: P.z, r: 0,
     target: null,        // { m: mobId } | { p: playerId }
     attacking: false, atkTimer: 0, swing: null, cds: {}, buffs: [], cast: null,
-    dead: false, dirty: true, out: [],
+    dead: P.dead === true || P.hp === 0, dirty: true, out: [],
     hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0,
   };
 }
@@ -106,6 +111,9 @@ export function respawn(a) {
 export function place(a, x, z) {
   a.swing = null; a.attacking = false; a.target = null; a.cast = null;
   a.x = x; a.z = z; a.y = heightAt(x, z);
+  // Сервер уже перенес героя: новые позиции проверяются относительно места
+  // назначения. На запоздавшие старые координаты клиент получает обычный fix.
+  resetMovement(a);
   ev(a, { k: 'move', x, z });
 }
 
@@ -173,6 +181,7 @@ export function cmdBuy(a, npcs, id, n) {
   if (!npcNear(a, npcs, 'merchant')) return say(a, 'Торговец далеко', 'bad');
   const it = ITEMS[id];
   if (!it || !SHOP.includes(id)) return say(a, 'Такого товара нет', 'bad');
+  if (!npcs.some(npc => npc.role === 'merchant' && flatDist(a,npc) < NPC_RANGE && (!npc.shop || SHOP_STOCK[npc.shop]?.includes(id)))) return say(a, 'В этой лавке нет такого товара', 'bad');
   n = clamp(n | 0 || 1, 1, 99);
   const cost = it.price * n;
   if (a.P.coins < cost) return say(a, 'Недостаточно монет', 'bad');

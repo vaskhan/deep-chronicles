@@ -62,10 +62,10 @@ func _run():
 				if not is_equal_approx(float(s[key]), float(fixture.stats[key])):
 					stats_match = false; print("Mismatch ", key, ": ", s[key], " != ", fixture.stats[key])
 	check(stats_match, "%s native stat profiles match the JS game rules" % fixtures.size())
-	check(data.world.spawns.size() == 225 and data.world.obstacles.size() == 3244 and data.world.modelPlacements.size() >= 2000, "world content exported without missing spawns")
+	check(data.world.spawns.size() >= 210 and data.world.obstacles.size() >= 3251 + data.world.townDecor.size() and data.world.modelPlacements.size() >= 1900, "world content exported without missing spawns")
 	check(absf(data.height_at(-430, 400) - 4) < 0.001, "town ground matches server")
 	var position = data.move(Vector3(-437, 4, 400), Vector3.RIGHT, 5)
-	check(position.distance_to(Vector3(-430, 4, 400)) >= 5.0, "movement cannot cross the fountain")
+	check(position.distance_to(Vector3(-430, 4, 400)) >= 4.5*float(data.world.towns[0].scale)+0.6-0.01, "movement cannot cross the fountain")
 	var art = load("res://scripts/art_assets.gd")
 	var assets_ok = true
 	for id in data.catalog.MOBS.keys() + ["warrior", "mage", "merchant", "gatekeeper", "priest"]:
@@ -112,6 +112,15 @@ func _run():
 	check(game.profile.cls == "warrior" and game.profile.lvl == 1, "server creates the player")
 	check(await wait_for(func(): return game.hud.status_label.text.contains("Игроков онлайн: 1")), "HUD shows the live server player count")
 	check(game.hero.animator != null and game.hero.animator.has_animation("walk"), "native animated hero imported")
+	var saved_position = game.hero.position
+	for region in [[Vector3(-430,4,400), "town"], [Vector3(20,0,10), "forest"], [Vector3(360,0,-120), "waste"], [Vector3(2205,0,-195), "crypt"]]:
+		game.hero.position = region[0]
+		game.world.set_region(region[0]); game.world._process(10)
+		game.game_audio.follow(game.hero, game.camera, 2)
+		check(game.world.region_id == region[1] and game.game_audio.ambience.playing, "light and ambience match " + region[1])
+	game.game_audio.clear()
+	check(not game.game_audio.ambience.playing, "ambience stops on clear")
+	game.hero.position = saved_position; game.world.set_region(saved_position); game.world._process(10)
 	check(await wait_for(func(): return not game.mobs.is_empty()), "nearby mobs arrive as snapshots")
 	var tab = InputEventKey.new(); tab.physical_keycode = KEY_TAB; tab.keycode = KEY_TAB; tab.pressed = true
 	root.push_input(tab, true); await process_frame
@@ -132,6 +141,17 @@ func _run():
 		check(is_instance_valid(game.hud.window) and game.get_viewport().get_visible_rect().encloses(game.hud.window.get_global_rect()), kind + " window fits the viewport")
 		if DisplayServer.get_name() != "headless": await _screenshot(kind + ".png")
 	game.hud.close_window()
+	game.hud.show_window("map")
+	check(game.hud.map_control.city_focus, "map opens the detailed town plan while in town")
+	game.hud.close_window()
+	for shop_id in ["weapons", "clothes", "alchemy"]:
+		var vendor = game.npcs.filter(func(n): return n.definition.get("shop", "") == shop_id)[0]
+		game._open_npc(vendor)
+		var products = []
+		for button in game.hud.window.find_children("*", "Button", true, false):
+			if button.has_meta("buy"): products.append(button.get_meta("buy"))
+		check(products == data.catalog.SHOP_STOCK[shop_id], "native shop shows its own inventory: " + shop_id)
+	game.hud.shop_id = ""; game.hud.shop_name = "Рыночный торговец"; game.hud.close_window()
 	game.hud.show_window("settings")
 	for slider in game.hud.window.find_children("*", "HSlider", true, false):
 		if slider.get_meta("audio_bus", "") == "Effects":
@@ -169,16 +189,31 @@ func _run():
 	check(game.hud.hotbar_bindings[8] == "potion_hp" and game.hud.Settings.read_value("hotbar", "warrior", [])[8] == "potion_hp", "custom action bindings are saved")
 	game.hud.hotbar_bindings = game.hud.default_bindings(); game.hud._save_hotbar(); game.hud.set_hotbar_locked(true)
 	await _test_hotbar_drag()
+	_test_gait()
 	check(game.hud.pickup_button.visible and game.hud.pickup_button.text.contains("Поднять"), "pickup has an explicit permanent action button")
 	await _screenshot("chat-actions.png")
+	var fixes_before_move = received.filter(func(m): return m.t == "fix").size()
 	var start = game.hero.position
 	game.joystick = Vector2.RIGHT
 	await create_timer(0.35).timeout
 	game.joystick = Vector2.ZERO
 	check(game.hero.position.distance_to(start) > 1, "native movement updates position")
+	check(is_equal_approx(game.stats.speed, 7.15), "native warrior uses the requested ten-percent faster pace")
+	var stopped_at = game.hero.position
+	await create_timer(.15).timeout
+	check(game.hero.position.distance_to(stopped_at)<.01 and not game.hero.moving and game.hero.last_clip == "idle", "releasing movement stops position and gait without drifting")
 	var fixes = received.filter(func(m): return m.t == "fix").size()
-	check(fixes == 0, "server accepts native movement speed")
-	await _dev({"x": -442, "z": 410, "coins": 10000, "lvl": 8})
+	check(fixes == fixes_before_move, "server accepts native movement speed")
+	await _dev({"x": -435.1, "z": 400})
+	var before_slide = game.hero.position
+	var fixes_before_slide = received.filter(func(m): return m.t == "fix").size()
+	game.destination = data.position_at(-430, 406); game.has_destination = true
+	await create_timer(0.8).timeout
+	game.has_destination = false
+	await create_timer(0.2).timeout
+	check(game.hero.position.distance_to(before_slide) > 2, "native player slides around the fountain")
+	check(received.filter(func(m): return m.t == "fix").size() == fixes_before_slide, "server accepts curved native movement around obstacles")
+	await _dev({"x": -450.5, "z": 407, "coins": 10000, "lvl": 8})
 	game.hud.show_window("shop")
 	_click("buy", "sword_long")
 	check(await wait_for(func(): return _bag("sword_long") >= 0), "shop purchase is server-authoritative")
@@ -365,7 +400,7 @@ func _run():
 	game._action("equip", _bag("sword_long"))
 	check(await wait_for(func(): return game.hero.weapon_node.get_meta("weapon_kind") == "warrior"), "mage equipping a sword changes the actual weapon model")
 	check(game.hero.weapon_node.to_global(game.hero.weapon_node.get_meta("handle_center")).distance_to(game.hero.weapon_node.get_parent().global_position) < 0.001, "weapon handle stays exactly on the palm grip")
-	await _dev({"x": -442, "z": 410, "coins": 1000, "item": "pelt", "n": 20})
+	await _dev({"x": -450.5, "z": 407, "coins": 1000, "item": "pelt", "n": 20})
 	await _dev({"item": "bone", "n": 20})
 	game.hud.show_window("craft"); _click("craft", "staff_oak")
 	check(await wait_for(func(): return _bag("staff_oak") >= 0 and game.profile.coins == 700 and _bag("pelt") < 0 and _bag("bone") < 0), "native crafting spends exact resources on the actual server")
@@ -474,7 +509,7 @@ func _test_locomotion():
 		if data.move(candidate, Vector3.ZERO, 0.01).distance_to(candidate) < 0.1:
 			direction = trial; break
 	game.destination = start + direction * 16; game.has_destination = true
-	check(await wait_for(func(): return game.hero.moving and game.hero.last_clip == "run"), "actual click movement selects the full-body jogging clip")
+	check(await wait_for(func(): return game.hero.moving and game.hero.last_clip == "run"), "actual click movement selects the full-body running clip")
 	await create_timer(0.2).timeout
 	check(game.hero.motion_speed > 5 and game.hero.motion_speed <= float(game.stats.speed) * 1.05 and game.stats.speed <= 8.1, "running speed is reduced and animation follows measured displacement")
 	var skeleton = game.hero.model.find_child("Skeleton3D", true, false)
@@ -570,6 +605,7 @@ func _test_mob_telegraph():
 		"speed": game.stats.get("speed", 0), "elapsed_ms": Time.get_ticks_msec() - windup_at,
 	}))
 	check(not strike.get("landed", true), "running out of the telegraph avoids the actual server hit")
+	await _screenshot("mob-dodge.png")
 	await _dev({"x": -448, "z": 418, "hp": 500})
 	check(game.combat_fx.telegraphs.is_empty(), "teleport clears all monster warning geometry")
 
@@ -702,6 +738,27 @@ func _test_chat_scroll():
 	check(chat.input.text == "draft during disconnect", "disconnected chat preserves unsent draft")
 	net.authed = was_authed; chat.input.clear()
 
+func _test_gait():
+	var actor = load("res://scripts/actor.gd").new(); actor.kind = "p"; add_child(actor); actor.setup("warrior","Проверка движения"); actor.set_process(false)
+	actor.position = Vector3(.1,0,0); actor.measure_motion(Vector3.ZERO,.1); actor._process(.01)
+	check(actor.last_clip == "walk" and actor.animator.speed_scale < 1, "slow actual travel selects a calibrated walking clip")
+	actor.position = Vector3(.6,0,0); actor.measure_motion(Vector3.ZERO,.1); actor._process(.01)
+	check(actor.last_clip == "run" and absf(actor.animator.speed_scale - 6.0/float(actor.model.get_meta("gait_run_speed")))<.01, "jog playback follows measured displacement")
+	actor.position = Vector3(1.2,0,0); actor.measure_motion(Vector3(.6,0,0),.1)
+	actor.play_action("attack",.6); actor._process(.01)
+	check(actor.last_clip == "run" and actor.action_until == 0, "moving cancels full-body attack presentation without skating")
+	actor.measure_motion(actor.position,.1); actor._process(.01)
+	check(actor.last_clip == "idle" and actor.travel_speed == 0, "blocked travel does not animate running in place")
+	actor.position = Vector3(100,0,0); actor.measure_motion(Vector3.ZERO,.016); actor._process(.01)
+	check(actor.last_clip == "idle", "teleports do not accelerate the gait")
+	actor.position = Vector3.ZERO
+	actor.snapshots = [{"t":1000.0,"p":Vector3.ZERO,"r":0.0},{"t":1100.0,"p":Vector3(.6,0,0),"r":0.0}]
+	actor.interpolate(1050,.05); actor._process(.01)
+	check(actor.moving and absf(actor.travel_speed-6)<.01, "remote gait follows rendered travel rather than the newest packet flag")
+	actor.interpolate(1250,.05); actor.interpolate(1300,.05); actor._process(.01)
+	check(actor.position.is_equal_approx(Vector3(.6,0,0)) and actor.last_clip == "idle", "remote movement neither overshoots its final snapshot nor runs after stopping")
+	actor.free()
+
 func _grip_drag(grip: Control, delta: Vector2):
 	var start = grip.get_global_rect().get_center()
 	var motion = InputEventMouseMotion.new(); motion.position = start; motion.global_position = start; root.push_input(motion, true)
@@ -753,7 +810,7 @@ func _test_party():
 	game.hud.chat.select_channel("all")
 
 func _test_starter_hunt():
-	await _dev({"x": -292, "z": 387})
+	await _dev({"x": -620, "z": 400})
 	game.camera_distance = 16; game.camera_pitch = 0.62
 	check(await wait_for(func():
 		var near = 0

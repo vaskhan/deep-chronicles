@@ -52,6 +52,9 @@ static func actor(id: String) -> Node3D:
 			player.add_animation_library("", library)
 	var box = aabb(result)
 	var factor = float(entry.get("height", 2.4)) / maxf(box.size.y, 0.01)
+	if entry.get("rig", "") == "canonical":
+		result.set_meta("gait_walk_speed",1.04985*factor)
+		result.set_meta("gait_run_speed",5.27730*factor)
 	result.scale = Vector3.ONE * factor
 	result.position = Vector3(-box.get_center().x, -box.position.y, -box.get_center().z) * factor
 	result.rotation.y = float(entry.get("yaw", 0))

@@ -65,8 +65,8 @@ func follow(hero, camera, dt: float):
 	if not hero.moving or hero.dead or hero.casting:
 		step_distance = 0; return
 	step_distance += minf(traveled, 2)
-	if step_distance >= hero.stride_length * 0.5:
-		step_distance = fmod(step_distance, hero.stride_length * 0.5)
+	if step_distance >= hero.step_length:
+		step_distance = fmod(step_distance, hero.step_length)
 		var stone = hero.position.x > 2100 or GameData.world.towns.any(func(t): return Vector2(hero.position.x - t.x, hero.position.z - t.z).length() < t.r)
 		play_at("step_concrete" if stone else "step_grass", hero.global_position, -5)
 

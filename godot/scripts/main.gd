@@ -25,6 +25,7 @@ var joystick = Vector2.ZERO
 var camera_yaw = Tuning.CAMERA_YAW_START
 var camera_pitch = Tuning.CAMERA_PITCH_START
 var camera_distance = Tuning.CAMERA_DISTANCE_START
+var movement_path: Array = []
 var state_timer = 0.0
 var ui_timer = 0.0
 var cast_time = 0.0
@@ -121,6 +122,7 @@ func _login(data: Dictionary):
 func _message(m: Dictionary):
 	match m.get("t", ""):
 		"authok":
+			movement_path.clear()
 			var same_character = profile.get("name", "") == m.name
 			auth_ready_at = Time.get_ticks_msec()
 			own_id = int(m.id)
@@ -225,7 +227,7 @@ func _event(e: Dictionary):
 		"cd": cooldowns[e.id] = Time.get_ticks_msec() + float(e.cd) * 1000
 		"attack_start":
 			if is_instance_valid(source):
-				source.begin_attack(float(e.t))
+				source.begin_attack(float(e.t),float(e.get("windup",float(e.t)*.35)))
 				if source.base_model != "mage": combat_fx.swing(source); game_audio.play_at("swing", source.position)
 		"attack_release":
 			if is_instance_valid(source): source.release_attack()
@@ -327,10 +329,15 @@ func _event(e: Dictionary):
 		"move": _place(float(e.x), float(e.z)); hud.close_window()
 
 func _place(x: float, z: float):
+	movement_path.clear()
 	if not is_instance_valid(hero): return
 	combat_fx.clear(); hero.cancel_presentation(); cast_time = 0; run_speed = 0
 	hero.position = GameData.position_at(x, z); has_destination = false; attacking = false; pending_skill = ""; talking_to = null; pending_pickup = ""
 	set_target(null); marker.hide(); initial_camera = true
+
+func _send_position():
+	Network.send({"t": "st", "x": hero.position.x, "y": hero.position.y, "z": hero.position.z, "r": hero.rotation.y, "a": (1 if hero.moving else 0) | (2 if hero.attack_time > 0 else 0) | (4 if hero.casting else 0) | (8 if hero.dead else 0), "path": movement_path})
+	movement_path.clear()
 
 func _process(dt):
 	if profile.is_empty() or not is_instance_valid(hero):
@@ -338,13 +345,16 @@ func _process(dt):
 		if not capture_path.is_empty() and not screenshot_done and Network.online and Time.get_ticks_msec() > 8000:
 			screenshot_done = true; _capture()
 		return
+	var frame_dt = dt
 	dt = minf(dt, 0.1)
 	cast_time = maxf(0, cast_time - dt); hero.casting = cast_time > 0; hero.moving = false
+	var before_motion = hero.position
 	if Network.authed and not hero.dead and cast_time <= 0: _move_hero(dt)
+	hero.measure_motion(before_motion,frame_dt)
 	var time = Time.get_unix_time_from_system() * 1000 - clock_offset - 150
 	for actor in mobs.values() + players.values():
 		if Time.get_ticks_msec() - actor.seen > 1500: actor.hide()
-		elif actor.visible: actor.interpolate(time)
+		elif actor.visible: actor.interpolate(time, frame_dt)
 		actor.label.visible = actor.visible and hero.position.distance_to(actor.position) < Tuning.LABEL_RANGE_ACTOR
 	for drop in ground_loot.values(): drop.label.visible = hero.position.distance_to(drop.position) < Tuning.LABEL_RANGE_LOOT
 	for npc in npcs: npc.label.visible = hero.position.distance_to(npc.position) < Tuning.LABEL_RANGE_NPC
@@ -358,12 +368,12 @@ func _process(dt):
 	else: selection.hide(); target_arrow.hide()
 	hero.status = 2 if profile.get("karma", 0) > 0 else (1 if flag_until > Time.get_ticks_msec() else 0)
 	_update_camera(dt); world.set_region(hero.position)
-	game_audio.follow(hero, camera, dt)
+	game_audio.follow(hero, camera, frame_dt)
 	state_timer += dt; ui_timer += dt
-	if state_timer >= 0.1:
+	if state_timer >= 0.1 or movement_path.size() >= 48:
 		state_timer = 0
 		if Network.authed:
-			Network.send({"t": "st", "x": hero.position.x, "y": hero.position.y, "z": hero.position.z, "r": hero.rotation.y, "a": (1 if hero.moving else 0) | (2 if hero.attack_time > 0 else 0) | (4 if hero.casting else 0) | (8 if hero.dead else 0)})
+			_send_position()
 	if ui_timer >= 0.2:
 		ui_timer = 0; stats = GameData.stats(profile, buffs)
 		hud.active_buffs = buffs
@@ -391,7 +401,7 @@ func _move_hero(dt):
 		if offset.length() > float(GameData.catalog.UI_RULES.loot.pickupRange) - 0.65:
 			direction = offset.normalized(); distance = minf(distance, offset.length())
 		elif pickup_sent_at == 0:
-			Network.send({"t": "st", "x": hero.position.x, "y": hero.position.y, "z": hero.position.z, "r": hero.rotation.y, "a": 0})
+			_send_position()
 			Network.send({"t": "pickup", "id": pending_pickup}); pickup_sent_at = Time.get_ticks_msec()
 		elif Time.get_ticks_msec() - pickup_sent_at > 2500:
 			pending_pickup = ""; pickup_sent_at = 0; hud.log_line("Сервер не подтвердил подбор. Попробуйте ещё раз.")
@@ -403,6 +413,7 @@ func _move_hero(dt):
 		else:
 			hero.rotation.y = atan2(offset.x, offset.z)
 			if pending_skill != "":
+				if not movement_path.is_empty(): _send_position()
 				Network.send({"t": "skill", "id": pending_skill}); pending_skill = ""
 	elif has_destination:
 		var offset = destination - hero.position; offset.y = 0
@@ -415,8 +426,14 @@ func _move_hero(dt):
 		run_speed = move_toward(run_speed, float(stats.speed), float(stats.speed) * 6.0 * dt)
 		distance = minf(distance, run_speed * dt)
 		var before = hero.position
-		hero.position = GameData.move(hero.position, direction, distance)
-		hero.rotation.y = lerp_angle(hero.rotation.y, atan2(direction.x, direction.z), minf(1, dt * 15))
+		var heading = atan2(direction.x,direction.z)
+		hero.rotation.y = rotate_toward(hero.rotation.y,heading,dt*12.0)
+		# Start turning before running; a reversal should not translate backwards.
+		distance *= maxf(0,cos(angle_difference(hero.rotation.y,heading)))
+		hero.position = GameData.move(hero.position, direction, distance, movement_path)
+		var actual = hero.position-before; actual.y = 0
+		if actual.length_squared()>.00001:
+			hero.rotation.y = rotate_toward(hero.rotation.y,atan2(actual.x,actual.z),dt*12.0)
 		hero.moving = before.distance_squared_to(hero.position) > 0.00001
 	else: run_speed = 0
 
@@ -460,6 +477,7 @@ func use_skill(id: String):
 		if distance > sk.get("range", stats.range) + target.radius:
 			pending_skill = id; attacking = true; has_destination = false; return
 		hero.rotation.y = atan2(target.position.x - hero.position.x, target.position.z - hero.position.z)
+	if not movement_path.is_empty(): _send_position()
 	Network.send({"t": "skill", "id": id})
 
 func next_target():
@@ -483,6 +501,8 @@ func _talk(npc):
 	else: destination = npc.position; has_destination = true; talking_to = npc
 
 func _open_npc(npc):
+	if npc.definition.role == "merchant":
+		hud.shop_id = npc.definition.get("shop", ""); hud.shop_name = npc.definition.name
 	var kind = {"merchant": "shop", "gatekeeper": "teleport", "priest": "priest"}.get(npc.definition.role, "")
 	if kind != "": hud.show_window(kind)
 	else: hud.log_line("Страж охраняет город от убийц.")

@@ -13,6 +13,8 @@ var label: Label3D
 var hp = 100.0
 var dead = false
 var death_elapsed = 0.0
+var corpse_materials: Array = []
+var corpse_opacity = 1.0
 var model_rest_y = 0.0
 var moving = false
 var casting = false
@@ -37,12 +39,17 @@ var cast_remaining = 0.0
 var cast_skill = ""
 var previous_attack_flag = false
 var motion_speed = 0.0
+var external_motion_sample = false
+var travel_speed: float:
+	get: return motion_speed
 var motion_distance = 0.0
 var previous_position = Vector3.ZERO
 var have_motion_sample = false
 var stride_length = 3.8
 var visual_height = 2.5
 var attack_sequence = 0
+var attack_recovery = .65
+var step_length = 1.5
 var windup_remaining = 0.0
 var winding_up = false
 var windup_clip_time = 0.0
@@ -165,23 +172,34 @@ func snapshot(row: Array, timestamp: float):
 	if attack_flag and not previous_attack_flag and action_until <= 0 and windup_remaining <= 0: play_action("attack")
 	previous_attack_flag = attack_flag
 	dead = (flags & 8) != 0; hp = row[6]
+	if kind == "m" and dead and row.size() > 8: death_elapsed = maxf(death_elapsed,float(row[8])/1000.0)
 	status = int(row[7]) if row.size() > 7 else 0
 	seen = Time.get_ticks_msec(); visible = true
 
-func interpolate(time: float):
-	if winding_up: return
+func measure_motion(before: Vector3, dt: float):
+	var displacement = position-before; displacement.y = 0
+	var traveled = displacement.length() if displacement.length()<3.0 else 0.0
+	motion_speed = traveled/maxf(dt,.001)
+	moving = motion_speed > .05 and not dead and not winding_up
+	if moving: motion_distance += traveled
+	else: motion_speed = 0
+	previous_position = position; have_motion_sample = true; external_motion_sample = true
+
+func interpolate(time: float, dt = .016):
+	if winding_up:
+		measure_motion(position,dt); return
 	while snapshots.size() > 2 and snapshots[1].t <= time: snapshots.pop_front()
-	if snapshots.size() < 2: return
+	if snapshots.size() < 2:
+		measure_motion(position,dt); return
 	var a = snapshots[0]; var b = snapshots[1]
-	var factor = clampf((time - a.t) / maxf(1, b.t - a.t), 0, 1.5)
-	position = a.p.lerp(b.p, factor); rotation.y = lerp_angle(a.r, b.r, minf(1, factor))
+	var factor = clampf((time - a.t) / maxf(1, b.t - a.t), 0, 1)
+	var before = position
+	position = a.p.lerp(b.p, factor); rotation.y = lerp_angle(a.r, b.r, factor)
+	measure_motion(before,dt)
 
 func _process(dt):
-	var displacement = position - previous_position; displacement.y = 0
-	var traveled = displacement.length() if have_motion_sample and displacement.length() < 4.0 else 0.0
-	previous_position = position; have_motion_sample = true
-	motion_speed = lerpf(motion_speed, traveled / maxf(dt, 0.001), 1.0 - exp(-dt * 14.0))
-	if moving and not dead: motion_distance += traveled
+	if not external_motion_sample: measure_motion(previous_position if have_motion_sample else position,dt)
+	external_motion_sample = false
 	attack_time = maxf(0, attack_time - dt)
 	action_until = maxf(0, action_until - dt)
 	cast_remaining = maxf(0, cast_remaining - dt)
@@ -193,10 +211,13 @@ func _process(dt):
 	if moving and not dead and action_until <= 0:
 		model.rotation.x += clampf(motion_speed / 8.0, 0, 1) * 0.065
 	death_elapsed = death_elapsed + dt if dead else 0.0
-	if kind == "m": model.position.y = model_rest_y - maxf(0, death_elapsed - 3.0) * 0.65
+	if kind == "m": _update_corpse()
 	if not animator or not animator.has_animation("death"):
 		model.rotation.z = lerp_angle(model.rotation.z, PI / 2 if dead else 0, minf(1, dt * 10))
-	var locomotion = "run" if motion_speed > 3.0 and animator and animator.has_animation("run") else "walk"
+	if moving and not winding_up and not casting and cast_remaining <= 0 and (action_clip.begins_with("attack") or action_clip in ["release","hit"]):
+		action_until = 0; attack_time = 0
+	var run_threshold = 2.7 if model.has_meta("gait_run_speed") else 5.0
+	var locomotion = "run" if motion_speed > run_threshold and animator and animator.has_animation("run") else "walk"
 	var clip = "cast" if casting or cast_remaining > 0 else (locomotion if moving and motion_speed > 0.2 else "idle")
 	if action_until > 0: clip = action_clip
 	elif attack_time > 0 and not casting: clip = "attack"
@@ -213,14 +234,50 @@ func _process(dt):
 		animator.play(clip, 0.14, action_speed if action_until > 0 and not dead else 1.0); last_clip = clip
 	if animator and clip in ["walk", "run"] and not dead:
 		var stride = stride_length if clip == "run" else stride_length * 0.48
-		animator.speed_scale = clampf(motion_speed * animator.get_animation(clip).length / stride, 0.45, 2.1)
+		var reference = float(model.get_meta("gait_walk_speed" if clip == "walk" else "gait_run_speed",stride/animator.get_animation(clip).length))
+		animator.speed_scale = clampf(motion_speed/reference,.05,3.0)
+		step_length = reference*animator.get_animation(clip).length*.5
 	elif animator and not winding_up: animator.speed_scale = 1.0
+	if dead and animator and animator.has_animation("death"):
+		animator.seek(minf(death_elapsed,animator.get_animation("death").length),true)
 	if health_bar:
 		health_bar.visible = label.visible and not dead and (selected or hp < 100 or windup_remaining > 0)
 		health_fill.visible = health_bar.visible; health_fill.mesh.size.x = maxf(0.01, 1.4 * hp / 100.0)
 	if label:
 		label.text = display_name + (" · повержен" if dead else "")
 		label.modulate = Color("ffe3a6") if selected else (Color("ff7373") if status == 2 else (Color("d49bff") if status == 1 else (Color("e7d8ab") if kind == "n" else Color.WHITE)))
+		if kind == "m": label.modulate.a = corpse_opacity
+
+func _update_corpse():
+	# Keep the body on the ground. Duplicate only this corpse's materials:
+	# imported meshes/materials are shared with every living instance.
+	if not dead:
+		for entry in corpse_materials:
+			if not is_instance_valid(entry.node): continue
+			if entry.surface < 0: entry.node.material_override = entry.original
+			else: entry.node.set_surface_override_material(entry.surface,entry.original)
+		corpse_materials.clear(); model.visible = true; corpse_opacity = 1.0
+		return
+	var fall = animator.get_animation("death").length if animator and animator.has_animation("death") else .6
+	var rules = GameData.catalog.UI_RULES.corpse
+	var fade = clampf((death_elapsed-fall-float(rules.holdSeconds))/float(rules.fadeSeconds),0,1)
+	model.visible = fade < 1
+	corpse_opacity = 1-fade
+	if fade <= 0: return
+	if corpse_materials.is_empty():
+		for node in model.find_children("*","MeshInstance3D",true,false):
+			if not node.mesh: continue
+			var surfaces = [-1] if node.material_override else range(node.mesh.get_surface_count())
+			for surface in surfaces:
+				var original = node.material_override if surface < 0 else node.get_surface_override_material(surface)
+				var source = original if original else node.mesh.surface_get_material(surface)
+				if not source is BaseMaterial3D: continue
+				var mat = source.duplicate(); mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				corpse_materials.append({"node":node,"surface":surface,"original":original,"material":mat,"alpha":mat.albedo_color.a})
+				if surface < 0: node.material_override = mat
+				else: node.set_surface_override_material(surface,mat)
+	for entry in corpse_materials:
+		entry.material.albedo_color.a = entry.alpha*(1-fade)
 
 func play_action(clip: String, duration = 0.0):
 	if dead or not animator or not animator.has_animation(clip): return
@@ -232,13 +289,15 @@ func play_action(clip: String, duration = 0.0):
 	animator.play(clip, 0.08, action_speed); animator.seek(0, true); last_clip = clip
 	if clip.begins_with("attack"): attack_time = action_until
 
-func begin_attack(duration: float):
+func begin_attack(duration: float, windup = -1.0):
 	attack_sequence += 1
 	var clip = "attack_alt" if attack_sequence % 2 == 0 and animator and animator.has_animation("attack_alt") else "attack"
 	if not animator or not animator.has_animation(clip): return
-	play_action(clip, duration / 0.35)
+	if windup < 0: windup = duration*.35
+	attack_recovery = maxf(.1,duration-windup)
+	play_action(clip, duration)
 	windup_clip_time = animator.get_animation(clip).length * 0.35
-	windup_remaining = duration; winding_up = true
+	windup_remaining = windup; winding_up = true
 
 func release_attack():
 	windup_remaining = 0; winding_up = false
@@ -246,7 +305,7 @@ func release_attack():
 	var clip = action_clip
 	# Preserve current clip and hand pose through the impact, then recover.
 	var remaining = animator.get_animation(clip).length - windup_clip_time
-	action_until = 0.38; attack_time = action_until
+	action_until = attack_recovery; attack_time = action_until
 	action_speed = remaining / action_until
 	animator.speed_scale = 1.0; animator.play(clip, 0, action_speed); animator.seek(windup_clip_time, true)
 
@@ -280,7 +339,7 @@ func release_cast():
 
 func cancel_presentation():
 	cast_remaining = 0; cast_skill = ""; casting = false; action_until = 0; attack_time = 0
-	windup_remaining = 0; winding_up = false; hit_recoil = 0; motion_speed = 0; have_motion_sample = false
+	windup_remaining = 0; winding_up = false; hit_recoil = 0; motion_speed = 0; have_motion_sample = false; external_motion_sample = false; moving = false
 	if animator: animator.speed_scale = 1.0
 
 func cast_origin() -> Vector3:

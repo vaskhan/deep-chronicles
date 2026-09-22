@@ -8,7 +8,7 @@ export const CLASSES = {
   warrior: {
     name: 'Воин', color: 0xb04030,
     attr: { str: 40, dex: 30, con: 43, int: 21, wit: 11, men: 25 },
-    base: { hp: 120, mp: 30, patk: 9, matk: 3, pdef: 40, mdef: 30, aspd: 1.0, speed: 8, crit: 0.08 },
+    base: { hp: 120, mp: 30, patk: 9, matk: 3, pdef: 40, mdef: 30, aspd: 0.8, speed: 26, crit: 0.08 },
     grow: { hp: 22, mp: 4, patk: 2.2, matk: 0.4, pdef: 2.0, mdef: 1.2 },
     skills: ['power_strike', 'battle_cry', 'whirlwind'],
     range: 3.2,
@@ -16,7 +16,7 @@ export const CLASSES = {
   mage: {
     name: 'Маг', color: 0x3050c0,
     attr: { str: 22, dex: 21, con: 27, int: 41, wit: 20, men: 39 },
-    base: { hp: 80, mp: 90, patk: 4, matk: 12, pdef: 30, mdef: 45, aspd: 0.8, speed: 7.4, crit: 0.05 },
+    base: { hp: 80, mp: 90, patk: 4, matk: 12, pdef: 30, mdef: 45, aspd: 0.64, speed: 24, crit: 0.05 },
     grow: { hp: 13, mp: 14, patk: 0.6, matk: 2.6, pdef: 1.2, mdef: 2.0 },
     skills: ['fire_bolt', 'heal', 'ice_nova'],
     range: 22,
@@ -172,3 +172,10 @@ for (const id of [...SETS.bone.parts, ...SETS.abyss.parts, 'shield_bone', 'ear_l
   RECIPES[id] = { coins: main ? 6000 : 2500, materials: { lich_seal: main ? 4 : 2, crystal: main ? 60 : 25, ectoplasm: main ? 30 : 12 } };
 }
 RECIPES.robe_abyss = { coins: 8500, materials: { lich_seal: 6, crystal: 85, ectoplasm: 42 } };
+
+// Ассортимент стационарных городских лавок. Рыночный торговец сохраняет общий каталог.
+export const SHOP_STOCK = {
+  weapons: SHOP.filter(id => ['weapon','shield'].includes(ITEMS[id].slot)),
+  clothes: SHOP.filter(id => ['head','armor','legs','gloves','feet'].includes(ITEMS[id].slot)),
+  alchemy: SHOP.filter(id => !ITEMS[id].slot || ['ear','neck','ring'].includes(ITEMS[id].slot)),
+};

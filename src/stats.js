@@ -1,4 +1,5 @@
 // Расчёт характеристик персонажа: класс, уровень, атрибуты, экипировка, заточка, комплекты, вес. Без DOM — проверяется юнит-тестами.
+import { MOVE_SCALE } from './movement.js';
 import { CLASSES, ITEMS, SETS, SLOTS } from './data.js';
 
 export const MAX_ENCH = 16;
@@ -62,6 +63,7 @@ export function calcStats(P, buffs = [], now = 0) {
   if (s.load > s.cap * 0.7) { s.speed *= 0.6; s.regen = 0.5; }
   for (const b of buffs) if (b.until > now) s[b.stat] *= b.mul;
   s.maxHp = Math.round(s.maxHp); s.maxMp = Math.round(s.maxMp);
+  s.speed *= MOVE_SCALE;
   return s;
 }
 

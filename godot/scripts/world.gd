@@ -6,17 +6,23 @@ var environment: WorldEnvironment
 var sun: DirectionalLight3D
 var portals: Array = []
 var underground = false
-var daylight_energy = 1.1
+var atmosphere: Dictionary = {}
+var region_id = ""
 
 func build():
 	_lighting()
 	_terrain()
 	_props()
 	_models()
+	_town_details()
+	var dressing = preload("res://scripts/world_dressing.gd").new()
+	add_child(dressing)
+	var town_decor = preload("res://scripts/town_decor.gd").new()
+	add_child(town_decor); town_decor.build()
 	_watchfires()
 	_portal(GameData.position_at(150, 258.5), Color("9c75ff"))
 	_portal(Vector3(2205, 0, -195), Color("c6a4ff"))
-	for t in GameData.world.towns: _portal(GameData.position_at(t.x + 18, t.z + 16), Color("70d5f0"))
+	for t in GameData.world.towns: _portal(GameData.position_at(t.x + 18*t.scale, t.z + 16*t.scale), Color("70d5f0"))
 	for i in 6:
 		var light = OmniLight3D.new()
 		light.position = Vector3(2200 + (i % 3 + 0.5) * 66, 6, -200 + (int(i / 3.0) + 0.5) * 99)
@@ -26,19 +32,44 @@ func build():
 func _lighting():
 	environment = $WorldEnvironment; sun = $Sun
 	environment.environment = environment.environment.duplicate(true)
-	daylight_energy = sun.light_energy
 
+# Переходы света плавные; подземелье сразу получает тёмный фон неба.
 func set_region(pos: Vector3):
-	var is_under = pos.x > 2100
-	if is_under == underground: return
-	underground = is_under
+	var zone = GameData.zone_at(pos)
+	var id = "town" if zone.get("town", false) else str(zone.id)
+	if id == region_id: return
+	region_id = id; underground = id == "crypt"
+	atmosphere = {
+		"town": {"fog": Color("acbbc2"), "density": 0.00012, "sun": Color("ffe0b0"), "energy": 1.15, "ambient": 0.28},
+		"meadow": {"fog": Color("a8bec5"), "density": 0.00016, "sun": Color("fff0cf"), "energy": 1.1, "ambient": 0.35},
+		"forest": {"fog": Color("6f9293"), "density": 0.00045, "sun": Color("e5ecd1"), "energy": 1.05, "ambient": 0.23},
+		"waste": {"fog": Color("c4a589"), "density": 0.00025, "sun": Color("ffdbb6"), "energy": 1.15, "ambient": 0.32},
+		"crypt": {"fog": Color("191e30"), "density": 0.008, "sun": Color("9fb1da"), "energy": 0.12, "ambient": 0.23},
+	}.get(id, {})
 	var e = environment.environment
 	e.background_mode = Environment.BG_COLOR if underground else Environment.BG_SKY
 	e.background_color = Color("11121b")
-	e.ambient_light_energy = 0.3 if underground else 0.32
-	e.fog_light_color = Color("191723") if underground else Color("576675")
-	e.fog_density = 0.008 if underground else 0.0015
-	sun.light_energy = 0.18 if underground else daylight_energy
+
+func _town_details():
+	var cloth = ShaderMaterial.new(); cloth.shader = load("res://shaders/banner.gdshader")
+	var iron = StandardMaterial3D.new(); iron.albedo_color = Color("34333b"); iron.metallic = 0.75; iron.roughness = 0.5
+	var glow = StandardMaterial3D.new(); glow.albedo_color = Color("ffd398")
+	glow.emission_enabled = true; glow.emission = Color("ffb45f"); glow.emission_energy_multiplier = 1.8
+	for town in GameData.world.townTemples:
+		for side in [-1, 1]:
+			var banner = MeshInstance3D.new(); var fabric = QuadMesh.new(); fabric.size = Vector2(2.1, 5.5)
+			banner.mesh = fabric; banner.material_override = cloth
+			banner.position = GameData.position_at(town.x + side * 5.3 * town.scale, town.z + 7.2 * town.scale) + Vector3.UP * 9
+			banner.visibility_range_end = 160; add_child(banner)
+			var rail = MeshInstance3D.new(); var bar = BoxMesh.new(); bar.size = Vector3(2.5, 0.12, 0.18)
+			rail.mesh = bar; rail.material_override = iron; rail.position = banner.position + Vector3.UP * 2.8; add_child(rail)
+			var lamp = MeshInstance3D.new(); var lantern = CylinderMesh.new()
+			lantern.top_radius = 0.2; lantern.bottom_radius = 0.3; lantern.height = 0.65; lantern.radial_segments = 6
+			lamp.mesh = lantern; lamp.material_override = glow
+			lamp.position = GameData.position_at(town.x + side * 7.0*town.scale, town.z + 7.2*town.scale) + Vector3.UP * 5.5; add_child(lamp)
+			var light = OmniLight3D.new(); light.position = lamp.position
+			light.light_color = Color("ffc07b"); light.light_energy = 1.8; light.omni_range = 9; light.distance_fade_enabled = true
+			light.distance_fade_begin = 60; light.distance_fade_length = 20; add_child(light)
 
 func _terrain():
 	var material = ShaderMaterial.new()
@@ -46,9 +77,12 @@ func _terrain():
 	for key in ["grass", "forest", "sand", "dirt", "rock", "snow"]:
 		var path = "res://assets/terrain/%s.png" % key
 		material.set_shader_parameter(key, load(path if ResourceLoader.exists(path) else "res://generated/tex/t_%s.png" % key))
-	for key in ["ground", "paving"]:
-		for layer in ["albedo", "normal", "roughness"]:
-			material.set_shader_parameter(key + "_" + layer, load("res://assets/materials/%s_%s.jpg" % [key, layer]))
+	material.set_shader_parameter("grass", load("res://assets/terrain/pbr/meadow-albedo.png"))
+	material.set_shader_parameter("sand", load("res://assets/terrain/pbr/badlands-albedo.png"))
+	material.set_shader_parameter("forest", load("res://assets/terrain/pbr/forrest_ground_01_diff_2k.jpg"))
+	material.set_shader_parameter("forest_normal", load("res://assets/terrain/pbr/forrest_ground_01_nor_gl_2k.jpg"))
+	material.set_shader_parameter("forest_roughness", load("res://assets/terrain/pbr/forrest_ground_01_rough_2k.jpg"))
+	material.set_shader_parameter("forest_height", load("res://assets/terrain/pbr/forrest_ground_01_disp_2k.jpg"))
 	# Chunked meshes let the engine cull terrain behind the camera.
 	for cz in range(-1000, 1000, 100):
 		for cx in range(-1000, 1000, 100):
@@ -56,7 +90,12 @@ func _terrain():
 			for z in 26:
 				for x in 26:
 					var px = cx + x * 4.0; var pz = cz + z * 4.0
-					vertices.append(GameData.position_at(px, pz))
+					var ground = GameData.position_at(px, pz)
+					# Ходьба по причалам использует отметку настила; дно под ними остаётся под водой.
+					if px > -317 and px < -268:
+						for pier_z in [425,450,475]:
+							if absf(pz-pier_z)<8: ground.y = -13
+					vertices.append(ground)
 					normals.append(Vector3(GameData.height_at(px - 1, pz) - GameData.height_at(px + 1, pz), 2, GameData.height_at(px, pz - 1) - GameData.height_at(px, pz + 1)).normalized())
 					if x < 25 and z < 25:
 						var a = z * 26 + x
@@ -68,9 +107,7 @@ func _terrain():
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF; add_child(node)
 	var water = MeshInstance3D.new(); var plane = PlaneMesh.new(); plane.size = Vector2(2000, 2000)
 	water.mesh = plane; water.position.y = -6.5
-	var wm = StandardMaterial3D.new(); wm.albedo_color = Color(0.24, 0.5, 0.65, 0.86)
-	wm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; wm.roughness = 0.25
-	wm.albedo_texture = load("res://generated/tex/water.png"); wm.uv1_scale = Vector3(160, 160, 160)
+	var wm = ShaderMaterial.new(); wm.shader = preload("res://shaders/living_water.gdshader")
 	water.material_override = wm; water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF; add_child(water)
 
 func _props():
@@ -129,11 +166,27 @@ func _portal(pos: Vector3, col: Color):
 	node.material_override = m; add_child(node); portals.append(node)
 
 func _process(dt):
+	if not atmosphere.is_empty():
+		var blend = 1.0 - exp(-dt * 1.8)
+		var e = environment.environment
+		e.fog_light_color = e.fog_light_color.lerp(atmosphere.fog, blend)
+		e.fog_density = lerpf(e.fog_density, atmosphere.density, blend)
+		e.ambient_light_energy = lerpf(e.ambient_light_energy, atmosphere.ambient, blend)
+		sun.light_color = sun.light_color.lerp(atmosphere.sun, blend)
+		sun.light_energy = lerpf(sun.light_energy, atmosphere.energy, blend)
 	for p in portals: p.rotate_y(dt * 0.35)
 
 func _models():
 	var groups: Dictionary = {}
-	for row in GameData.world.get("modelPlacements", []):
+	for original_row in GameData.world.get("modelPlacements", []):
+		var row = original_row.duplicate()
+		if row[0] in ["oak", "pine"]:
+			var zone = GameData.zone_at(Vector3(row[1], row[2], row[3]))
+			var choice = posmod(hash("tree:%s:%s" % [row[1],row[3]]), 100)
+			if zone.id == "forest": row[0] = "pine_natural" if choice < 50 else ("elm_slender" if choice < 77 else "alder_round")
+			else: row[0] = "elm_field" if choice < 48 else ("alder_round" if choice < 78 else ("elm_slender" if choice < 94 else "pine_natural"))
+		if row[0] in ["elm_field", "elm_slender", "alder_round", "pine_natural"]:
+			row[5] *= 1.2; row[7] *= 1.2
 		var key = "%s_%s_%s" % [row[0], floori(row[1] / 100), floori(row[3] / 100)]
 		if not groups.has(key): groups[key] = []
 		groups[key].append(row)
@@ -149,7 +202,19 @@ func _models():
 				var local = mesh.transform; var parent = mesh.get_parent()
 				while parent != source and parent is Node3D:
 					local = parent.transform * local; parent = parent.get_parent()
-				parts.append({"mesh": mesh.mesh, "transform": local})
+				var display_mesh = mesh.mesh
+				if id in ["elm_field","elm_slender","alder_round","pine_natural"]:
+					display_mesh = display_mesh.duplicate()
+					for surface in display_mesh.get_surface_count():
+						var original = display_mesh.surface_get_material(surface)
+						if original is StandardMaterial3D and "foliage" in original.resource_name:
+							var leaf = ShaderMaterial.new(); leaf.shader = preload("res://shaders/tree_leaf.gdshader")
+							leaf.set_shader_parameter("leaf_texture", load("res://assets/terrain/pbr/spruce-spray.png" if id == "pine_natural" else "res://assets/terrain/pbr/elm-leaf.png"))
+							display_mesh.surface_set_material(surface, leaf)
+						elif original is StandardMaterial3D and "bark" in original.resource_name.to_lower():
+							var bark = original.duplicate(); bark.albedo_color = Color("695444") if id != "elm_slender" else Color("a3977e")
+							display_mesh.surface_set_material(surface, bark)
+				parts.append({"mesh": display_mesh, "transform": local})
 			sources[id] = {"box": Art.aabb(source), "parts": parts}
 			source.free()
 		var box: AABB = sources[id].box
@@ -164,7 +229,7 @@ func _models():
 				var transform = Transform3D(basis, Vector3(r[1], r[2], r[3]) + basis * offset)
 				mm.set_instance_transform(i, transform * part.transform)
 			var node = MultiMeshInstance3D.new(); node.name = "Art_" + id; node.multimesh = mm
-			node.visibility_range_end = 360 if id in ["oak", "pine", "rock_a", "rock_b", "bush"] else 800
+			node.visibility_range_end = 360 if id in ["oak", "pine", "elm_field", "elm_slender", "alder_round", "pine_natural", "rock_a", "rock_b", "bush"] else 800
 			node.visibility_range_end_margin = 30
 			add_child(node)
 
@@ -172,7 +237,7 @@ func _watchfires():
 	# A few warm pools guide the route out of the cold town; range limits mobile cost.
 	for town in GameData.world.towns:
 		for offset in [Vector2(87, -13), Vector2(87, -3), Vector2(-18, 10), Vector2(18, -16)]:
-			var pos = GameData.position_at(town.x + offset.x, town.z + offset.y)
+			var pos = GameData.position_at(town.x + offset.x*town.scale, town.z + offset.y*town.scale)
 			var lamp = OmniLight3D.new(); lamp.position = pos + Vector3.UP * 2.0
 			lamp.light_color = Color("ffa254"); lamp.light_energy = 2.8; lamp.omni_range = 10; lamp.shadow_enabled = false; add_child(lamp)
 			var brazier = MeshInstance3D.new(); var bowl = CylinderMesh.new(); bowl.top_radius = 0.38; bowl.bottom_radius = 0.16; bowl.height = 0.45

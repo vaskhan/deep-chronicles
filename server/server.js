@@ -5,13 +5,14 @@ import { WebSocketServer } from 'ws';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './accounts.js';
-import { zoneAt, TOWNS, DUNGEON, CRYPT, heightAt } from '../src/world-core.js';
+import { zoneAt, TOWNS, DUNGEON, CRYPT, heightAt, obstacles } from '../src/world-core.js';
 import { PVP, karmaForPk, karmaWashCost } from '../src/pvp.js';
 import { effectiveSkill, spForKill } from '../src/progression.js';
 import { CLASSES, SKILLS, ITEMS } from '../src/data.js';
-import { calcDmg, missChance, evaChance, flatDist, clamp } from '../src/sim.js';
+import { heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp } from '../src/sim.js';
 import { createParties } from './sim/party.js';
 import { createGroundLoot } from './sim/loot.js';
+import { createMovement } from './sim/movement.js';
 import { createMobs } from './sim/mobs.js';
 import * as PL from './sim/player.js';
 
@@ -32,6 +33,7 @@ const players = new Map();
 let seq = 0;
 
 const world = createMobs();
+const movement = createMovement([...obstacles, ...world.npcs.filter(n => n.role !== 'guard').map(n => ({ x: n.x, z: n.z, r: 0.9 }))]);
 const groundLoot = createGroundLoot();
 const cryptDoor = { x: CRYPT.x, z: CRYPT.z + 8.5 };
 const dungeonExit = { x: DUNGEON.x0 + DUNGEON.cell / 2, z: DUNGEON.z0 + DUNGEON.cell / 2 };
@@ -87,17 +89,16 @@ wss.on('connection', (ws, req) => {
     switch (m.t) {
       case 'party': return parties.command(p, m, now);
       case 'logout': if (m.token) acc.logout(m.token); return;
-      // положение по-прежнему ведёт клиент — но сервер проверяет скорость
+      // Клиент предсказывает движение; сервер проверяет длину пути и препятствия.
       case 'st': {
         if (now - p.stT > 1000) { p.stT = now; p.stN = 0; }
         if (++p.stN > 25) return;
-        const x = num(m.x), z = num(m.z);
-        const s = PL.statsOf(a, now), dt = Math.min(1, (now - (a.stAt || now)) / 1000) + 0.15;
-        if (now > (a.warpUntil || 0) && flatDist(a, { x, z }) > s.speed * 1.8 * dt + 2) {
-          send(p, { t: 'fix', x: a.x, z: a.z }); // рывок быстрее бега — возвращаем назад
+        const s = PL.statsOf(a, now);
+        if (!movement.accept(a, { x: m.x, z: m.z, path: m.path }, s.speed, now)) {
+          send(p, { t: 'fix', x: a.x, z: a.z });
           return;
         }
-        a.stAt = now; a.x = x; a.z = z; a.y = heightAt(x, z); a.r = num(m.r, 10); a.anim = num(m.a, 255) | 0;
+        a.r = num(m.r, 10); a.anim = num(m.a, 255) | 0;
         checkDoors(p, a);
         return;
       }
@@ -135,11 +136,11 @@ wss.on('connection', (ws, req) => {
       case 'buy': return PL.cmdBuy(a, world.npcs, String(m.id || ''), m.n);
       case 'sell': return PL.cmdSell(a, world.npcs, m.idx | 0, m.n);
       case 'ench': return PL.cmdEnch(a, String(m.scroll || ''), m.ref || {});
-      case 'tp': { PL.cmdTeleport(a, world.npcs, String(m.id || '')); a.warpUntil = now + 2000; return; }
-      case 'respawn': { PL.respawn(a); a.warpUntil = now + 2000; return; }
+      case 'tp': return PL.cmdTeleport(a, world.npcs, String(m.id || ''));
+      case 'respawn': return PL.respawn(a);
       case 'dev': {
         if (!DEV_CMD) return;
-        if (m.x != null) { PL.place(a, num(m.x), num(m.z)); a.warpUntil = now + 2000; }
+        if (m.x != null) { PL.place(a, num(m.x), num(m.z)); }
         if (m.sp != null) a.P.sp = Math.max(0, num(m.sp, 1e9) | 0);
         if (m.coins != null) a.P.coins = Math.max(0, num(m.coins, 1e9) | 0);
         if (m.lvl != null) a.P.lvl = clamp(m.lvl | 0, 1, 40);
@@ -172,7 +173,12 @@ function onAuth(p, m, ip) {
   const r = m.t === 'auth' ? acc.byToken(m.token) : m.t === 'login' ? acc.login(m.name, m.pass) : acc.register(m.name, m.pass, m.cls);
   if (r.err) return send(p, { t: 'autherr', reason: r.err, kind: m.t });
   // тот же аккаунт с другого устройства — старое соединение закрываем
-  for (const q of players.values()) if (q !== p && q.key === r.key) { store(q); parties.remove(q); send(q, { t: 'kicked' }); q.key = null; q.ws.close(4001, 'session replaced'); }
+  for (const q of players.values()) if (q !== p && q.key === r.key) {
+    // Вход прочитал БД до сохранения активной сессии. Передаем ее текущий
+    // профиль, чтобы новое устройство не получило устаревший снимок.
+    r.save = structuredClone(PL.profileOf(q.a));
+    store(q); parties.remove(q); send(q, { t: 'kicked' }); q.key = null; q.ws.close(4001, 'session replaced');
+  }
   p.key = r.key; p.name = r.name;
   const P = PL.loadChar(r.name, r.save);
   p.a = PL.newActor(p.id, r.name, P);
@@ -186,10 +192,10 @@ function onAuth(p, m, ip) {
 // переходы в катакомбы и обратно
 function checkDoors(p, a) {
   if (a.x < DUNGEON.x0 - 100 && flatDist(a, cryptDoor) < 2.2) {
-    PL.place(a, dungeonExit.x + 6, dungeonExit.z + 6); a.warpUntil = Date.now() + 2000;
+    PL.place(a, dungeonExit.x + 6, dungeonExit.z + 6);
     PL.say(a, 'Вы спустились в катакомбы. Здесь нежить нападает первой.', 'bad');
   } else if (a.x > DUNGEON.x0 - 100 && flatDist(a, dungeonExit) < 2) {
-    PL.place(a, cryptDoor.x, cryptDoor.z + 5); a.warpUntil = Date.now() + 2000;
+    PL.place(a, cryptDoor.x, cryptDoor.z + 5);
     PL.say(a, 'Вы выбрались на поверхность.');
   }
 }
@@ -324,10 +330,11 @@ function autoAttack(a, dt, now) {
   if (a.swing && a.swing.target !== targetKey) a.swing = null;
   if (!a.swing) {
     if (a.atkTimer > 0) return;
-    a.atkTimer = 1 / s.aspd;
-    const windup = Math.min(0.32, a.atkTimer * 0.32);
+    const timing = heroAttackTiming(s.aspd);
+    a.atkTimer = timing.cooldown;
+    const windup = timing.windup;
     a.swing = { target: targetKey, remaining: windup };
-    pushNear(a, { k: 'attack_start', t: Math.min(0.75, a.atkTimer * 0.88), to: { ...a.target } });
+    pushNear(a, { k: 'attack_start', t: timing.duration, windup, to: { ...a.target } });
     return;
   }
   a.swing.remaining -= dt;
@@ -475,7 +482,7 @@ setInterval(() => {
       a.cast.t -= dt;
       if (a.cast.t <= 0) {
         const c = a.cast; a.cast = null;
-        if (c.id === 'escape') { const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0]; PL.place(a, t.x, t.z - 12); a.warpUntil = now + 2000; }
+        if (c.id === 'escape') { const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0]; PL.place(a, t.x, t.z - 12); }
         else applySkill(a, c.id, c.target, now);
       }
     }
@@ -488,7 +495,7 @@ setInterval(() => {
     for (const q of list) {
       if (q === a || flatDist(a, q) > VIEW) continue;
       if (!p.known.has(q.id)) { p.known.add(q.id); send(p, { t: 'look', id: q.id, name: q.name, look: q.look }); }
-      o.push([q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), q.anim | 0, Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)]);
+      o.push([q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~8) | (q.dead ? 8 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)]);
     }
     for (const id of p.known) if (!players.has(id)) p.known.delete(id);
     const mobs = world.snapshotFor(a, VIEW, now);

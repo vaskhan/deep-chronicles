@@ -51,7 +51,7 @@ async function untilEv(c, re, what = String(re)) {
 }
 // дождаться профиля, удовлетворяющего условию (сервер шлёт его сам при каждом изменении)
 async function untilP(c, cond, what = 'условие профиля') {
-  for (let i = 0; i < 40; i++) { const m = await c.wait('you', 'snap'); if (m.t === 'you' && cond(m.p)) return m.p; }
+  for (let i = 0; i < 40; i++) { const m = await c.wait('you'); if (cond(m.p)) return m.p; }
   throw new Error('не дождались: ' + what);
 }
 // встать в точку и дать серверу её принять
@@ -179,7 +179,7 @@ test('покупка: без монет и вне досягаемости то�
   let p = await untilP(a, (x) => x.coins === 50);
   assert.ok(!p.inv.some((e) => e.id === 'sword_crystal'), 'купил вдали от торговца');
   // рядом с торговцем, но денег не хватает
-  await at(a, -442, 410);
+  await at(a, -450.5, 407);
   a.send({ t: 'buy', id: 'sword_crystal', n: 1 });
   await untilEv(a, /Недостаточно монет/);
   // и настоящая покупка
@@ -417,7 +417,7 @@ test('изготовление по WS: списание материалов, �
   const a=client();await a.open();
   try {
     a.send({t:'register',name:'Кузнец',pass:'craft-test',cls:'mage'});await a.wait('authok');
-    a.send({t:'dev',lvl:8,coins:1000,item:'pelt',n:40,x:-442,z:410});await untilP(a,p=>p.inv.some(e=>e.id==='pelt'));
+    a.send({t:'dev',lvl:8,coins:1000,item:'pelt',n:40,x:-450.5,z:407});await untilP(a,p=>p.inv.some(e=>e.id==='pelt'));
     a.send({t:'dev',item:'bone',n:40});await untilP(a,p=>p.inv.some(e=>e.id==='bone'));
     const order={t:'craft',id:'staff_oak',request:'native-order-0001'};a.send(order);a.send(order);
     const p=await untilP(a,p=>p.inv.some(e=>e.id==='staff_oak'));
@@ -427,6 +427,111 @@ test('изготовление по WS: списание материалов, �
     const saved=JSON.parse(db.prepare('SELECT save FROM accounts WHERE key = ?').get('кузнец').save);db.close();
     assert.equal(saved.coins,700);assert.deepEqual(saved.craftReceipts,['native-order-0001']);
   } finally {a.ws.close();await a.closed();}
+});
+
+test('отклоненный телепорт и respawn живого не разрешают произвольное перемещение', async () => {
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'БезРывка', pass: 'secret1', cls: 'warrior' });
+    const { p } = await a.wait('authok');
+    for (const command of [{ t: 'respawn' }, { t: 'tp', id: 'missing' }]) {
+      a.send(command);
+      a.send({ t: 'st', x: p.x + 500, z: p.z, y: 0, r: 0, a: 0 });
+      const reply = await a.wait('fix', 'snap');
+      assert.equal(reply.t === 'fix' ? reply.x : reply.me.x, p.x);
+      if (reply.t !== 'fix') assert.equal((await a.wait('fix')).x, p.x);
+    }
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('вход вторым устройством получает последнее состояние через пароль и токен', async () => {
+  const a = client(), b = client(), c = client(); await Promise.all([a.open(), b.open(), c.open()]);
+  try {
+    a.send({ t: 'register', name: 'ПереносСессии', pass: 'secret1', cls: 'warrior' });
+    const first = await a.wait('authok');
+    a.send({ t: 'unequip', slot: 'weapon' });
+    const before = await untilP(a, p => !p.equip.weapon);
+    b.send({ t: 'auth', token: first.token });
+    const second = await b.wait('authok');
+    assert.deepEqual(second.p.inv, before.inv); assert.equal(second.p.equip.weapon, null);
+    const idx = second.p.inv.findIndex(e => e.id === 'sword_novice');
+    b.send({ t: 'equip', idx });
+    const equipped = await untilP(b, p => p.equip.weapon === 'sword_novice');
+    c.send({ t: 'login', name: 'ПереносСессии', pass: 'secret1' });
+    const third = await c.wait('authok');
+    assert.equal(third.p.equip.weapon, 'sword_novice'); assert.deepEqual(third.p.inv, equipped.inv);
+  } finally { for (const x of [a,b,c]) x.ws.close(); await Promise.all([a.closed(),b.closed(),c.closed()]); }
+});
+
+test('законный телепорт принимает новую позицию, отклоняет старую и не отключает проверку скорости', async () => {
+  const { buildProps, TELEPORTS } = await import('../src/world-core.js');
+  const gate = buildProps().npcs.find(n => n.role === 'gatekeeper');
+  const destination = TELEPORTS.find(t => Math.hypot(t.x - gate.x, t.z - gate.z) > 100);
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'ЗаконныйПеренос', pass: 'secret1', cls: 'warrior' }); await a.wait('authok');
+    await at(a, gate.x, gate.z);
+    a.send({ t: 'dev', coins: 100000 }); await untilP(a, p => p.coins === 100000);
+    a.send({ t: 'tp', id: destination.id });
+    const teleported = await untilP(a, p => p.x === destination.x && p.z === destination.z);
+    assert.equal(teleported.coins, 100000 - destination.cost);
+    a.send({ t: 'st', x: gate.x, z: gate.z, y: 0, r: 0, a: 0 });
+    const staleFix = await a.wait('fix');
+    assert.equal(staleFix.x, destination.x); assert.equal(staleFix.z, destination.z);
+    a.send({ t: 'st', x: destination.x, z: destination.z, y: 0, r: 0, a: 0 });
+    // Move one metre from the destination: a normal movement must remain valid.
+    a.send({ t: 'st', x: destination.x + 1, z: destination.z, y: 0, r: 0, a: 1 });
+    let moved;
+    for (let i = 0; i < 30; i++) { const m = await a.wait('snap', 'fix'); assert.notEqual(m.t, 'fix'); if (m.me.x === destination.x + 1) { moved = m; break; } }
+    assert.ok(moved, 'нормальное движение после телепорта не принято');
+    a.send({ t: 'st', x: destination.x + 500, z: destination.z, y: 0, r: 0, a: 1 });
+    assert.equal((await a.wait('fix')).x, destination.x + 1);
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('смерть переживает вход; мертвый не перемещается, после respawn можно двигаться', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const spawns = buildProps().spawns, index = spawns.findIndex(s => s.mob === 'orc'), mob = spawns[index];
+  const a = client(), b = client(); await Promise.all([a.open(), b.open()]);
+  try {
+    a.send({ t: 'register', name: 'СмертьСохранена', pass: 'secret1', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    await at(a, mob.x, mob.z);
+    a.send({ t: 'dev', hp: 1 });
+    a.send({ t: 'atk', id: index + 1, kind: 'm' });
+    await untilEv(a, /"k":"dead"/);
+    b.send({ t: 'auth', token: auth.token });
+    const dead = await b.wait('authok'); assert.equal(dead.p.dead, true); assert.equal(dead.p.hp, 0);
+    b.send({ t: 'st', x: dead.p.x + 1, z: dead.p.z, y: 0, r: 0, a: 0 });
+    const fixed = await b.wait('fix'); assert.equal(fixed.x, dead.p.x); assert.equal(fixed.z, dead.p.z);
+    b.send({ t: 'respawn' });
+    const alive = await untilP(b, p => !p.dead && p.hp > 0);
+    b.send({ t: 'st', x: alive.x + 1, z: alive.z, y: 0, r: 0, a: 1 });
+    let moved;
+    for (let i = 0; i < 30; i++) { const m = await b.wait('snap', 'fix'); assert.notEqual(m.t, 'fix'); if (m.me.x === alive.x + 1) { moved = m; break; } }
+    assert.ok(moved);
+  } finally { a.ws.close(); b.ws.close(); await Promise.all([a.closed(), b.closed()]); }
+});
+
+test('сервер отвергает срезание фонтана, но принимает путь вокруг края', async () => {
+  const c=client(), other=client(); await Promise.all([c.open(),other.open()]);
+  try {
+    c.send({t:'register',name:'ПутьФонтан',pass:'secret1',cls:'war'}); await c.wait('authok');
+    await at(c,-435.1,400);
+    c.send({t:'st',x:-430,z:405.1,r:0,a:1});
+    const correction=await c.wait('fix'); assert.equal(correction.x,-435.1);
+    const path=Array.from({length:32},(_,i)=>{const t=Math.PI-(i+1)*Math.PI/64;return{x:-430+5.1*Math.cos(t),z:400+5.1*Math.sin(t)};});
+    // Send the arc at the restored running speed, not as an 8 m burst.
+    for(let i=0;i<path.length;i+=8){
+      await pause(350);
+      const section=path.slice(i,i+8);
+      c.send({t:'st',...section.at(-1),path:section,r:0,a:1});
+    }
+    await pause(150);
+    other.send({t:'login',name:'ПутьФонтан',pass:'secret1'});
+    const auth=await other.wait('authok');
+    assert.ok(Math.abs(auth.p.x+430)<.001); assert.ok(Math.abs(auth.p.z-405.1)<.001);
+  } finally { c.ws.close(); other.ws.close(); await Promise.all([c.closed(),other.closed()]); }
 });
 
 test('оба клиента видят серверный замах моба; уход из сектора предотвращает урон', async () => {
@@ -502,9 +607,11 @@ test('пати делит реальные XP/SP, защищает группо�
     let state; do {state=await a.wait('party');} while(state.mode!=='pickup');
     a.send({t:'chat',ch:'party',text:'group-private-marker'});
     assert.equal((await b.wait('chat')).text,'group-private-marker');
-    await at(a,-285,387);await at(b,-285,388);await at(outsider,-285,389);
+    const {HUNTING_CAMPS}=await import('../src/world-core.js');
+    const camp=HUNTING_CAMPS.find(c=>c.id==='east_rabbits');
+    await at(a,camp.x,camp.z);await at(b,camp.x,camp.z+1);await at(outsider,camp.x,camp.z+2);
     let mob;
-    for(let i=0;i<40&&!mob;i++) {const s=await a.wait('snap');mob=s.m.filter(r=>!(r[5]&8)&&Math.hypot(r[1]+285,r[3]-387)<25).sort((x,y)=>Math.hypot(x[1]+285,x[3]-387)-Math.hypot(y[1]+285,y[3]-387))[0];}
+    for(let i=0;i<40&&!mob;i++) {const s=await a.wait('snap');mob=s.m.filter(r=>!(r[5]&8)&&Math.hypot(r[1]-camp.x,r[3]-camp.z)<25).sort((x,y)=>Math.hypot(x[1]-camp.x,x[3]-camp.z)-Math.hypot(y[1]-camp.x,y[3]-camp.z))[0];}
     assert.ok(mob);await at(a,mob[1]+1,mob[3]+1);await at(b,mob[1]+2,mob[3]+2);
     a.send({t:'atk',kind:'m',id:mob[0]});
     const killed=(await untilEv(a,/"k":"kill"/)).find(e=>e.k==='kill');
@@ -512,7 +619,8 @@ test('пати делит реальные XP/SP, защищает группо�
     const {MOBS}=await import('../src/data.js'); const {spForKill}=await import('../src/progression.js');
     assert.equal(killed.xp+shared.xp,MOBS[killed.mob].xp);assert.equal(killed.sp+shared.sp,spForKill(MOBS[killed.mob].xp));
     const pa=await untilP(a,p=>p.kills===1),pb=await untilP(b,p=>p.kills===1);assert.equal(pa.coins,150);assert.equal(pb.coins,150,'pickup policy suppresses autoloot');
-    let drops=[];for(let i=0;i<40&&!drops.length;i++)drops=(await b.wait('snap')).g.filter(d=>d.available&&d.item==='coins');
+    let drops=[];const dropDeadline=Date.now()+5000;
+    while(!drops.length && Date.now()<dropDeadline) drops=(await b.wait('snap')).g.filter(d=>d.available&&d.item==='coins');
     const drop=drops[0];assert.ok(drop);await at(outsider,drop.x,drop.z);outsider.send({t:'pickup',id:drop.id});assert.match((await outsider.wait('pickup_err')).reason,/принадлежит/);
     await at(b,drop.x,drop.z);b.send({t:'pickup',id:drop.id});const rewarded=await untilP(b,p=>p.coins>150);assert.equal(rewarded.coins,150+drop.n);
     a.send({t:'pickup',id:drop.id});assert.ok((await a.wait('pickup_err')).reason);

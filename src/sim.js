@@ -1,6 +1,7 @@
 // Правила симуляции: урон, промахи, опыт, дроб, ИИ мобов, цены, заточка.
 // Без DOM и three.js — один и тот же код считает бой на сервере и проверяется юнит-тестами.
 // Случайность приходит аргументом rng, чтобы тесты были повторяемы.
+import { MOVE_SCALE } from './movement.js';
 import { MOBS, ITEMS, MAX_LEVEL, xpToNext } from './data.js';
 import { MAX_ENCH, SAFE_ENCH, ENCH_CHANCE } from './stats.js';
 import { heightAt, obstacles, MAP, DUNGEON } from './world-core.js';
@@ -20,7 +21,13 @@ export const missChance = (mobLvl, acc) => clamp(0.06 + (mobLvl + 33 - acc) * 0.
 export const evaChance = (mobLvl, eva) => clamp(0.05 + (eva - (mobLvl + 33)) * 0.01, 0.02, 0.3);
 
 export const MOB_ATK_CD = (def) => (def.boss ? 1.4 : 1.8);
-export const MOB_SPEED = (def) => (def.speed || 4.6) * (def.boss || ['tree', 'golem'].includes(def.shape) ? 0.8 : 1);
+export const MOB_SPEED = (def) => 12 * MOVE_SCALE * (def.boss || ['tree', 'golem'].includes(def.shape) ? 0.8 : 1);
+export function heroAttackTiming(aspd) {
+  const cooldown = 1 / aspd, duration = cooldown * .88;
+  return { cooldown, duration, windup: duration * .35 };
+}
+export const CORPSE = { holdSeconds: 5, fadeSeconds: 1.5, lifetimeMs: 12000 };
+export const leashDistance = (def) => def.boss ? 140 : 180;
 export const mobRadius = (def) => (def.size || 1) * 0.9;
 // Замах фиксирует направление. Игрок успевает выйти из сектора до удара;
 // клиент рисует ровно эти параметры, но попадание проверяется только здесь.
@@ -91,7 +98,7 @@ export function newMob(id, spawn, rng = Math.random) {
     id, kind: spawn.mob, def,
     home: { x: spawn.x, z: spawn.z },
     x: spawn.x, y: heightAt(spawn.x, spawn.z), z: spawn.z, r: rand(0, 6.28, rng),
-    hp: def.hp, state: 'idle', target: null, atkCd: 0, wanderT: rand(1, 6, rng), dest: null,
+    hp: def.hp, recoverAfter: 0, state: 'idle', target: null, atkCd: 0, wanderT: rand(1, 6, rng), dest: null,
     dead: false, respawnAt: 0, diedAt: 0, moving: false, attackT: 0, windup: null, hitBy: new Map(),
   };
 }
@@ -101,7 +108,7 @@ export function newMob(id, spawn, rng = Math.random) {
 export function mobStep(m, ctx, dt) {
   if (m.dead) {
     if (ctx.now > m.respawnAt) {
-      m.dead = false; m.hp = m.def.hp; m.state = 'idle'; m.target = null;
+      m.dead = false; m.hp = m.def.hp; m.recoverAfter = 0; m.state = 'idle'; m.target = null;
       m.windup = null; m.atkCd = 0; m.attackT = 0; m.moving = false;
       m.x = m.home.x; m.z = m.home.z; m.y = heightAt(m.x, m.z); m.hitBy.clear();
     }
@@ -110,10 +117,11 @@ export function mobStep(m, ctx, dt) {
   m.moving = false;
   m.attackT = Math.max(0, m.attackT - dt * 3);
   m.atkCd = Math.max(0, m.atkCd - dt);
+  if (m.state === 'chase' || m.state === 'return') m.recoverAfter = ctx.now + 5000;
   if (m.windup) {
     const attack = m.windup;
     const victim = ctx.players.find(p => p.id === attack.target && !p.dead && !p.inTown);
-    if (!victim || flatDist(m, m.home) > 60 || m.state !== 'chase') {
+    if (!victim || flatDist(m, m.home) > leashDistance(m.def) || flatDist(m, victim) > 220 || m.state !== 'chase') {
       m.windup = null; ctx.onAttack?.(m, 'cancel', attack, false);
     } else {
       attack.remaining -= dt;
@@ -135,7 +143,10 @@ export function mobStep(m, ctx, dt) {
     for (const p of ctx.players) { if (p.dead || p.inTown) continue; const d = flatDist(m, p); if (d < nd) { nd = d; near = p; } }
   }
   if (m.state === 'idle' || m.state === 'wander') {
-    if (m.def.aggro && near && nd < 14) { m.state = 'chase'; m.target = near.id; }
+    if (m.def.aggro && near && nd < 14) {
+      m.state = 'chase'; m.target = near.id; m.dest = null; m.recoverAfter = ctx.now + 5000; return true;
+    }
+    if (ctx.now >= m.recoverAfter && flatDist(m, m.home) <= 8) m.hp = Math.min(m.def.hp, m.hp + m.def.hp * .02 * dt);
     m.wanderT -= dt;
     if (m.wanderT <= 0) { m.wanderT = rand(5, 12); m.dest = { x: m.home.x + rand(-6, 6), z: m.home.z + rand(-6, 6) }; m.state = 'wander'; }
     if (m.state === 'wander' && m.dest) {
@@ -144,7 +155,7 @@ export function mobStep(m, ctx, dt) {
       else { moveEntity(m, dx / L, dz / L, Math.min(L, speed * 0.35 * dt), radius); m.r = Math.atan2(dx, dz); m.moving = true; }
     }
   } else if (m.state === 'chase') {
-    if (!near || flatDist(m, m.home) > 60) { m.state = 'return'; m.target = null; }
+    if (!near || nd > 220 || flatDist(m, m.home) > leashDistance(m.def)) { m.state = 'return'; m.target = null; }
     else {
       m.target = near.id;
       const reach = 2 + radius;
@@ -163,9 +174,8 @@ export function mobStep(m, ctx, dt) {
     }
   } else if (m.state === 'return') {
     const dx = m.home.x - m.x, dz = m.home.z - m.z, L = Math.hypot(dx, dz);
-    m.hp = Math.min(m.def.hp, m.hp + m.def.hp * 0.3 * dt);
-    if (L < 1) m.state = 'idle';
-    else { moveEntity(m, dx / L, dz / L, speed * 1.4 * dt, radius); m.r = Math.atan2(dx, dz); m.moving = true; }
+    if (L < 1) { m.state = 'idle'; m.dest = null; m.wanderT = 6; }
+    else { moveEntity(m, dx / L, dz / L, Math.min(L, speed * 1.4 * dt), radius); m.r = Math.atan2(dx, dz); m.moving = true; }
   }
   return true;
 }

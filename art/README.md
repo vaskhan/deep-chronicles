@@ -37,3 +37,11 @@
 ### Материалы окружения: ambientCG
 
 18.09.2026 добавлены исходные карты 1K albedo / NormalGL / roughness: [PavingStones131](https://ambientcg.com/view?id=PavingStones131), [Ground037](https://ambientcg.com/view?id=Ground037), [Bricks097](https://ambientcg.com/view?id=Bricks097). [CC0-1.0](https://docs.ambientcg.com/license/), автор ambientCG/Lennart Demes. Без заимствования ресурсов Lineage. Архивы и каждый файл закреплены SHA-256 в `godot/assets/materials/manifest.json`, восстановление `npm run native:materials -- --fetch`, проверка `--check`. Цветовые изменения выполнены шейдером; исходные фотографии не менялись. Подробнее `docs/FARMING_AND_PARTY.md`.
+
+## Ландшафт и смешанная растительность — 18.09.2026
+
+- `terrain/pbr/meadow-albedo.png`, `badlands-albedo.png`, `elm-leaf.png`, `spruce-spray.png`: новые изображения, созданные встроенным imagegen для этого проекта, 1254×1254. Лист и хвойная ветка имеют настоящий alpha-канал. Промпты — `art/sources/botanical-prompts.json`. Это не сканированные PBR-наборы: у нарисованной луговой земли только приближённый микрорельеф в шейдере.
+- `terrain/pbr/forrest_ground_01_*_2k.jpg`: Forest Ground 01, Rob Tuytel / Poly Haven, CC0, https://polyhaven.com/a/forrest_ground_01 . Согласованные diffuse, OpenGL normal, roughness и displacement, 2048×2048; ссылки и SHA-256 — `godot/assets/terrain/pbr/sources.json`.
+- `elm_field`, `elm_slender`, `alder_round`, `pine_natural`, `shrub_hazel`, `shrub_wild`, `shrub_dry`: оригинальные модели, воспроизводимые через `tools/godot/build-botanical.py` в Blender. Кора использует прежнюю собственную текстуру проекта `generated/tex/bark.png` с цветовым множителем. Эти названия — художественные варианты, не ботаническая верификация пород.
+- Существующие точки деревьев и серверные препятствия сохранены. В каждой природной зоне смешиваются разные силуэты; новые низкие декоративные кусты, травы и цветы не имеют коллизий. Подлесок зависит от пятен шума, уклона и расстояния до деревьев, исключает города/воду/препятствия.
+- Подлесок ограничен 25 участками вокруг камеры, создаётся по одному участку за кадр, исчезает вдалеке. Импорт текстур с mipmaps; модели — с штатными Godot LOD. Производительность на Android/iOS ещё не проверялась.

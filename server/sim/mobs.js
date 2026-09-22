@@ -2,7 +2,7 @@
 // Клиент получает их готовыми в снапшоте и только рисует.
 import { MOBS } from '../../src/data.js';
 import { buildProps } from '../../src/world-core.js';
-import { newMob, mobStep, mobRadius, xpForKill, rollCoins, rollDrops, flatDist } from '../../src/sim.js';
+import { CORPSE, newMob, mobStep, mobRadius, xpForKill, rollCoins, rollDrops, flatDist } from '../../src/sim.js';
 
 export function createMobs() {
   const { spawns, npcs } = buildProps();
@@ -46,10 +46,10 @@ export function createMobs() {
     const o = [];
     for (const m of list) {
       if (flatDist(m, a) > view) continue;
-      if (m.dead && now > m.diedAt + 4000) continue;
+      if (m.dead && now > m.diedAt + CORPSE.lifetimeMs) continue;
       o.push([m.id, +m.x.toFixed(2), +m.y.toFixed(2), +m.z.toFixed(2), +m.r.toFixed(2),
         (m.moving ? 1 : 0) | (m.attackT > 0 ? 2 : 0) | (m.dead ? 8 : 0),
-        Math.max(0, Math.round((m.hp / m.def.hp) * 100))]);
+        Math.max(0, Math.round((m.hp / m.def.hp) * 100)), 0, m.dead ? Math.max(0, now - m.diedAt) : 0]);
     }
     return o;
   };

@@ -1,3 +1,4 @@
+import { MOVE_SCALE } from '../../src/movement.js';
 import { skillRanks } from '../../src/progression.js';
 import { LOOT } from '../../src/loot.js';
 // One source of truth: bake the existing world, catalog and procedural animation
@@ -14,7 +15,7 @@ import { buildProps, obstacles, TOWNS, ZONES, TELEPORTS, CRYPT, DUNGEON, MAP, he
 import { buildHero, buildMob, buildNpc } from '../../src/models.js';
 import { MODEL_OF, rigModel } from '../../src/glb.js';
 import { calcStats, MAX_ENCH, SAFE_ENCH, ENCH_CHANCE } from '../../src/stats.js';
-import { sellPrice } from '../../src/sim.js';
+import { sellPrice, CORPSE } from '../../src/sim.js';
 import { newChar } from '../../server/sim/player.js';
 import { enhanceHumanoid, enhanceMob } from './art.mjs';
 import { artPlacements } from './placements.mjs';
@@ -39,7 +40,7 @@ const h = Buffer.alloc(terrain.count ** 2 * 4);
 for (let z = 0; z < terrain.count; z++) for (let x = 0; x < terrain.count; x++) h.writeFloatLE(heightAt(terrain.start + x * terrain.step, terrain.start + z * terrain.step), (z * terrain.count + x) * 4);
 await fs.writeFile(path.join(out, 'heights.bin'), h);
 await fs.writeFile(path.join(out, 'world.json'), JSON.stringify({ ...props, ...presentation, obstacles, towns: TOWNS, zones: ZONES, teleports: TELEPORTS, crypt: CRYPT, dungeon: DUNGEON, map: MAP, terrain }));
-await fs.writeFile(path.join(out, 'catalog.json'), JSON.stringify({ ...Object.fromEntries(Object.entries(data).filter(([, v]) => typeof v !== 'function')), UI_RULES: { skillRanks: Object.fromEntries(Object.keys(data.SKILLS).map(id => [id, skillRanks(id)])), loot: LOOT, previewCharacters: Object.fromEntries(Object.keys(data.CLASSES).map(cls => [cls, newChar("Предпросмотр", cls)])), maxEnch: MAX_ENCH, safeEnch: SAFE_ENCH, enchChance: ENCH_CHANCE, sellPrices: Object.fromEntries(Object.entries(data.ITEMS).map(([id, item]) => [id, sellPrice(item)])) } }));
+await fs.writeFile(path.join(out, 'catalog.json'), JSON.stringify({ ...Object.fromEntries(Object.entries(data).filter(([, v]) => typeof v !== 'function')), UI_RULES: { corpse: CORPSE, movementScale: MOVE_SCALE, skillRanks: Object.fromEntries(Object.keys(data.SKILLS).map(id => [id, skillRanks(id)])), loot: LOOT, previewCharacters: Object.fromEntries(Object.keys(data.CLASSES).map(cls => [cls, newChar("Предпросмотр", cls)])), maxEnch: MAX_ENCH, safeEnch: SAFE_ENCH, enchChance: ENCH_CHANCE, sellPrices: Object.fromEntries(Object.entries(data.ITEMS).map(([id, item]) => [id, sellPrice(item)])) } }));
 
 // Bake the exact existing procedural animations into standard glTF clips.
 delete MODEL_OF['Маг'];

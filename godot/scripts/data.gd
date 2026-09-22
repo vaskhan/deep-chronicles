@@ -49,9 +49,9 @@ func zone_at(pos: Vector3) -> Dictionary:
 		if d < distance: best = z; distance = d
 	return best
 
-func move(pos: Vector3, direction: Vector3, distance: float) -> Vector3:
+func move(pos: Vector3, direction: Vector3, distance: float, trace: Array = []) -> Vector3:
 	# Substeps prevent tunnelling when a rendered frame takes longer than usual.
-	var steps = maxi(1, ceili(distance / 0.5))
+	var steps = maxi(1, ceili(distance / 0.25))
 	for i in steps:
 		pos += direction * distance / steps
 		for o in grid.get(Vector2i(floori(pos.x / 24), floori(pos.z / 24)), []):
@@ -62,6 +62,7 @@ func move(pos: Vector3, direction: Vector3, distance: float) -> Vector3:
 				pos.x = o.x + d.x; pos.z = o.z + d.y
 		if pos.x < 2100:
 			pos.x = clampf(pos.x, -780, 780); pos.z = clampf(pos.z, -780, 780)
+		trace.append({"x": pos.x, "z": pos.z})
 	pos.y = height_at(pos.x, pos.z)
 	return pos
 
@@ -108,6 +109,7 @@ func stats(p: Dictionary, buffs: Array = []) -> Dictionary:
 	for buff in buffs:
 		if buff.until > Time.get_ticks_msec(): s[buff.stat] *= buff.mul
 	s.maxHp = floor(s.maxHp + 0.5); s.maxMp = floor(s.maxMp + 0.5)
+	s.speed *= float(catalog.UI_RULES.movementScale)
 	return s
 
 func sell_price(id: String) -> int:
