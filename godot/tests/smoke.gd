@@ -862,12 +862,15 @@ func _test_pack():
 		if ally.position.distance_to(game.hero.position) < 16.0: continue
 		if ally.position.distance_to(victim.position) > 12.0: continue
 		var started = ally.position.distance_to(game.hero.position)
-		game.camera_distance = 20; game.camera_pitch = 0.55
+		# Сверху: в лесу низкая камера упирается в крону ближайшего дерева.
+		game.camera_distance = 17; game.camera_pitch = 1.05
 		game.set_target(victim); game.attack()
 		var answered = await wait_for(func(): return started - game.mobs[ally_id].position.distance_to(game.hero.position) > 8.0, 14)
 		if not answered: continue
 		check(true, "attacking one mob brings its kin from outside its own aggression range")
-		await create_timer(0.4).timeout
+		# Ждём, пока подкрепление дойдёт до героя: кадр должен показать стаю в бою, а не бег вдалеке.
+		await wait_for(func(): return game.mobs[ally_id].position.distance_to(game.hero.position) < 9.0, 10)
+		await create_timer(0.3).timeout
 		await _screenshot("mob-pack.png")
 		game._cancel_attack(); game.set_target(null)
 		game.camera_distance = 28; game.camera_pitch = 0.56
