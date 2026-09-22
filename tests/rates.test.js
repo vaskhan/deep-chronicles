@@ -14,7 +14,8 @@ import {
   DEFAULT_RATES, RATE_KEYS, RATE_NAMES, normalizeRates, ratesOf, isDefaultRates,
   rateXp, rateSp, rateCoins, rateDropChance, rollDropsRated, countDrops, partyMultiplier,
   rateRespawnMs, rateSellPrice, rateBuyPrice, rateRecipe, enchantChanceOf, enchSucceedsRated,
-  describeRates, formatRate,
+  describeRates, formatRate, levelFactor, coinLevelFactor, dropLevelFactor,
+  LEVEL_GAP_FULL, LEVEL_GAP_NONE, splitByWeights, partyWeight, levelCurve,
 } from '../src/rates.js';
 import { loadRates, envName } from '../server/rates.js';
 import { createMobs } from '../server/sim/mobs.js';
@@ -26,7 +27,10 @@ const root = path.dirname(fileURLToPath(import.meta.url)) + '/..';
 const seeded = (seed) => () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
 
 test('рейты по умолчанию равны единице и ничего не меняют в наградах', () => {
-  assert.deepEqual(DEFAULT_RATES, Object.fromEntries(RATE_NAMES.map(k => [k, 1])));
+  const multipliers = RATE_NAMES.filter(k => !k.startsWith('levelGap'));
+  assert.deepEqual(DEFAULT_RATES, { ...Object.fromEntries(multipliers.map(k => [k, 1])),
+    levelGap4: 0.9, levelGap5: 0.75, levelGap6: 0.55, levelGap7: 0.35, levelGap8: 0.2, levelGap9: 0.08,
+    levelGapAffectsCoins: 1, levelGapAffectsDrop: 1 });
   assert.ok(isDefaultRates(ratesOf({})) && isDefaultRates(ratesOf(undefined)) && isDefaultRates(ratesOf(null)));
   for (const [id, def] of Object.entries(MOBS)) {
     for (const lvl of [1, def.lvl, MAX_LEVEL]) assert.equal(rateXp(xpForKill(def, lvl)), xpForKill(def, lvl), `${id}: опыт`);
@@ -97,6 +101,13 @@ test('мусорные и неизвестные значения зажимаю
   for (const raw of ['мусор', 42, [], true]) assert.ok(isDefaultRates(ratesOf(raw)), `${JSON.stringify(raw)} — не настройки`);
   for (const key of RATE_NAMES) {
     const spec = RATE_KEYS[key];
+    if (spec.bool) {
+      assert.equal(ratesOf({ [key]: false })[key], 0, `${key}: выключается`);
+      assert.equal(ratesOf({ [key]: 'нет' })[key], 0, `${key}: выключается словом`);
+      assert.equal(ratesOf({ [key]: '1' })[key], 1, `${key}: включается`);
+      assert.equal(ratesOf({ [key]: 7 })[key], spec.def, `${key}: непонятное значение не меняет настройку`);
+      continue;
+    }
     assert.equal(ratesOf({ [key]: -1e9 })[key], spec.min, `${key}: нижний предел`);
     assert.equal(ratesOf({ [key]: 1e9 })[key], spec.max, `${key}: верхний предел`);
   }
@@ -162,4 +173,129 @@ test('награда за моба и респавн берут рейты се�
   const paired = bonus.rewardPlan(players.get(1), players.get(2), target, () => 0.5);
   assert.equal(partyMultiplier(2, ratesOf({ partyBonus: 1.2 })), 1.2);
   assert.equal(paired.shares.reduce((n, s) => n + s.xp, 0), Math.round(base * 1.2), 'надбавка группы применяется до дележа');
+});
+
+test('ступени разницы уровней: до 3 полная награда, 4–9 штраф, с 10 — ноль, симметрично', () => {
+  assert.equal(LEVEL_GAP_FULL, 3); assert.equal(LEVEL_GAP_NONE, 10);
+  for (let gap = 0; gap <= LEVEL_GAP_FULL; gap++) {
+    assert.equal(levelFactor(20 - gap, 20), 1, `разница ${gap} вниз`);
+    assert.equal(levelFactor(20 + gap, 20), 1, `разница ${gap} вверх`);
+  }
+  assert.equal(levelFactor(16, 20), 0.9, 'граница 3/4: штраф начинается с четвёртого уровня');
+  assert.equal(levelFactor(14, 20), 0.55); assert.equal(levelFactor(13, 20), 0.35, 'граница 6/7');
+  assert.equal(levelFactor(11, 20), 0.08, 'девятый уровень — крохи');
+  assert.equal(levelFactor(10, 20), 0, 'граница 9/10: награды нет');
+  assert.equal(levelFactor(1, 20), 0, 'дальше тоже ноль');
+  for (let gap = 0; gap <= 15; gap++) assert.equal(levelFactor(20 - gap, 20), levelFactor(20 + gap, 20), `симметрия на ${gap}`);
+  assert.deepEqual(levelCurve().map(step => step.factor), [1, 1, 1, 1, 0.9, 0.75, 0.55, 0.35, 0.2, 0.08, 0]);
+  // кривая убывает и бонуса за сильного моба не даёт
+  for (let gap = 1; gap <= LEVEL_GAP_NONE; gap++) assert.ok(levelFactor(20 + gap, 20) <= levelFactor(20 + gap - 1, 20), `ступень ${gap}`);
+  // опыт и SP обнуляются вместе с множителем, а не превращаются в единицу
+  assert.equal(xpForKill(MOBS.golem, MOBS.golem.lvl + 10), 0);
+  assert.equal(rateXp(0, ratesOf({ xp: 100 })), 0, 'рейт не оживляет нулевую награду');
+  assert.equal(rateSp(0, ratesOf({ sp: 100 })), 0);
+  // сервер может задать свою кривую
+  const soft = ratesOf({ levelGap4: 1, levelGap5: 1, levelGap9: 0.5 });
+  assert.equal(levelFactor(15, 20, soft), 1); assert.equal(levelFactor(11, 20, soft), 0.5);
+  assert.equal(levelFactor(10, 20, soft), 0, 'ноль с десятого уровня не настраивается');
+  assert.equal(levelFactor(20, 20, ratesOf({ levelGap4: 0 })), 1, 'полная награда до трёх тоже не настраивается');
+});
+
+test('штраф за разницу уровней режет монеты и дроп вместе с опытом, переключатели его снимают', () => {
+  const gapRates = DEFAULT_RATES, off = ratesOf({ levelGapAffectsCoins: false, levelGapAffectsDrop: false });
+  assert.equal(coinLevelFactor(23, 30, gapRates), levelFactor(23, 30));
+  assert.equal(dropLevelFactor(23, 30, gapRates), levelFactor(23, 30));
+  assert.equal(coinLevelFactor(23, 40, off), 1, 'переключатель возвращает прежние монеты');
+  assert.equal(dropLevelFactor(23, 40, off), 1, 'переключатель возвращает прежний дроп');
+  assert.ok(Math.abs(rateDropChance(0.35, gapRates, 0.2) - 0.07) < 1e-9, 'шанс режется множителем уровня');
+  assert.equal(rateDropChance(1, gapRates, 1), 1, 'на полном множителе гарантия остаётся гарантией');
+  assert.equal(rateDropChance(1, gapRates, 0.2), 0.2, 'при штрафе режется и гарантированная вещь');
+  assert.equal(rateDropChance(1, gapRates, 0), 0, 'с десяти уровней разницы не падает ничего');
+  assert.equal(rateDropChance(0.5, gapRates, 5), 0.5, 'множитель уровня не поднимает шанс выше своего');
+  assert.deepEqual(rollDropsRated(MOBS.golem, gapRates, () => 0.2, 1), ['crystal']);
+  assert.deepEqual(rollDropsRated(MOBS.golem, gapRates, () => 0.2, 0.2), [], 'при штрафе тот же бросок пустой');
+  assert.deepEqual(rollDropsRated(MOBS.lich, gapRates, () => 0.5, 0), [], 'печать босса не падает при нулевом множителе');
+  assert.ok(rollDropsRated(MOBS.lich, gapRates, () => 0.999, 1).includes('lich_seal'), 'без штрафа печать гарантирована');
+
+  const world = createMobs(), free = createMobs(off);
+  const golem = world.list.find(m => m.kind === 'golem'), sameGolem = free.list.find(m => m.kind === 'golem');
+  assert.ok(golem && sameGolem, 'в мире есть големы');
+  const lvl = MOBS.golem.lvl + 8, penalty = levelFactor(MOBS.golem.lvl, lvl);
+  assert.equal(penalty, 0.2);
+  for (let i = 0; i < 20; i++) {
+    const cut = world.rewardFor(golem, lvl).coins, full = free.rewardFor(sameGolem, lvl).coins;
+    assert.ok(cut >= Math.round(MOBS.golem.coins[0] * penalty) && cut <= Math.round(MOBS.golem.coins[1] * penalty), `монеты со штрафом: ${cut}`);
+    assert.ok(full >= MOBS.golem.coins[0] && full <= MOBS.golem.coins[1], `монеты без штрафа: ${full}`);
+    assert.ok(cut < MOBS.golem.coins[0], 'со штрафом монет меньше любого обычного броска');
+  }
+  assert.equal(world.rewardFor(golem, MOBS.golem.lvl).xp, MOBS.golem.xp, 'на своём уровне награда полная');
+  assert.deepEqual(world.rewardFor(golem, MOBS.golem.lvl + 10), { xp: 0, coins: 0, drops: [] }, 'с десяти уровней разницы награды нет вовсе');
+});
+
+test('дележ по весам: суммы сходятся, доля растёт с уровнем, отставание режет её', () => {
+  assert.deepEqual(splitByWeights(7, [1, 1]), [4, 3], 'остаток раздаётся по одной единице');
+  assert.equal(splitByWeights(100, [3, 1]).reduce((n, v) => n + v, 0), 100);
+  assert.deepEqual(splitByWeights(0, [1, 2]), [0, 0], 'нулевая награда делится в ноль');
+  assert.deepEqual(splitByWeights(5, [0, 0]), [0, 0], 'нулевые веса не ломают дележ');
+  for (const total of [1, 7, 13, 101, 999]) {
+    const parts = splitByWeights(total, [1600, 918.75, 121]);
+    assert.equal(parts.reduce((n, v) => n + v, 0), total, `сумма для ${total}`);
+    assert.ok(parts.every(Number.isInteger), 'доли целые');
+  }
+  assert.equal(partyWeight(40, 40), 1600, 'вес — квадрат уровня');
+  assert.equal(partyWeight(35, 40), 1225 * 0.75, 'отставание на 5 режет долю');
+  assert.equal(partyWeight(30, 40), 0, 'отставший на 10 уровней веса не имеет');
+  assert.ok(partyWeight(38, 40) > partyWeight(20, 20), 'старший участник получает больше');
+});
+
+test('группа: награда по старшему, доля по уровню, отставший больше чем на девять — ноль', () => {
+  const build = (levels) => {
+    const players = new Map();
+    levels.forEach((lvl, i) => {
+      const id = i + 1, name = 'Пара' + id, a = newActor(id, name, newChar(name, 'warrior'));
+      a.x = -285; a.z = 387; a.y = 0; a.P.lvl = lvl; players.set(id, { id, name, key: name.toLowerCase(), a });
+    });
+    const parties = createParties(players, () => {});
+    for (let id = 2; id <= levels.length; id++) {
+      parties.command(players.get(1), { action: 'invite', name: 'Пара' + id }, 10000 * id);
+      parties.command(players.get(id), { action: 'accept', from: 1 }, 10000 * id + 1);
+    }
+    return { players, parties };
+  };
+  const mobFor = (lvl) => ({ x: -285, z: 387, def: { ...MOBS.golem, lvl, name: 'мишень' } });
+  const planOf = (levels, mobLvl) => {
+    const { players, parties } = build(levels);
+    return parties.rewardPlan(players.get(1), players.get(1), mobFor(mobLvl), () => 0.5);
+  };
+
+  const even = planOf([20, 20], 20);
+  assert.equal(even.level, 20);
+  assert.equal(even.shares.reduce((n, s) => n + s.xp, 0), xpForKill(mobFor(20).def, 20), 'сумма равна награде');
+  assert.ok(Math.abs(even.shares[0].xp - even.shares[1].xp) <= 1, 'при равных уровнях доли равные');
+
+  const mixed = planOf([40, 35], 40);
+  assert.equal(mixed.shares.length, 2);
+  assert.ok(mixed.shares[0].xp > mixed.shares[1].xp, 'старший забирает большую часть');
+  assert.equal(mixed.shares.reduce((n, s) => n + s.xp, 0), xpForKill(mobFor(40).def, 40), 'сумма сходится');
+  assert.equal(mixed.shares.reduce((n, s) => n + s.sp, 0), spForKill(xpForKill(mobFor(40).def, 40)), 'SP тоже сходятся');
+
+  const far = planOf([40, 30], 40);
+  assert.equal(far.level, 40, 'награда считается по старшему');
+  assert.equal(far.shares.length, 1, 'отставший на десять уровней не получает ничего');
+  assert.equal(far.shares[0].player.a.P.lvl, 40);
+  assert.equal(far.shares[0].xp, xpForKill(mobFor(40).def, 40), 'вся награда уходит старшему');
+
+  // надбавка за размер группы не учитывает тех, кому ничего не положено
+  const bonusRates = ratesOf({ partyBonus: 1.5 });
+  const { players, parties } = build([40, 30]);
+  const withBonus = createParties(players, () => {}, bonusRates);
+  withBonus.command(players.get(1), { action: 'invite', name: 'Пара2' }, 30000);
+  withBonus.command(players.get(2), { action: 'accept', from: 1 }, 30001);
+  const plan = withBonus.rewardPlan(players.get(1), players.get(1), mobFor(40), () => 0.5);
+  assert.equal(plan.shares.reduce((n, s) => n + s.xp, 0), xpForKill(mobFor(40).def, 40), 'надбавка за второго участника не начисляется');
+  assert.ok(parties.rewardPlan(players.get(1), players.get(1), mobFor(40), () => 0.5).shares.length === 1);
+
+  // моб далеко по уровню от старшего — ноль всей группе
+  const useless = planOf([40, 38], 25);
+  assert.equal(useless.shares.reduce((n, s) => n + s.xp, 0), 0, 'моб на 15 уровней ниже старшего не даёт ничего');
 });

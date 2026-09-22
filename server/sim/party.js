@@ -1,8 +1,8 @@
 // Session parties; no authority, membership or reward recipient comes from the client.
 import { flatDist, xpForKill } from '../../src/sim.js';
 import { spForKill } from '../../src/progression.js';
-import { DEFAULT_RATES, rateXp, rateSp, partyMultiplier } from '../../src/rates.js';
-export const PARTY = Object.freeze({ maxMembers: 6, rewardRange: 60, inviteMs: 30000 });
+import { DEFAULT_RATES, rateXp, rateSp, partyMultiplier, partyWeight, splitByWeights, LEVEL_GAP_NONE } from '../../src/rates.js';
+export const PARTY = Object.freeze({ maxMembers: 6, rewardRange: 60, inviteMs: 30000, maxLevelGap: LEVEL_GAP_NONE - 1 });
 export const LOOT_MODES = ['random', 'last_hit', 'pickup'];
 export function createParties(players, send, rates = DEFAULT_RATES) {
   const groups = new Map(), membership = new Map(), invitations = new Map();
@@ -75,17 +75,25 @@ export function createParties(players, send, rates = DEFAULT_RATES) {
     const g = groupOf(winner.id);
     const nearby = memberPlayers(g).filter(p => !p.a.dead && flatDist(p.a, mob) <= PARTY.rewardRange);
     // Solo rules stay unchanged; parties cannot receive rewards remotely or dead.
-    const eligible = g ? nearby : [winner];
-    if (!eligible.length) return { shares: [], recipient: winner, allowed: [], mode: 'last_hit' };
-    // Рейты и бонус группы применяются ДО дележа: суммы остаются целыми и сходятся с наградой.
-    const base = xpForKill(mob.def, Math.max(...eligible.map(p => p.a.P.lvl))), bonus = partyMultiplier(eligible.length, rates);
-    const xp = rateXp(base * bonus, rates), sp = rateSp(spForKill(base) * bonus, rates);
-    const shares = eligible.map((p, i) => ({ player: p, xp: Math.floor(xp / eligible.length) + (i < xp % eligible.length ? 1 : 0),
-      sp: Math.floor(sp / eligible.length) + (i < sp % eligible.length ? 1 : 0) }));
+    const present = g ? nearby : [winner];
+    if (!present.length) return { shares: [], recipient: winner, allowed: [], mode: 'last_hit', level: winner.a.P.lvl };
+    // Награда считается ОДИН раз по старшему участнику — и по его уровню берётся множитель
+    // за разницу с мобом. Только потом она делится, поэтому суммы остаются целыми.
+    const level = Math.max(...present.map(p => p.a.P.lvl));
+    // Отставший больше чем на PARTY.maxLevelGap уровней не получает ничего
+    // и не увеличивает надбавку за размер группы.
+    const weightOf = p => partyWeight(p.a.P.lvl, level, rates);
+    const eligible = present.filter(p => weightOf(p) > 0);
+    const base = xpForKill(mob.def, level, rates), bonus = partyMultiplier(eligible.length, rates);
+    const xp = rateXp(base * bonus, rates), sp = base > 0 ? rateSp(spForKill(base) * bonus, rates) : 0;
+    // Доля растёт с уровнем участника и режется его отставанием от старшего.
+    const weights = eligible.map(weightOf);
+    const xpShares = splitByWeights(xp, weights), spShares = splitByWeights(sp, weights);
+    const shares = eligible.map((p, i) => ({ player: p, xp: xpShares[i], sp: spShares[i] }));
     const mode = g?.mode || 'last_hit';
     const recipient = mode === 'random' ? eligible[Math.min(eligible.length-1, Math.floor(rng()*eligible.length))]
       : eligible.find(p => p === finisher) || eligible.find(p => p === winner) || eligible[0];
-    return { shares, recipient, mode, allowed: mode === 'pickup' ? eligible.map(p => p.key) : [] };
+    return { shares, recipient, mode, level, allowed: mode === 'pickup' ? eligible.map(p => p.key) : [] };
   }
   function tick(now = Date.now()) {
     for (const [id, invite] of invitations) if (invite.expires <= now) invitations.delete(id);

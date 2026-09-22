@@ -213,7 +213,7 @@ function damageMob(a, mb, dmg, crit, now) {
   const topId = world.kill(mb, now);
   const winner = players.get(topId)?.key ? players.get(topId) : players.get(a.id);
   const plan = parties.rewardPlan(winner, players.get(a.id), mb);
-  const rw = world.rewardFor(mb, winner.a.P.lvl);
+  const rw = world.rewardFor(mb, plan.level ?? winner.a.P.lvl);
   for (const share of plan.shares) {
     const actor = share.player.a;
     PL.gainXp(actor, share.xp); actor.P.sp += share.sp; actor.P.kills++; actor.dirty = true;

@@ -1,5 +1,5 @@
 {
-  "_": "Коэффициенты сервера. 1 = текущий классический баланс. Описание и примеры: docs/RATES.md. Любое значение можно переопределить переменной окружения: RATE_XP, RATE_SP, RATE_COINS, RATE_DROP_CHANCE, RATE_DROP_AMOUNT, RATE_CRAFT_COST, RATE_ENCHANT_CHANCE, RATE_SELL_PRICE, RATE_BUY_PRICE, RATE_RESPAWN, RATE_PARTY_BONUS.",
+  "_": "Коэффициенты сервера. Значения по умолчанию повторяют текущий классический баланс. Описание и примеры: docs/RATES.md. Любое значение можно переопределить переменной окружения: RATE_XP, RATE_SP, RATE_COINS, RATE_DROP_CHANCE, RATE_DROP_AMOUNT, RATE_CRAFT_COST, RATE_ENCHANT_CHANCE, RATE_SELL_PRICE, RATE_BUY_PRICE, RATE_RESPAWN, RATE_PARTY_BONUS, RATE_LEVEL_GAP_4 … RATE_LEVEL_GAP_9, RATE_LEVEL_GAP_AFFECTS_COINS, RATE_LEVEL_GAP_AFFECTS_DROP.",
   "rates": {
     "xp": 1,
     "sp": 1,
@@ -11,6 +11,14 @@
     "sellPrice": 1,
     "buyPrice": 1,
     "respawn": 1,
-    "partyBonus": 1
+    "partyBonus": 1,
+    "levelGap4": 0.9,
+    "levelGap5": 0.75,
+    "levelGap6": 0.55,
+    "levelGap7": 0.35,
+    "levelGap8": 0.2,
+    "levelGap9": 0.08,
+    "levelGapAffectsCoins": 1,
+    "levelGapAffectsDrop": 1
   }
 }

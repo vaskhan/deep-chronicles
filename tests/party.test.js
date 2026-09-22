@@ -27,14 +27,15 @@ test('party invitations require acceptance, leader authority, capacity and expir
  m.remove(p.get(1));assert.equal(m.groupOf(2).leader,2);
  for(let i=3;i<=6;i++)m.remove(p.get(i));assert.equal(m.groupOf(2),undefined);
 });
-test('party XP and SP are conserved; distant/dead members excluded; higher level applies kill penalty',()=>{
+test('party XP and SP are conserved; distant/dead/too low members excluded; level gap applies kill penalty',()=>{
  const {players:p,manager:m,join}=setup(4);join(2);join(3,12000);join(4,14000);
  const mob={x:-285,z:387,def:MOBS.goblin};p.get(3).a.x=1000;p.get(4).a.dead=true;
  const plan=m.rewardPlan(p.get(1),p.get(2),mob,()=>0.99);
- assert.equal(plan.shares.length,2);assert.equal(plan.shares.reduce((n,s)=>n+s.xp,0),MOBS.goblin.xp);
- assert.equal(plan.shares.reduce((n,s)=>n+s.sp,0),spForKill(MOBS.goblin.xp));assert.equal(plan.recipient.id,2);
- p.get(2).a.P.lvl=25;const reduced=m.rewardPlan(p.get(1),p.get(2),mob);
- assert.equal(reduced.shares.reduce((n,s)=>n+s.xp,0),xpForKill(MOBS.goblin,25));
+ assert.equal(plan.shares.length,2);assert.equal(plan.shares.reduce((n,s)=>n+s.xp,0),xpForKill(MOBS.goblin,1));
+ assert.equal(plan.shares.reduce((n,s)=>n+s.sp,0),spForKill(xpForKill(MOBS.goblin,1)));assert.equal(plan.recipient.id,2);
+ p.get(2).a.P.lvl=12;const reduced=m.rewardPlan(p.get(1),p.get(2),mob);
+ assert.equal(reduced.shares.reduce((n,s)=>n+s.xp,0),xpForKill(MOBS.goblin,12),'награда считается по старшему участнику');
+ assert.equal(reduced.shares.length,1,'отставший больше чем на девять уровней не получает ничего');
 });
 test('last hit and random reserve to one member; pickup reserves to eligible members and claims once even after policy change',()=>{
  const {players:p,manager:m,join}=setup();join(2);const mob={x:-285,z:387,def:MOBS.rabbit};

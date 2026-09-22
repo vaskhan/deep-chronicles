@@ -38,7 +38,7 @@ MMORPG-песочница в духе классических корейски�
 | Звук и музыка | `godot/scripts/game_audio.gd`, `game_music.gd`, `tools/godot/audio.mjs` |
 | Сеть и протокол | `godot/scripts/network.gd`, `server/server.js`, `docs/gitmark/reference/protocol.md` |
 | Правила: урон, награды, покупки, прогресс, спавны | только `server/` и общие `src/*.js` — в клиент не переносить |
-| Рейты сервера: множители опыта, SP, монет, дропа, цен, заточки, крафта, респавна | `src/rates.js` (правила и пределы), `server/rates.js` + `server/rates.json` (настройки и `RATE_*`), показ — `godot/scripts/hud.gd`; описание — `docs/RATES.md` |
+| Рейты сервера: множители опыта, SP, монет, дропа, цен, заточки, крафта, респавна; штраф за разницу уровней и дележ награды в группе | `src/rates.js` (правила, ступени 3-6-9, веса долей), `server/rates.js` + `server/rates.json` (настройки и `RATE_*`), выдача — `server/sim/mobs.js` и `server/sim/party.js`, показ — `godot/scripts/hud.gd`; описание — `docs/RATES.md` |
 | Сборки, экспорт, сайт, релиз | `tools/godot/build.mjs`, `tools/site/build.mjs`, `docs/NATIVE_PIPELINE.md`, `docs/DISTRIBUTION.md` |
 | Контейнер сервера, деплой на прод | `Dockerfile`, `docker-compose.yml`, `deploy/promote.sh`, `docs/gitmark/ops/deploy.md` |
 

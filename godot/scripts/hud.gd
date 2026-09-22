@@ -442,6 +442,9 @@ const RATE_LABELS = {"xp": "опыт", "sp": "SP", "coins": "монеты", "dro
 	"craftCost": "цена крафта", "enchantChance": "шанс заточки", "sellPrice": "цена продажи", "buyPrice": "цена покупки",
 	"respawn": "респавн", "partyBonus": "бонус группы"}
 const RATE_MAIN = ["xp", "sp", "coins", "dropChance"]
+# Штраф за разницу уровней: показываем отдельной строкой и только если сервер изменил кривую.
+const RATE_GAP_DEFAULTS = {"levelGap4": 0.9, "levelGap5": 0.75, "levelGap6": 0.55, "levelGap7": 0.35, "levelGap8": 0.2,
+	"levelGap9": 0.08, "levelGapAffectsCoins": 1.0, "levelGapAffectsDrop": 1.0}
 
 func rate_text(value: float) -> String:
 	return ("%.2f" % value).rstrip("0").rstrip(".").replace(".", ",")
@@ -459,7 +462,23 @@ func rates_lines() -> Array:
 		if key in RATE_MAIN or not rates.has(key) or is_equal_approx(float(rates[key]), 1.0): continue
 		extra.append("%s ×%s" % [RATE_LABELS[key], rate_text(float(rates[key]))])
 	if not extra.is_empty(): lines.append("Ещё: " + ", ".join(extra))
+	var gap = _level_gap_line(rates)
+	if not gap.is_empty(): lines.append(gap)
 	return lines
+
+func _level_gap_line(rates: Dictionary) -> String:
+	var changed = false
+	for key in RATE_GAP_DEFAULTS:
+		if rates.has(key) and not is_equal_approx(float(rates[key]), RATE_GAP_DEFAULTS[key]): changed = true
+	if not changed: return ""
+	var near = []
+	var far = []
+	for gap in [4, 5, 6]: near.append("×" + rate_text(float(rates.get("levelGap%d" % gap, RATE_GAP_DEFAULTS["levelGap%d" % gap]))))
+	for gap in [7, 8, 9]: far.append("×" + rate_text(float(rates.get("levelGap%d" % gap, RATE_GAP_DEFAULTS["levelGap%d" % gap]))))
+	var parts = ["до 3 — полная награда", "4–6 " + " / ".join(near), "7–9 " + " / ".join(far), "от 10 — без награды"]
+	if float(rates.get("levelGapAffectsCoins", 1.0)) == 0.0: parts.append("монеты без штрафа")
+	if float(rates.get("levelGapAffectsDrop", 1.0)) == 0.0: parts.append("дроп без штрафа")
+	return "Разница уровней: " + ", ".join(parts)
 
 func _wrapped(parent: Node, text: String, font_size = 13) -> Label:
 	var label = _label(parent, text, font_size); label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

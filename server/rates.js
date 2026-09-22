@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { RATE_NAMES, normalizeRates, describeRates, isDefaultRates } from '../src/rates.js';
 
 export const DEFAULT_RATES_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'rates.json');
-// RATE_XP=2, RATE_DROP_CHANCE=3 — переменная окружения сильнее файла.
-export const envName = (key) => 'RATE_' + key.replace(/[A-Z]/g, (c) => '_' + c).toUpperCase();
+// RATE_XP=2, RATE_DROP_CHANCE=3, RATE_LEVEL_GAP_5=0.5 — переменная окружения сильнее файла.
+export const envName = (key) => 'RATE_' + key.replace(/[A-Z]|\d+/g, (part) => '_' + part).toUpperCase();
 
 function readFileRates(file, warnings) {
   if (!fs.existsSync(file)) return {};

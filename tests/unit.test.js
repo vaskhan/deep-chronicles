@@ -212,12 +212,16 @@ test('промах и уклонение: в пределах разумного
   assert.ok(evaChance(1, 90) > evaChance(40, 30), 'уклонение не растёт от ловкости');
 });
 
-test('опыт за моба режется, если моб сильно ниже игрока', () => {
-  const mob = MOBS.rabbit;
+test('опыт режется ступенями за разницу уровней в обе стороны', () => {
+  const mob = MOBS.rabbit, strong = MOBS.golem;
   assert.equal(xpForKill(mob, mob.lvl), mob.xp, 'за ровню опыт полный');
-  assert.equal(xpForKill(mob, mob.lvl - 10), mob.xp, 'за моба выше себя опыт полный');
-  const low = xpForKill(mob, mob.lvl + 20);
-  assert.ok(low < mob.xp && low >= Math.round(mob.xp * 0.1), `срез опыта: ${low}`);
+  assert.equal(xpForKill(mob, mob.lvl + 3), mob.xp, 'разница до трёх уровней штрафа не даёт');
+  assert.equal(xpForKill(strong, strong.lvl - 3), strong.xp, 'за моба выше себя в пределах трёх уровней опыт полный');
+  assert.ok(xpForKill(mob, mob.lvl + 4) < mob.xp, 'с четвёртого уровня разницы начинается штраф');
+  assert.ok(xpForKill(mob, mob.lvl + 9) > 0 && xpForKill(mob, mob.lvl + 9) < xpForKill(mob, mob.lvl + 6), 'на 7–9 остаются крохи');
+  assert.equal(xpForKill(mob, mob.lvl + 10), 0, 'с десяти уровней разницы награды нет');
+  assert.equal(xpForKill(strong, strong.lvl - 10), 0, 'за слишком сильного моба тоже ноль');
+  assert.equal(xpForKill(strong, strong.lvl - 7), xpForKill(strong, strong.lvl + 7), 'штраф симметричен');
 });
 
 test('добыча и монеты — в границах таблицы моба', () => {

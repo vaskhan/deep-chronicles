@@ -3,7 +3,7 @@
 import { MOBS } from '../../src/data.js';
 import { buildProps } from '../../src/world-core.js';
 import { newMob, mobStep, mobRadius, xpForKill, rollCoins, flatDist } from '../../src/sim.js';
-import { DEFAULT_RATES, rateXp, rateCoins, rollDropsRated, rateRespawnMs } from '../../src/rates.js';
+import { DEFAULT_RATES, rateXp, rateCoins, rollDropsRated, rateRespawnMs, coinLevelFactor, dropLevelFactor } from '../../src/rates.js';
 
 // rates — серверные коэффициенты (src/rates.js); по умолчанию ×1, то есть прежний баланс.
 export function createMobs(rates = DEFAULT_RATES) {
@@ -39,10 +39,12 @@ export function createMobs(rates = DEFAULT_RATES) {
 
   // Точка выдачи награды: здесь и только здесь работают рейты монет и дропа.
   // Фактический опыт делит server/sim/party.js — там же применяется рейт опыта.
+  // lvl — уровень, по которому считается награда (в группе это максимальный среди имеющих право),
+  // поэтому штраф за разницу уровней одинаков для опыта, монет и дропа.
   const rewardFor = (m, lvl) => ({
-    xp: rateXp(xpForKill(m.def, lvl), rates),
-    coins: rateCoins(rollCoins(m.def), rates),
-    drops: rollDropsRated(m.def, rates),
+    xp: rateXp(xpForKill(m.def, lvl, rates), rates),
+    coins: rateCoins(rollCoins(m.def) * coinLevelFactor(m.def.lvl, lvl, rates), rates),
+    drops: rollDropsRated(m.def, rates, Math.random, dropLevelFactor(m.def.lvl, lvl, rates)),
   });
 
   // кого видно игроку: живые и недавно умершие (чтобы клиент доиграл падение)
