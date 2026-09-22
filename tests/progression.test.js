@@ -14,7 +14,8 @@ test('миграция v3 сохраняет вещи/монеты и откры
   delete original.skills; delete original.sp; delete original.autoloot;
   const migrated = loadChar('Тест', original);
   assert.equal(migrated.coins, 9876); assert.deepEqual(migrated.equip, original.equip);
-  assert.deepEqual(migrated.skills, { fire_bolt: 1, heal: 1, ice_nova: 1 });
+  // Старый сейв без skills открывает первый ранг всех доступных по уровню умений класса, включая новые.
+  assert.deepEqual(migrated.skills, { fire_bolt: 1, heal: 1, ice_nova: 1, curse: 1 });
   assert.equal(migrated.sp, 0); assert.equal(migrated.autoloot, true);
   migrated.skills.fire_bolt = 2; migrated.sp = 222; migrated.autoloot = false;
   const second = loadChar('Тест', migrated);

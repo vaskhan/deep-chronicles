@@ -50,13 +50,14 @@ export function newActor(id, name, P) {
     id, name, P,
     x: P.x, y: heightAt(P.x, P.z), z: P.z, r: 0,
     target: null,        // { m: mobId } | { p: playerId }
-    attacking: false, atkTimer: 0, swing: null, cds: {}, buffs: [], cast: null,
+    attacking: false, atkTimer: 0, swing: null, cds: {}, effects: [], cast: null,
     dead: false, dirty: true, out: [],
     hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0,
   };
 }
 
-export const statsOf = (a, now) => calcStats(a.P, a.buffs, now);
+// Эффекты во времени (усиления, ослабления, замедление) считает calcStats — src/effects.js.
+export const statsOf = (a, now) => calcStats(a.P, a.effects, now);
 export const inTown = (a) => !!zoneAt(a.x, a.z).town;
 const ev = (a, e) => { a.out.push(e); };
 export const say = (a, text, cls) => ev(a, { k: 'msg', text, cls });
@@ -90,6 +91,7 @@ export function gainXp(a, xp) {
 }
 export function killPlayer(a, byName, byPk) {
   a.dead = true; a.swing = null; a.P.hp = 0; a.attacking = false; a.target = null; a.cast = null;
+  a.effects = [];
   const loss = xpLossOnDeath(a.P.lvl, a.karma > 0);
   a.P.xp = Math.max(0, a.P.xp - loss);
   ev(a, { k: 'dead', by: byName, loss, pk: !!byPk });
@@ -97,6 +99,7 @@ export function killPlayer(a, byName, byPk) {
 }
 export function respawn(a) {
   if (!a.dead) return;
+  a.effects = [];
   const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0];
   const s = statsOf(a);
   a.dead = false; a.P.hp = Math.round(s.maxHp * 0.7); a.P.mp = Math.round(s.maxMp * 0.7);

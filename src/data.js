@@ -10,7 +10,7 @@ export const CLASSES = {
     attr: { str: 40, dex: 30, con: 43, int: 21, wit: 11, men: 25 },
     base: { hp: 120, mp: 30, patk: 9, matk: 3, pdef: 40, mdef: 30, aspd: 1.0, speed: 8, crit: 0.08 },
     grow: { hp: 22, mp: 4, patk: 2.2, matk: 0.4, pdef: 2.0, mdef: 1.2 },
-    skills: ['power_strike', 'battle_cry', 'whirlwind'],
+    skills: ['power_strike', 'battle_cry', 'whirlwind', 'blood_rage'],
     range: 3.2,
   },
   mage: {
@@ -18,19 +18,24 @@ export const CLASSES = {
     attr: { str: 22, dex: 21, con: 27, int: 41, wit: 20, men: 39 },
     base: { hp: 80, mp: 90, patk: 4, matk: 12, pdef: 30, mdef: 45, aspd: 0.8, speed: 7.4, crit: 0.05 },
     grow: { hp: 13, mp: 14, patk: 0.6, matk: 2.6, pdef: 1.2, mdef: 2.0 },
-    skills: ['fire_bolt', 'heal', 'ice_nova'],
+    skills: ['fire_bolt', 'heal', 'ice_nova', 'curse'],
     range: 22,
   },
 };
 
-// умения: kind — dmg (физ/маг), heal, buff, aoe
+// умения: kind — dmg (физ/маг), heal, buff, aoe.
+// Поля эффектов во времени (правила — src/effects.js): dot — урон со временем,
+// hot — лечение со временем, debuff — ослабление характеристики, slow — замедление,
+// drain — вампиризм. Сила эффектов растёт по рангам в src/progression.js.
 export const SKILLS = {
   power_strike: { name: 'Мощный удар', key: '1', mp: 8, cd: 5, kind: 'dmg', school: 'p', mul: 2.4, range: 3.5, color: 0xffa040, lvl: 1 },
   battle_cry: { name: 'Боевой клич', key: '2', mp: 15, cd: 40, kind: 'buff', stat: 'patk', mul: 1.3, dur: 20, color: 0xff4040, lvl: 5 },
   whirlwind: { name: 'Вихрь', key: '3', mp: 22, cd: 10, kind: 'aoe', school: 'p', mul: 1.6, radius: 7, color: 0xffd060, lvl: 12 },
+  blood_rage: { name: 'Кровавая ярость', key: '4', mp: 20, cd: 45, kind: 'buff', drain: { mul: 0.3, dur: 12 }, color: 0xc0303a, lvl: 16 },
   fire_bolt: { name: 'Огненная стрела', key: '1', mp: 10, cd: 2.2, kind: 'dmg', school: 'm', mul: 2.2, range: 24, color: 0xff5010, cast: 0.8, lvl: 1 },
-  heal: { name: 'Исцеление', key: '2', mp: 18, cd: 6, kind: 'heal', amount: 0.35, color: 0x60ff90, cast: 1.0, lvl: 3 },
-  ice_nova: { name: 'Ледяная волна', key: '3', mp: 30, cd: 12, kind: 'aoe', school: 'm', mul: 1.8, radius: 9, color: 0x80d0ff, cast: 0.6, lvl: 10 },
+  heal: { name: 'Исцеление', key: '2', mp: 18, cd: 6, kind: 'heal', amount: 0.24, hot: { amount: 0.03, dur: 6, tick: 1.5 }, color: 0x60ff90, cast: 1.0, lvl: 3 },
+  ice_nova: { name: 'Ледяная волна', key: '3', mp: 30, cd: 12, kind: 'aoe', school: 'm', mul: 1.8, radius: 9, slow: { mul: 0.55, dur: 6 }, color: 0x80d0ff, cast: 0.6, lvl: 10 },
+  curse: { name: 'Печать немощи', key: '4', mp: 22, cd: 14, kind: 'dmg', school: 'm', mul: 0.8, range: 20, dot: { mul: 2.4, dur: 9, tick: 1.5 }, debuff: { stat: 'patk', mul: 0.72, dur: 9 }, color: 0x9a4bd8, cast: 0.7, lvl: 7 },
 };
 
 // грейды снаряжения
@@ -129,20 +134,21 @@ export const SETS = {
   bone: { name: 'Костяной комплект', parts: ['helm_bone', 'armor_bone', 'legs_bone', 'gloves_bone', 'boots_bone'], bonus: { hp: 400, pdef: 40, crit: 0.03 } },
 };
 
-// мобы: shape — вид (для процедурной модели)
+// мобы: shape — вид (для процедурной модели); fam/social — стаи (src/pack.js):
+// атака одного поднимает сородичей того же семейства рядом. Одиночки (кролик, древень, голем, босс) поля не имеют.
 export const MOBS = {
   rabbit: { name: 'Полевой кролик', lvl: 1, hp: 40, patk: 5, pdef: 20, xp: 18, coins: [2, 6], shape: 'critter', color: 0xd0c0a0, size: 0.5, speed: 3.2, drops: { pelt: 0.3 } },
-  wolf: { name: 'Серый волк', lvl: 3, hp: 85, patk: 10, pdef: 28, xp: 45, coins: [5, 12], shape: 'beast', color: 0x707070, size: 0.9, drops: { pelt: 0.5 } },
-  goblin: { name: 'Гоблин-разведчик', lvl: 5, hp: 130, patk: 15, pdef: 34, xp: 80, coins: [10, 22], shape: 'humanoid', color: 0x4a8a3a, size: 0.9, drops: { potion_hp: 0.15, bone: 0.3, ring_bronze: 0.02 } },
-  boar: { name: 'Дикий кабан', lvl: 8, hp: 210, patk: 22, pdef: 45, xp: 140, coins: [15, 30], shape: 'beast', color: 0x6a4a30, size: 1.15, drops: { pelt: 0.6, boots_leather: 0.03, gloves_apprentice: 0.03 } },
+  wolf: { name: 'Серый волк', lvl: 3, hp: 85, patk: 10, pdef: 28, xp: 45, coins: [5, 12], shape: 'beast', color: 0x707070, size: 0.9, fam: 'wolf', social: true, drops: { pelt: 0.5 } },
+  goblin: { name: 'Гоблин-разведчик', lvl: 5, hp: 130, patk: 15, pdef: 34, xp: 80, coins: [10, 22], shape: 'humanoid', color: 0x4a8a3a, size: 0.9, fam: 'goblin', social: true, drops: { potion_hp: 0.15, bone: 0.3, ring_bronze: 0.02 } },
+  boar: { name: 'Дикий кабан', lvl: 8, hp: 210, patk: 22, pdef: 45, xp: 140, coins: [15, 30], shape: 'beast', color: 0x6a4a30, size: 1.15, fam: 'boar', social: true, drops: { pelt: 0.6, boots_leather: 0.03, gloves_apprentice: 0.03 } },
   treant: { name: 'Древень', lvl: 11, hp: 380, patk: 30, pdef: 70, xp: 240, coins: [25, 50], shape: 'tree', color: 0x3a5a2a, size: 1.8, drops: { crystal: 0.1, hat_apprentice: 0.04, ear_bronze: 0.03 } },
-  orc: { name: 'Орк-воитель', lvl: 14, hp: 520, patk: 42, pdef: 80, xp: 360, coins: [40, 80], shape: 'humanoid', color: 0x3a6a4a, size: 1.4, aggro: true, drops: { potion_hp: 0.2, bone: 0.4, helm_leather: 0.04, scroll_ench_a: 0.03 } },
-  spider: { name: 'Пещерный паук', lvl: 16, hp: 600, patk: 50, pdef: 85, xp: 430, coins: [45, 90], shape: 'spider', color: 0x3a2a3a, size: 1.3, aggro: true, drops: { crystal: 0.15, neck_bronze: 0.03 } },
-  scorpion: { name: 'Песчаный скорпион', lvl: 19, hp: 820, patk: 60, pdef: 110, xp: 600, coins: [60, 120], shape: 'spider', color: 0xb08040, size: 1.5, drops: { crystal: 0.2, gloves_chain: 0.02 } },
+  orc: { name: 'Орк-воитель', lvl: 14, hp: 520, patk: 42, pdef: 80, xp: 360, coins: [40, 80], shape: 'humanoid', color: 0x3a6a4a, size: 1.4, aggro: true, fam: 'orc', social: true, drops: { potion_hp: 0.2, bone: 0.4, helm_leather: 0.04, scroll_ench_a: 0.03 } },
+  spider: { name: 'Пещерный паук', lvl: 16, hp: 600, patk: 50, pdef: 85, xp: 430, coins: [45, 90], shape: 'spider', color: 0x3a2a3a, size: 1.3, aggro: true, fam: 'arachnid', social: true, drops: { crystal: 0.15, neck_bronze: 0.03 } },
+  scorpion: { name: 'Песчаный скорпион', lvl: 19, hp: 820, patk: 60, pdef: 110, xp: 600, coins: [60, 120], shape: 'spider', color: 0xb08040, size: 1.5, fam: 'arachnid', social: true, drops: { crystal: 0.2, gloves_chain: 0.02 } },
   golem: { name: 'Каменный голем', lvl: 23, hp: 1400, patk: 78, pdef: 160, xp: 950, coins: [90, 170], shape: 'golem', color: 0x8a7a6a, size: 2.2, drops: { crystal: 0.35, scroll_ench_w: 0.03, boots_chain: 0.03 } },
-  skeleton: { name: 'Скелет-страж', lvl: 18, hp: 700, patk: 56, pdef: 95, xp: 520, coins: [55, 100], shape: 'humanoid', color: 0xe0dcc8, size: 1.1, aggro: true, drops: { bone: 0.8, potion_mp: 0.1, scroll_ench_a: 0.04 } },
-  ghoul: { name: 'Упырь', lvl: 21, hp: 950, patk: 68, pdef: 120, xp: 720, coins: [70, 140], shape: 'humanoid', color: 0x6a8a6a, size: 1.2, aggro: true, drops: { ectoplasm: 0.25, ring_silver: 0.02 } },
-  wraith: { name: 'Призрак', lvl: 24, hp: 1100, patk: 80, pdef: 130, xp: 900, coins: [90, 160], shape: 'ghost', color: 0x90ffd0, size: 1.3, aggro: true, drops: { ectoplasm: 0.5, scroll_ench_w: 0.04, hat_mystic: 0.02 } },
+  skeleton: { name: 'Скелет-страж', lvl: 18, hp: 700, patk: 56, pdef: 95, xp: 520, coins: [55, 100], shape: 'humanoid', color: 0xe0dcc8, size: 1.1, aggro: true, fam: 'undead', social: true, drops: { bone: 0.8, potion_mp: 0.1, scroll_ench_a: 0.04 } },
+  ghoul: { name: 'Упырь', lvl: 21, hp: 950, patk: 68, pdef: 120, xp: 720, coins: [70, 140], shape: 'humanoid', color: 0x6a8a6a, size: 1.2, aggro: true, fam: 'undead', social: true, drops: { ectoplasm: 0.25, ring_silver: 0.02 } },
+  wraith: { name: 'Призрак', lvl: 24, hp: 1100, patk: 80, pdef: 130, xp: 900, coins: [90, 160], shape: 'ghost', color: 0x90ffd0, size: 1.3, aggro: true, fam: 'undead', social: true, drops: { ectoplasm: 0.5, scroll_ench_w: 0.04, hat_mystic: 0.02 } },
   lich: { name: 'Король-лич', lvl: 28, hp: 9000, patk: 120, pdef: 200, xp: 9000, coins: [1500, 2500], shape: 'humanoid', color: 0x8040c0, size: 2.6, aggro: true, boss: true, respawn: 300, drops: { lich_seal: 1, staff_abyss: 0.3, hat_abyss: 0.3, robe_abyss: 0.3, gloves_abyss: 0.3, boots_abyss: 0.3, shield_bone: 0.2, neck_lich: 0.2, ring_lich: 0.25, sword_dragon: 0.3, armor_bone: 0.3, helm_bone: 0.3, legs_bone: 0.3, gloves_bone: 0.3, boots_bone: 0.3, ear_lich: 0.25, scroll_ench_w: 0.5, ectoplasm: 1 } },
 };
 
