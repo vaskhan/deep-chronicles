@@ -297,9 +297,11 @@ func enter(p: Dictionary):
 func update_profile(p: Dictionary):
 	profile = p; current_stats = GameData.stats(p, active_buffs)
 	if not enchant_scroll.is_empty() and not p.inv.any(func(e): return e.id == enchant_scroll): enchant_scroll = ""
-	if window_kind in ["inventory", "character", "shop", "teleport", "priest", "skills", "craft"]: show_window(window_kind, true)
-	if hotbar_class != p.cls:
-		hotbar_class = p.cls
+	if window_kind in ["inventory", "character", "shop", "teleport", "priest", "skills", "craft", "profession"]: show_window(window_kind, true)
+	# Профессия добавляет умения в список назначаемых — ячейки пересобираются и при её выборе.
+	var hotbar_signature = "%s/%s" % [p.cls, str(p.get("prof", ""))]
+	if hotbar_class != hotbar_signature:
+		hotbar_class = hotbar_signature
 		hotbar_bindings = Settings.read_value("hotbar", p.cls, default_bindings()).duplicate()
 		if hotbar_bindings.size() != 10: hotbar_bindings = default_bindings()
 		var choices = binding_choices()
@@ -377,7 +379,7 @@ func show_window(kind: String, refresh = false):
 	window = load("res://scripts/window_frame.gd").new(); game_ui.add_child(window)
 	window.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	var dimensions = get_viewport().get_visible_rect().size
-	var desired = {"inventory": Vector2(490, 478), "character": Vector2(410, 630), "shop": Vector2(500, 540), "map": Vector2(760, 530), "menu": Vector2(360, 405), "settings": Vector2(450, 540), "actions": Vector2(440, 530), "skills": Vector2(530, 570), "teleport": Vector2(480, 470), "priest": Vector2(370, 230), "controls": Vector2(500, 510)}.get(kind, Vector2(500, 520))
+	var desired = {"inventory": Vector2(490, 478), "character": Vector2(410, 630), "shop": Vector2(500, 540), "map": Vector2(760, 530), "menu": Vector2(360, 405), "settings": Vector2(450, 540), "actions": Vector2(440, 530), "skills": Vector2(530, 570), "profession": Vector2(Tuning.PROFESSION_WINDOW_WIDTH, Tuning.PROFESSION_WINDOW_HEIGHT), "teleport": Vector2(480, 470), "priest": Vector2(370, 230), "controls": Vector2(500, 510)}.get(kind, Vector2(500, 520))
 	if touch: desired.x += 35; desired.y += 35
 	if kind == "inventory" and touch: desired = Vector2(420, 640)
 	var half = Vector2(minf(desired.x, dimensions.x - 16), minf(desired.y, dimensions.y - 16)) * 0.5
@@ -387,7 +389,7 @@ func show_window(kind: String, refresh = false):
 		window.position = Vector2(dimensions.x - half.x * 2 - 188, 76)
 	if window_positions.has(kind): window.position = window_positions[kind]
 	var row = _row(window_body); row.mouse_filter = Control.MOUSE_FILTER_STOP; row.gui_input.connect(window.drag_title)
-	var titles = {"inventory": "Инвентарь", "character": "Персонаж", "map": "Карта мира", "shop": "Торговец", "teleport": "Хранитель врат", "priest": "Жрец", "menu": "Меню игры", "settings": "Настройки", "controls": "Управление", "skills": "Умения", "actions": "Панель действий", "craft": "Изготовление", "equipment": "Путь снаряжения", "party": "Группа"}
+	var titles = {"inventory": "Инвентарь", "character": "Персонаж", "map": "Карта мира", "shop": "Торговец", "teleport": "Хранитель врат", "priest": "Жрец", "menu": "Меню игры", "settings": "Настройки", "controls": "Управление", "skills": "Умения", "profession": "Выбор профессии", "actions": "Панель действий", "craft": "Изготовление", "equipment": "Путь снаряжения", "party": "Группа"}
 	var title = _label(row, titles.get(kind, kind), 12); title.size_flags_horizontal = Control.SIZE_EXPAND_FILL; title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.modulate = Color("d4c49b")
 	_button(row, "×", close_window).tooltip_text = "Закрыть · Esc"
 	if kind == "map":
@@ -416,12 +418,13 @@ func show_window(kind: String, refresh = false):
 			var b = _button(list, "Очистить карму · %s мон." % cost, func(): action.emit("wash", null))
 			b.disabled = karma <= 0 or profile.coins < cost or not Network.authed
 		"skills": _skills(list)
+		"profession": _profession(list)
 		"actions": _actions_settings(list)
 		"menu":
 			_label(list, "Персонаж: %s · %s" % [profile.name, GameData.catalog.CLASSES[profile.cls].name], 20)
 			_wrapped(list, "Сервер: %s\n%s · Игроков в мире: %s" % [Network.endpoint, "Подключено" if Network.authed else "Переподключение…", Network.online_count])
 			var grid = GridContainer.new(); grid.columns = 2; list.add_child(grid)
-			for entry in [["Сумка · Tab / I", "inventory"], ["Персонаж · C", "character"], ["Умения · K", "skills"], ["Группа / Пати", "party"], ["Панель действий", "actions"], ["Оружие и броня", "equipment"], ["Карта мира · M", "map"], ["Настройки", "settings"], ["Управление", "controls"]]:
+			for entry in [["Сумка · Tab / I", "inventory"], ["Персонаж · C", "character"], ["Умения · K", "skills"], ["Профессия", "profession"], ["Группа / Пати", "party"], ["Панель действий", "actions"], ["Оружие и броня", "equipment"], ["Карта мира · M", "map"], ["Настройки", "settings"], ["Управление", "controls"]]:
 				_button(grid, entry[0], func(): show_window(entry[1])).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			_button(list, "Вернуть камеру за спину · V", func(): action.emit("camera", null); close_window())
 			_button(list, "Полный экран / окно · F11", func(): action.emit("fullscreen", null))
@@ -507,6 +510,10 @@ func _shop(list):
 func _character(list):
 	var preview = load("res://scripts/character_preview.gd").new(); preview.profile = profile; list.add_child(preview)
 	_label(list, "%s · %s · Уровень %s" % [profile.name, GameData.catalog.CLASSES[profile.cls].name, int(profile.lvl)], 22)
+	var hero_prof = GameData.profession(profile)
+	var prof_line = _label(list, "Профессия: %s" % (hero_prof.name if not hero_prof.is_empty() else "не выбрана · доступна с %s уровня" % int(GameData.catalog.PROF_LVL)), 15)
+	prof_line.set_meta("hero_profession", true)
+	if not hero_prof.is_empty(): _wrapped(list, "Бонусы профессии: " + _prof_bonus_text(hero_prof.bonus), 12)
 	_label(list, "SP: %s · Монеты: %s" % [_money(int(profile.get("sp", 0))), _money(int(profile.coins))])
 	_label(list, "Родной город: " + _home_name())
 	_label(list, "HP %s / %s · MP %s / %s" % [int(profile.hp), int(current_stats.maxHp), int(profile.mp), int(current_stats.maxMp)])
@@ -670,10 +677,16 @@ func _skill_description(id: String) -> String:
 	return result
 
 func _skills(list):
+	var prof = GameData.profession(profile)
+	var prof_row = _row(list)
+	_label(prof_row, "Профессия: %s" % (prof.name if not prof.is_empty() else "не выбрана"), 15).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_button(prof_row, "Выбрать профессию…" if prof.is_empty() else "О профессии…", func(): show_window("profession")).set_meta("open_profession", true)
+	if prof.is_empty(): _wrapped(list, "С %s уровня открывается одна из двух профессий: постоянные бонусы к характеристикам и два новых умения." % int(GameData.catalog.PROF_LVL), 12)
+	list.add_child(HSeparator.new())
 	_label(list, "Очки навыков: %s SP" % _money(int(profile.get("sp", 0))), 17)
 	_wrapped(list, "SP накапливаются за убийства. Новые ранги открываются на указанных уровнях и изучаются здесь. Базовая атака первого уровня уже изучена.", 12)
 	_wrapped(list, "Снимите «Замок» над панелью и перетащите иконку изученного навыка в нужную ячейку.", 12)
-	for id in GameData.catalog.CLASSES[profile.cls].skills:
+	for id in GameData.skills_of(profile):
 		var ranks = GameData.catalog.UI_RULES.skillRanks[id]; var learned = int(profile.get("skills", {}).get(id, 0))
 		var row = _item_row(list, id, "%s · Ранг %s/%s" % [GameData.catalog.SKILLS[id].name, learned, ranks.size()])
 		var button = _button(row, "Применить", func(): action.emit("skill", id)); button.disabled = learned == 0 or not Network.authed or profile.get("dead", false)
@@ -687,6 +700,47 @@ func _skills(list):
 			button.disabled = not Network.authed or profile.get("dead", false) or profile.lvl < next.lvl or profile.get("sp", 0) < next.sp
 		else: _label(list, "Все ранги изучены", 12)
 		list.add_child(HSeparator.new())
+
+## Окно выбора профессии: две карточки, честная блокировка и один необратимый выбор.
+## Решение принимает сервер: отсюда уходит только команда `prof`.
+func _profession(list):
+	var required = int(GameData.catalog.PROF_LVL)
+	var level = int(profile.lvl)
+	var chosen = GameData.profession(profile)
+	if chosen.is_empty():
+		_label(list, "Профессия ещё не выбрана", 17)
+		if level < required: _wrapped(list, "Профессию выбирают с %s уровня. Сейчас у вас %s — продолжайте охоту." % [required, level], 13)
+		else: _wrapped(list, "Выбор делается один раз и не меняется. Профессия даёт постоянные бонусы к характеристикам и два умения, которые изучаются за SP в карточке навыков (K).", 13)
+	else:
+		_label(list, "Ваша профессия: %s" % chosen.name, 17)
+		_wrapped(list, "Выбор сделан и не меняется. Умения профессии изучаются за SP в карточке навыков (K).", 13)
+	list.add_child(HSeparator.new())
+	for prof in GameData.professions_for(profile.cls):
+		var panel = PanelContainer.new(); list.add_child(panel)
+		panel.set_meta("profession_card", prof.id)
+		var card = VBoxContainer.new(); panel.add_child(card)
+		var name_label = _label(card, prof.name, 18); name_label.modulate = Color("d4c49b")
+		_wrapped(card, prof.desc, 13)
+		_wrapped(card, "Бонусы: " + _prof_bonus_text(prof.bonus), 13)
+		for id in prof.skills:
+			var ranks = GameData.catalog.UI_RULES.skillRanks[id]
+			_item_row(card, id, "%s · с %s уровня · %s SP за первый ранг" % [GameData.catalog.SKILLS[id].name, int(ranks[0].lvl), int(ranks[0].sp)])
+			_wrapped(card, _skill_description(id), 12)
+		var reason = ""
+		if not chosen.is_empty(): reason = "Профессия уже выбрана: %s" % chosen.name
+		elif level < required: reason = "Нужен %s уровень, сейчас %s" % [required, level]
+		elif not Network.authed: reason = "Нет связи с сервером"
+		var button = _button(card, "Стать: %s" % prof.name, func(): action.emit("prof", prof.id))
+		button.set_meta("prof", prof.id); button.disabled = not reason.is_empty(); button.tooltip_text = reason
+		if not reason.is_empty(): _label(card, reason, 12).modulate = Color("c8907a")
+
+## Бонусы профессии — множители: показываем их процентами со знаком.
+func _prof_bonus_text(bonus: Dictionary) -> String:
+	var parts: Array[String] = []
+	for key in bonus:
+		var percent = (float(bonus[key]) - 1.0) * 100.0
+		parts.append("%s %s%.0f%%" % [STAT_NAMES.get(key, key), "+" if percent >= 0 else "−", absf(percent)])
+	return ", ".join(parts)
 
 func _settings(list):
 	_label(list, "Звук", 20)
@@ -727,7 +781,7 @@ func default_bindings() -> Array:
 	return GameData.catalog.CLASSES[profile.cls].skills.duplicate() + ["potion_hp", "potion_mp", "attack", "target", "talk", "pickup", "skills"]
 
 func binding_choices() -> Array:
-	return GameData.catalog.CLASSES[profile.cls].skills.duplicate() + ["potion_hp", "potion_mp", "scroll_escape"] + ACTION_NAMES.keys()
+	return GameData.skills_of(profile) + ["potion_hp", "potion_mp", "scroll_escape"] + ACTION_NAMES.keys()
 
 func binding_name(id: String) -> String:
 	if id in GameData.catalog.SKILLS: return GameData.catalog.SKILLS[id].name

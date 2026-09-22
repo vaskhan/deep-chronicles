@@ -126,7 +126,7 @@ func _run():
 	await _test_locomotion()
 
 	await create_timer(0.2).timeout
-	for kind in ["inventory", "character", "map", "shop", "teleport", "priest", "menu", "skills", "settings", "controls", "actions", "equipment", "craft"]:
+	for kind in ["inventory", "character", "map", "shop", "teleport", "priest", "menu", "skills", "profession", "settings", "controls", "actions", "equipment", "craft"]:
 		game.hud.show_window(kind)
 		await process_frame
 		check(is_instance_valid(game.hud.window) and game.get_viewport().get_visible_rect().encloses(game.hud.window.get_global_rect()), kind + " window fits the viewport")
@@ -211,6 +211,7 @@ func _run():
 	game.hud.close_window()
 	game.hud.skill_buttons[1].pressed.emit()
 	check(await wait_for(func(): return not game.hud.buff_text.text.is_empty() and game.stats.patk > data.stats(game.profile).patk), "buff and effective stats come from the server skill event")
+	await _test_profession()
 	await _dev({"x": -418, "z": 410})
 	game.hud.show_window("teleport"); _click("teleport", "meadow")
 	check(await wait_for(func(): return absf(game.hero.position.x + 260) < 2), "teleport places the native hero in the correct world coordinates")
@@ -587,6 +588,46 @@ func _finish():
 	if net.socket: net.socket.close()
 	print("NATIVE_TEST_RESULT checks=%s failures=%s" % [checks, failures])
 	quit(0 if failures == 0 else 1)
+
+## Профессия: блокировка до 20 уровня, выбор решает сервер, результат виден в интерфейсе.
+func _test_profession():
+	check(game.profile.get("prof", null) == null, "new character starts without a profession")
+	game.hud.show_window("profession"); await process_frame; await process_frame
+	var cards = game.hud.window.find_children("*", "PanelContainer", true, false).filter(func(n): return n.has_meta("profession_card"))
+	check(cards.size() == 2, "profession window offers exactly two cards for the class")
+	var locked = _find_button("prof", "knight")
+	check(is_instance_valid(locked) and locked.disabled and locked.tooltip_text.contains("20"), "profession is locked before level 20 with a readable reason")
+	await _screenshot("profession-locked.png")
+	await _dev({"lvl": 20, "sp": 100000})
+	check(await wait_for(func(): return int(game.profile.lvl) == 20), "server raises the character to the profession level")
+	game.hud.show_window("profession"); await process_frame; await process_frame
+	await _screenshot("profession.png")
+	var health_before = data.stats(game.profile).maxHp
+	_click("prof", "knight")
+	check(await wait_for(func(): return str(game.profile.get("prof", "")) == "knight"), "profession choice is decided and returned by the server")
+	check(game.hud.chat.system_view.get_parsed_text().contains("Страж"), "system log reports the chosen profession")
+	check(data.stats(game.profile).maxHp > health_before, "profession bonus reaches the character stats")
+	# HUD пересчитывает полосы раз в 0.2 с: ждём настоящего обновления, а не доверяем кадру.
+	check(await wait_for(func(): return game.hud.hp_bar.max_value > health_before), "profession bonus reaches the health bar")
+	game.hud.show_window("profession"); await process_frame; await process_frame
+	var rejected = _find_button("prof", "berserker")
+	check(is_instance_valid(rejected) and rejected.disabled, "the second profession is closed after the choice")
+	game.hud.show_window("character"); await process_frame; await process_frame
+	var hero_lines = game.hud.window.find_children("*", "Label", true, false).filter(func(n): return n.has_meta("hero_profession"))
+	check(hero_lines.size() == 1 and hero_lines[0].text.contains("Страж"), "hero window shows the chosen profession")
+	await _screenshot("profession-hero.png")
+	game.hud.show_window("skills"); await process_frame; await process_frame
+	check(is_instance_valid(_find_button("learn", "shield_bash")), "skills card lists the profession skill after the choice")
+	await _screenshot("profession-skills.png")
+	_click("learn", "shield_bash")
+	check(await wait_for(func(): return int(game.profile.get("skills", {}).get("shield_bash", 0)) == 1), "profession skill is learned for SP under the usual rules")
+	check("shield_bash" in game.hud.binding_choices(), "profession skill becomes assignable to the action bar")
+	game.hud.close_window()
+
+func _find_button(key: String, value):
+	for button in game.hud.window.find_children("*", "Button", true, false):
+		if button.has_meta(key) and button.get_meta(key) == value: return button
+	return null
 
 func _click(key: String, value):
 	for button in game.hud.window.find_children("*", "Button", true, false):

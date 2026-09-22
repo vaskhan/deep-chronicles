@@ -26,6 +26,16 @@ const SKILL_ART = {
   fire_bolt: 'A blazing orange-red fireball with a comet trail of flames.',
   heal: 'A glowing green cross of light with soft sparkles and a leaf motif.',
   ice_nova: 'A burst of pale blue ice crystals radiating from a frozen center.',
+  // Умения профессий. Пока в игре показываются иконки-семейства из поля SKILLS[id].icon;
+  // эти описания нужны, чтобы отрисовать собственные иконки отдельным запуском.
+  shield_bash: 'A round steel shield slamming forward with a pale blue impact ring.',
+  iron_will: 'A steel-grey tower shield crossed by glowing runes of endurance.',
+  frenzy: 'A snarling red battle aura around two crossed axes, wild sparks.',
+  cleave: 'A wide curved orange slash arc cutting across the frame.',
+  lightning: 'A branching pale blue lightning bolt with crackling arcs.',
+  meteor: 'A burning orange meteor falling with a fiery tail and ember trail.',
+  heal_major: 'A large radiant green cross of light inside a soft halo of petals.',
+  blessing: 'A golden shield-shaped sigil of light with warm rising sparks.',
 };
 
 const grade = (it) => (it.grade && it.grade !== 'none' ? `, ${{ d: 'uncommon green', c: 'rare blue', b: 'epic purple' }[it.grade]} magic glow` : '');
