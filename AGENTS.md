@@ -39,6 +39,7 @@ MMORPG-песочница в духе классических корейски�
 | Сеть и протокол | `godot/scripts/network.gd`, `server/server.js`, `docs/gitmark/reference/protocol.md` |
 | Правила: урон, награды, покупки, прогресс, спавны | только `server/` и общие `src/*.js` — в клиент не переносить |
 | Сборки, экспорт, сайт, релиз | `tools/godot/build.mjs`, `tools/site/build.mjs`, `docs/NATIVE_PIPELINE.md`, `docs/DISTRIBUTION.md` |
+| Контейнер сервера, деплой на прод | `Dockerfile`, `docker-compose.yml`, `deploy/promote.sh`, `docs/gitmark/ops/deploy.md` |
 
 После правки геометрии, материалов, света или шейдеров — обязательно `npm run native:lint`
 (линтер сцены: вывернутые нормали, пропавший свет, пустые меши, поверхности без материала,
@@ -103,7 +104,7 @@ MMORPG-песочница в духе классических корейски�
 ## Релиз
 
 - `npm run native:verify -- --release`, затем `npm run deploy -- --verified`. Проверяются хеши всех входов/результатов, сайт и обе сборки. `npm run deploy` сам запускает полный конвейер.
-- `deploy/release.mjs` загружает staging, `promote.sh` сохраняет предыдущий код и SQLite на сервере, обновляет код/статику и службу. БД с компьютера никогда не загружается. Внешний TLS probe проверяет `progression:1` / `nativeOnly:1`. Адрес подключения берётся из `.env` и не печатается.
+- `deploy/release.mjs` загружает staging, `promote.sh` собирает на сервере образ `realms-ws:<release>`, снимает копию SQLite из тома, обновляет статику и поднимает контейнер; при неудачном healthcheck возвращает прежний образ. БД с компьютера никогда не загружается. Внешний TLS probe проверяет `progression:1` / `nativeOnly:1`. Адрес подключения берётся из `.env` и не печатается.
 - Публичная статика — страница скачивания `site/`, не браузерная игра. EXE с встроенными ресурсами автоматически упаковывается в `godot/builds/windows/khroniki-glubin-windows.zip`; оба ZIP и SHA-256 входят в `dist/release.json`.
 - Старый `deploy/quick.sh` теперь завершается с ошибкой и не может вернуть браузерную игру. Единственный путь — проверенный native-релиз.
 

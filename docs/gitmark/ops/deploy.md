@@ -4,9 +4,9 @@ title: Выкладка на прод
 service: server
 status: active
 updated: 2026-09-18
-tags: [deploy, nginx, systemd, ops]
+tags: [deploy, nginx, docker, ops]
 links:
-  documents: [deploy/deploy.sh, deploy/nginx-realms.conf, deploy/realms-ws.service]
+  documents: [deploy/deploy.sh, deploy/nginx-realms.conf, Dockerfile, docker-compose.yml]
   depends_on: [docs/gitmark/services/server/README.md]
   relates_to: [docs/gitmark/ops/native-build.md, docs/gitmark/plans/godot-migration.md]
 ---
@@ -24,7 +24,7 @@ DEPLOY_HOST=... bash deploy/deploy.sh
 
 1. Native/server/сайт проверки и обе настольные сборки (`native:verify --headless --offline --release`). С `--verified` допускается готовый успешный отчёт; все хеши входов, результатов и набор файлов проверяются заново.
 2. Готовые код, ZIP клиентов и страница скачивания загружаются в `/opt/realms/releases/<commit-time>/`; зависимости устанавливаются в staging.
-3. Сохраняются архив предыдущего кода и локальная серверная SQLite-копия; служба останавливается для замены кода. Рабочая БД не приезжает с компьютера и не заменяется.
+3. На сервере собирается образ `realms-ws:<release>`; до успешной сборки живой мир не трогается. Снимается копия SQLite из тома (`VACUUM INTO`) и запоминается тег работающего образа — точка отката. Рабочая БД не приезжает с компьютера и не заменяется.
 4. После старта проверяется локальное `hi.features.groundLoot:1`, `progression:1`, `nativeOnly:1`, затем внешний TLS из Godot. При сбое promotion код откатывается. Успешный результат записывается в `.native-run/deployment.json`.
 
 `npm run native:verify -- --release` → `npm run deploy -- --verified` позволяет сначала проверить и собрать клиент, затем выпустить те же проверенные файлы. Подробности: [NATIVE_PIPELINE](docs/NATIVE_PIPELINE.md).
@@ -37,9 +37,21 @@ DEPLOY_HOST=... bash deploy/deploy.sh
 |---|---|
 | статика | `/opt/realms/dist` |
 | сервер | `/opt/realms/server`, запуск `node --no-warnings server/server.js` |
-| база | `/opt/realms/data/realms.db` (`Environment=DB=…`) |
-| порт | 8790 (`Environment=PORT=8790`), только локально |
-| служба | systemd `realms-ws`, `Restart=always`, `RestartSec=3`, `User=root` |
+| база | том `realms-data`, внутри контейнера `/data/realms.db` |
+| порт | 8790, публикуется только на `127.0.0.1` |
+| служба | контейнер `realms-ws` (`docker compose`), `restart: unless-stopped`, пользователь `node` |
+
+Мир работает в контейнере из [`Dockerfile`](Dockerfile) и [`docker-compose.yml`](docker-compose.yml):
+образ `node:22.23.2-alpine`, процесс под непривилегированным `node`, `tini` доводит `SIGTERM`
+до сервера, healthcheck ждёт кадр `hi`. Автозапуск после перезагрузки даёт `restart: unless-stopped`,
+отдельный systemd-юнит больше не нужен. Ручные команды на хосте:
+
+```bash
+cd /opt/realms/releases/<release> && docker compose ps
+docker compose logs -n 100 realms-ws
+docker run --rm -v realms-data:/data -v /root/backup:/backup --entrypoint node node:22.23.2-alpine \
+  --input-type=module -e "import{DatabaseSync}from'node:sqlite';const d=new DatabaseSync('/data/realms.db',{readOnly:true});d.exec(\"VACUUM INTO '/backup/world.db'\");d.close()"
+```
 
 [`deploy/nginx-realms.conf`](deploy/nginx-realms.conf): 80 → 443 с дыркой под ACME,
 сертификаты certbot, корень `/opt/realms/dist`, `index.html` с `no-cache`, `/assets/` на 30 дней,
@@ -51,7 +63,8 @@ DEPLOY_HOST=... bash deploy/deploy.sh
 
 - **`DEV_CMD` в проде нет** — отладочная команда `dev` доступна только автотестам.
 - Сервер сам пингует клиентов каждые 25 с, чтобы nginx не рвал простаивающие соединения.
-- Профили игроков живут в SQLite на хосте и rsync-ом **не трогаются** (`server/data` исключён).
+- Профили игроков живут в SQLite в томе `realms-data` и rsync-ом **не трогаются** (`server/data` исключён).
+- Том переживает пересборку образа и `docker compose down`; уничтожает его только `docker volume rm realms-data`.
   Удалять базу — значит обнулить прогресс всем.
 - Сейв версии, отличной от `SAVE_VERSION`, молча пересоздаётся. Поднимая версию, считайте,
   что персонажи будут сброшены.

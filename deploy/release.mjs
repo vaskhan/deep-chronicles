@@ -21,7 +21,8 @@ const id = `${report.commit.slice(0, 12)}-${new Date().toISOString().replace(/[-
 const remote = `/opt/realms/releases/${id}`;
 await run('ssh', ['-o', 'BatchMode=yes', host, `mkdir -p '${remote}'`]);
 for (const dir of ['server', 'src', 'dist']) await run('rsync', ['-az', '--exclude', 'data', `${dir}/`, `${host}:${remote}/${dir}/`]);
-await run('rsync', ['-az', 'package.json', 'package-lock.json', 'deploy/promote.sh', `${host}:${remote}/`]);
+// Образ собирается на сервере из этих же файлов: архитектура рабочей станции не навязывается прод-хосту.
+await run('rsync', ['-az', 'package.json', 'package-lock.json', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'deploy/promote.sh', `${host}:${remote}/`]);
 await run('ssh', ['-o', 'BatchMode=yes', host, `bash '${remote}/promote.sh' '${remote}'`]);
 await run(process.execPath, ['tools/godot/probe.mjs', '--require-native', '--require-party']);
 fs.writeFileSync(path.join(root, '.native-run/deployment.json'), JSON.stringify({ id, commit: report.commit, verified: report.finished, promoted: new Date().toISOString(), groundLoot: 1, progression: 1, nativeOnly: 1 }, null, 2) + '\n');

@@ -1,57 +1,61 @@
 #!/usr/bin/env bash
 # Runs remotely after a complete, verified release has been uploaded.
+# Мир живёт в контейнере realms-ws, база — в томе realms-data, статику раздаёт nginx с хоста.
 set -euo pipefail
 release=${1:?release directory required}
 case "$release" in /opt/realms/releases/*) ;; *) exit 2 ;; esac
 cd /opt/realms
+id=$(basename "$release")
 backup="${release}/previous"
 mkdir -p "$backup"
-tar --exclude=server/data -czf "$backup/code.tgz" server src dist package.json package-lock.json
-# Install dependencies in staging before stopping the live world.
-(cd "$release" && npm ci --omit=dev --silent >/dev/null)
+
+# Тег работающего образа — точка отката. При первом переезде его ещё нет.
+previous=$(docker inspect --format '{{index .Config.Labels "realms.tag"}}' realms-ws 2>/dev/null || true)
+echo "${previous}" > "$backup/image-tag"
+
+# Бэкап SQLite снимается на этом хосте из тома; данные игроков с рабочей станции не приходят.
+if docker volume inspect realms-data >/dev/null 2>&1; then
+  docker run --rm -v realms-data:/data -v "$backup":/backup --entrypoint node node:22.23.2-alpine \
+    --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+if (fs.existsSync('/data/realms.db')) {
+  const db = new DatabaseSync('/data/realms.db', { readOnly: true });
+  db.exec(\"VACUUM INTO '/backup/world.db'\"); db.close();
+}
+"
+fi
+
+# Сборка нового образа до остановки живого мира: неудачная сборка ничего не трогает.
+docker build --label "realms.tag=${id}" -t "realms-ws:${id}" "$release"
+
 rollback() {
   trap - ERR
-  echo 'Promotion failed; restoring previous code.' >&2
-  systemctl stop realms-ws
-  tar -xzf "$backup/code.tgz" -C /opt/realms
-  npm ci --omit=dev --silent >/dev/null
-  systemctl start realms-ws
+  echo 'Promotion failed; restoring previous container.' >&2
+  local tag
+  tag=$(cat "$backup/image-tag" 2>/dev/null || true)
+  if [ -n "$tag" ]; then
+    (cd "$release" && REALMS_TAG="$tag" docker compose up -d --no-build) || true
+  fi
   exit 1
 }
 trap rollback ERR
-systemctl stop realms-ws
-# SQLite backup is made on this host; player data never comes from the workstation.
-node --no-warnings --input-type=module - "$backup/world.db" <<'JS'
-import { DatabaseSync } from 'node:sqlite';
-const db = new DatabaseSync('/opt/realms/data/realms.db', { readOnly: true });
-const target = process.argv[2].replaceAll("'", "''");
-db.exec(`VACUUM INTO '${target}'`); db.close();
-JS
-rsync -a --delete --exclude data "$release/server/" server/
-rsync -a --delete "$release/src/" src/
-rsync -a --delete "$release/dist/" dist/
-cp "$release/package.json" "$release/package-lock.json" .
-rsync -a --delete "$release/node_modules/" node_modules/
-systemctl start realms-ws
-node --input-type=module <<'JS'
-import WebSocket from 'ws';
-let connected = false;
-for (let attempt = 0; attempt < 15; attempt++) {
-  connected = await new Promise(resolve => {
-    const ws = new WebSocket('ws://127.0.0.1:8790');
-    const timer = setTimeout(() => { ws.terminate(); resolve(false); }, 1500);
-    ws.on('error', () => { clearTimeout(timer); resolve(false); });
-    ws.on('message', raw => {
-      const m = JSON.parse(raw); if (m.t !== 'hi') return;
-      clearTimeout(timer); ws.close(); resolve(m.features?.groundLoot === 1 && m.features?.progression === 1 && m.features?.nativeOnly === 1 && m.features?.party === 1);
-    });
-  });
-  if (connected) break;
-  await new Promise(r => setTimeout(r, 300));
-}
-if (!connected) throw Error('Native progression protocol probe failed');
-console.log('SERVER_RELEASE_OK groundLoot=1 progression=1 nativeOnly=1 party=1');
-JS
-systemctl is-active realms-ws
-trap - ERR
-echo "Release promoted; rollback code and SQLite snapshot are in the release's previous/ directory."
+
+# Статика сайта: новый dist встаёт только вместе с проверенным образом.
+rsync -a --delete "$release/dist/" /opt/realms/dist/
+
+cd "$release"
+REALMS_TAG="${id}" docker compose up -d --no-build
+
+# Мир обязан ответить приветствием, иначе откатываемся на прежний образ.
+for attempt in $(seq 1 30); do
+  state=$(docker inspect --format '{{.State.Health.Status}}' realms-ws 2>/dev/null || echo missing)
+  [ "$state" = healthy ] && break
+  [ "$attempt" = 30 ] && { echo "Container is not healthy: $state" >&2; false; }
+  sleep 2
+done
+
+# Освобождаем место: оставляем текущий образ и пять предыдущих сборок.
+docker image ls --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' realms-ws \
+  | sort -k2 -r | tail -n +7 | cut -d' ' -f1 | xargs -r docker image rm >/dev/null 2>&1 || true
+echo "Promoted ${id}"

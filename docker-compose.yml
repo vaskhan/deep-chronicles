@@ -1,0 +1,24 @@
+# Прод-запуск игрового сервера. Порт наружу не выставляется: снаружи мир
+# доступен только через nginx (wss://realms.neuraldeep.ru/ws).
+services:
+  realms-ws:
+    build: .
+    image: realms-ws:${REALMS_TAG:-latest}
+    container_name: realms-ws
+    restart: unless-stopped
+    ports: ['127.0.0.1:8790:8790']
+    volumes: ['realms-data:/data']
+    environment:
+      PORT: 8790
+      DB: /data/realms.db
+      # HOST не задаём: внутри контейнера сервер слушает все интерфейсы,
+      # а наружу его пускает только публикация порта на 127.0.0.1.
+    # Профили сохраняются при остановке: даём время на выход по SIGTERM.
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
+
+volumes:
+  realms-data:
+    name: realms-data
