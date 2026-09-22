@@ -30,8 +30,8 @@ after(async () => {
 });
 
 // клиент: ждёт сообщения нужного типа
-function client() {
-  const ws = new WebSocket(`ws://localhost:${PORT}`), inbox = [], waiters = [];
+function client(port = PORT) {
+  const ws = new WebSocket(`ws://localhost:${port}`), inbox = [], waiters = [];
   ws.on('message', (d) => { const m = JSON.parse(d); const w = waiters.findIndex((x) => x.types.includes(m.t)); if (w >= 0) waiters.splice(w, 1)[0].res(m); else inbox.push(m); });
   return {
     ws, send: (m) => ws.send(JSON.stringify(m)),
@@ -521,4 +521,82 @@ test('пати делит реальные XP/SP, защищает группо�
     do {state=await a.wait('party');} while(state.members.length);assert.equal(state.id,null);
     assert.equal(bb.p.cls,'mage');
   } finally { for(const c of [a,b,outsider])c.ws.close();await Promise.all([a.closed(),b.closed(),outsider.closed()]); }
+});
+
+// Рейты проверяются на отдельном сервере: основной остаётся на значениях по умолчанию.
+test('рейты сервера: RATE_XP=3 утраивает опыт за того же моба, дележ в группе сходится без потери единиц', async () => {
+  const { MOBS } = await import('../src/data.js');
+  const { xpForKill } = await import('../src/sim.js');
+  const { spForKill } = await import('../src/progression.js');
+  const probe = net.createServer();
+  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port;
+  await new Promise(resolve => probe.close(resolve));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realms-rates-'));
+  const rated = spawn('node', ['--no-warnings', 'server/server.js'], { env: { ...process.env, PORT: String(port), DB: path.join(dir, 'rates.db'), DEV_CMD: '1', AUTH_TRIES: '1000', RATE_XP: '3', RATE_SP: '3', RATE_COINS: '2' }, stdio: 'pipe' });
+  let output = '';
+  for (const stream of [rated.stdout, rated.stderr]) stream.on('data', chunk => { output += chunk; });
+  await new Promise(resolve => rated.stdout.once('data', resolve));
+  // убить моба в зоне охоты и вернуть событие награды
+  const hunt = async (c, lvl, helper = null) => {
+    let mob = null;
+    for (let i = 0; i < 40 && !mob; i++) {
+      const s = await c.wait('snap');
+      const alive = (s.m || []).filter(r => !(r[5] & 8) && Math.hypot(r[1] + 260, r[3] - 180) < 40);
+      if (alive.length) mob = alive.sort((x, y) => Math.hypot(x[1] + 260, x[3] - 180) - Math.hypot(y[1] + 260, y[3] - 180))[0];
+      c.send({ t: 'st', x: -260, y: 0, z: 180, r: 0, a: 0 });
+    }
+    assert.ok(mob, 'сервер не прислал мобов');
+    await at(c, mob[1] + 1, mob[3] + 1);
+    if (helper) await at(helper, mob[1] + 2, mob[3] + 2);
+    c.send({ t: 'atk', id: mob[0], kind: 'm' });
+    for (let i = 0; i < 80; i++) {
+      c.send({ t: 'st', x: mob[1] + 1, y: 0, z: mob[3] + 1, r: 0, a: 0 });
+      const m = await c.wait('ev', 'snap');
+      const reward = m.t === 'ev' && m.e.find(e => e.k === 'kill');
+      if (reward) return reward;
+    }
+    throw new Error('моб не умер за отведённое время');
+  };
+  const solo = client(port), lead = client(port), mate = client(port);
+  try {
+    await Promise.all([solo.open(), lead.open(), mate.open()]);
+    const hi = await solo.wait('hi');
+    assert.equal(hi.features.rates, 1, 'сервер объявляет поддержку рейтов');
+    assert.equal(hi.rates.xp, 3); assert.equal(hi.rates.sp, 3); assert.equal(hi.rates.coins, 2);
+    assert.equal(hi.rates.dropChance, 1, 'ненастроенные коэффициенты остаются единицей');
+
+    solo.send({ t: 'register', name: 'РейтОдиночка', pass: 'secret1', cls: 'warrior' });
+    await solo.wait('authok');
+    solo.send({ t: 'dev', lvl: 20, hp: 99999, x: -260, z: 180 }); await pause(400);
+    const reward = await hunt(solo, 20);
+    const def = MOBS[reward.mob];
+    assert.equal(reward.xp, Math.max(1, Math.round(xpForKill(def, 20) * 3)), 'опыт втрое больше обычного');
+    assert.equal(reward.sp, Math.max(1, Math.round(spForKill(xpForKill(def, 20)) * 3)), 'SP втрое больше обычного');
+    assert.ok(reward.coins >= def.coins[0] * 2 && reward.coins <= def.coins[1] * 2, `монеты с рейтом: ${reward.coins}`);
+
+    lead.send({ t: 'register', name: 'РейтЛидер', pass: 'secret1', cls: 'warrior' });
+    mate.send({ t: 'register', name: 'РейтТоварищ', pass: 'secret1', cls: 'mage' });
+    const [leadAuth] = await Promise.all([lead.wait('authok'), mate.wait('authok')]);
+    lead.send({ t: 'dev', lvl: 20, hp: 99999, x: -260, z: 180 });
+    mate.send({ t: 'dev', lvl: 20, hp: 99999, x: -260, z: 180 }); await pause(400);
+    lead.send({ t: 'party', action: 'invite', name: 'РейтТоварищ' }); await mate.wait('party_invite');
+    mate.send({ t: 'party', action: 'accept', from: leadAuth.id });
+    assert.equal((await lead.wait('party')).members.length, 2);
+    const leaderShare = await hunt(lead, 20, mate);
+    const mateShare = (await untilEv(mate, /"k":"kill"/)).find(e => e.k === 'kill');
+    const total = Math.max(1, Math.round(xpForKill(MOBS[leaderShare.mob], 20) * 3));
+    assert.equal(leaderShare.xp + mateShare.xp, total, 'сумма долей равна награде с рейтом');
+    assert.equal(leaderShare.sp + mateShare.sp, Math.max(1, Math.round(spForKill(xpForKill(MOBS[leaderShare.mob], 20)) * 3)), 'SP делятся без потери единиц');
+    assert.ok([leaderShare.xp, mateShare.xp, leaderShare.sp, mateShare.sp].every(Number.isInteger), 'доли целые');
+    assert.match(output, /\[rates\] Рейты сервера: опыт ×3/, 'итоговые рейты записаны в журнал');
+  } finally {
+    for (const c of [solo, lead, mate]) c.ws.close();
+    await Promise.all([solo.closed(), lead.closed(), mate.closed()]);
+    rated.kill();
+    await new Promise(resolve => rated.exitCode !== null ? resolve() : rated.once('exit', resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.writeFileSync('.native-run/server-rates.log', output);
+    assert.doesNotMatch(output, /(?:^|\n)(?:Error:|TypeError:|ReferenceError:|FATAL)|UnhandledPromiseRejection|SQLITE_[A-Z]+/);
+  }
 });
