@@ -31,7 +31,28 @@
   "additions": {
     "author": "Project contributors",
     "license": "CC0-1.0",
-    "scope": "Fur mantle, hide texture, staff, guardian assembly and eyes authored in prepare-gorge-mobs.py; tool code retains project license."
+    "scope": "Fang skin/leather/fur textures, braids and bone ornaments; staff; guardian assembly; outpost shield and armour; spider body assembly, legs and animations; all authored in prepare-gorge-mobs.py and mob-style.py. These additions are CC0-1.0; tool code retains project license."
   },
-  "license_text": "art/licenses/CC0-1.0.txt"
+  "license_text": "art/licenses/CC0-1.0.txt",
+  "kaykit": {
+    "author": "Kay Lousberg",
+    "pack": "KayKit Character Pack Skeletons 1.0",
+    "page": "https://kaylousberg.itch.io/kaykit-skeletons",
+    "repository": "https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0",
+    "commit": "15b62b9bad122f72926c10fb14d622c73819fa54",
+    "license": "CC0-1.0",
+    "license_file": "art/licenses/kaykit-skeletons.txt",
+    "license_url": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/LICENSE.txt",
+    "files": {
+      "Skeleton_Warrior.glb": {
+        "url": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/addons/kaykit_character_pack_skeletons/Characters/gltf/Skeleton_Warrior.glb",
+        "sha256": "178b6fda810b814c250d8a2010c24dfd9b458b9006dd323353e620b7ff118bbe"
+      }
+    }
+  },
+  "cliff_spider": {
+    "source": "godot/assets/gorge/moss_boulder.glb",
+    "license": "CC0-1.0",
+    "details": "Poly Haven Rock Moss Set 01 shell; authored articulated legs, mandibles and eight animation clips. No external creature mesh."
+  }
 }

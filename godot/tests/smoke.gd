@@ -1178,7 +1178,7 @@ func _gorge_benchmark_route():
 	await _gorge_benchmark("waterfall")
 	await _screenshot("gorge-game-waterfall.png")
 	# Фаза 2: настоящие смешанная стая Клыка и группа каменных стражей.
-	for pair in [["gorge4", "fang_shaman", "fang-pack"], ["gorge10", "stone_guard", "stone-pack"]]:
+	for pair in [["gorge4", "fang_shaman", "fang-pack"], ["gorge7", "fang_shaman", "fang-waterfall"], ["gorge10", "stone_guard", "stone-pack"], ["gorge19", "outpost_guard", "outpost-summit"], ["gorge0", "cliff_spider", "cliff-spiders"]]:
 		for i in spawns.size():
 			if spawns[i].get("pack", "") != pair[0]: continue
 			game._cancel_attack(); game.set_target(null)
@@ -1189,5 +1189,9 @@ func _gorge_benchmark_route():
 				game.set_target(game.mobs[i+1]); game.attack()
 			await _gorge_benchmark(pair[2])
 			await _screenshot("gorge-game-"+pair[2]+".png")
+			if pair[2] == "fang-waterfall":
+				game.camera_distance=24; game.camera_pitch=.26
+				await wait_wall(.5)
+				await _screenshot("gorge-game-fang-waterfall-wide.png")
 			break
 	refill.queue_free()

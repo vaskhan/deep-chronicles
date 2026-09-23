@@ -2,6 +2,7 @@ extends SceneTree
 ## Dedicated regression: canonical clips, transformed poses, server-driven stone shield.
 const Art = preload("res://scripts/art_assets.gd")
 var failures = 0
+var tested_clips = 0
 var output = "/tmp/gorge-models"
 var before = false
 func check(ok: bool, message: String):
@@ -25,18 +26,21 @@ func _run():
  var material = StandardMaterial3D.new(); material.albedo_color = Color("626c60"); ground.material_override = material; scene.add_child(ground)
  var camera = Camera3D.new(); scene.add_child(camera); camera.current = true; camera.fov = 42
  var Actor = load("res://scripts/actor.gd")
- var titles = {"fang_warrior":"Воин племени Клыка", "fang_shaman":"Шаман племени Клыка", "stone_guard":"Каменный страж"}
+ var titles = {"fang_warrior":"Воин племени Клыка", "fang_shaman":"Шаман племени Клыка", "stone_guard":"Каменный страж", "cliff_spider":"Скальный паук", "outpost_guard":"Страж заставы"}
  for id in titles:
   var actor = Actor.new(); actor.kind = "m"; scene.add_child(actor); actor.setup(id,titles[id]); actor.set_process(false)
   check(actor.art_model, id+": real model")
-  check(actor.art_base == {"fang_warrior":"orc", "fang_shaman":"orc", "stone_guard":"golem"}[id], id+": sound and gait family survives model replacement")
+  check(actor.art_base == {"fang_warrior":"orc", "fang_shaman":"orc", "stone_guard":"golem", "cliff_spider":"spider", "outpost_guard":"skeleton"}[id], id+": sound and gait family survives model replacement")
   if not before: check(not Art.entry_of(id).has("base"), id+": distinct source")
   var skeleton: Skeleton3D = actor.model.find_child("Skeleton3D",true,false)
   check(skeleton != null, id+": skeleton")
   var box = actor.model.transform * Art.aabb(actor.model)
   check(absf(box.size.y - float(Art.entry_of(id).height)) < .01, id+": height")
-  camera.position = Vector3(2.8,3.5,7.3) * (box.size.y/3.3); camera.look_at(Vector3(0,box.size.y*.49,0))
-  for clip in ["idle","walk","run","attack","cast","hit","death"]:
+  camera.position = Vector3(2.8,3.5,7.3) * maxf(box.size.y/3.3, box.size.x/4.5); camera.look_at(Vector3(0,box.size.y*.49,0))
+  var clips = ["idle","walk","run","attack","cast","hit","death"]
+  if id == "cliff_spider": clips.append("windup")
+  for clip in clips:
+   tested_clips += 1
    check(actor.animator.has_animation(clip),id+": "+clip)
    if not actor.animator.has_animation(clip): continue
    var anim = actor.animator.get_animation(clip)
@@ -71,5 +75,5 @@ func _run():
    actor.snapshot([1,0,0,0,0,8,0,0,[["stone_guard:guard","buff",4000]]],3)
    check(not actor.stone_ward.visible,"Death hides shield")
   actor.free()
- print("GORGE_MODELS models=3 clips=21 failures=",failures)
+ print("GORGE_MODELS models=",titles.size()," clips=",tested_clips," failures=",failures)
  quit(1 if failures else 0)

@@ -2,19 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dfct26yml8sw"
-path="res://.godot/imported/fang_shaman_Atlas_Monsters.png-379879d0be71f8ef45cdccd245b9d03a.ctex"
+uid="uid://b0mofserc8jqx"
+path="res://.godot/imported/fang_shaman_Fang old bone.png-44efb517c2ec4a0f7e5c60f8247e2f3d.ctex"
 metadata={
 "vram_texture": false
-}
-generator_parameters={
-"md5": "818283a90526a928856ef83357305b56"
 }
 
 [deps]
 
-source_file="res://assets/gorge-mobs/fang_shaman_Atlas_Monsters.png"
-dest_files=["res://.godot/imported/fang_shaman_Atlas_Monsters.png-379879d0be71f8ef45cdccd245b9d03a.ctex"]
+source_file="res://assets/gorge-mobs/fang_shaman_Fang old bone.png"
+dest_files=["res://.godot/imported/fang_shaman_Fang old bone.png-44efb517c2ec4a0f7e5c60f8247e2f3d.ctex"]
 
 [params]
 

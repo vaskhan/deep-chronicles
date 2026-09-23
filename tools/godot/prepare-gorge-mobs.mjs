@@ -13,18 +13,23 @@ const dir = 'godot/assets/gorge-mobs';
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'gorge-mobs-'));
 const report = { sources: 'art/sources/gorge-mobs/sources.json', models: {}, files: {} };
 try {
-  for (const id of ['fang_warrior', 'fang_shaman', 'stone_guard']) {
+  for (const id of ['fang_warrior', 'fang_shaman', 'stone_guard', 'cliff_spider', 'outpost_guard']) {
     const file = `${dir}/${id}.glb`, out = path.join(temp, `${id}.glb`);
     run(cli, ['optimize', file, out, '--compress', 'false', '--flatten', 'false', '--join', 'false', '--instance', 'false', '--palette', 'false', '--prune', 'false', '--simplify', 'false', '--texture-size', '1024']);
     fs.copyFileSync(out, file);
     const b = fs.readFileSync(file), length = b.readUInt32LE(12), j = JSON.parse(b.subarray(20, 20 + length));
     const bin = b.subarray(28 + length);
     // Godot keeps previously extracted embedded images. Replace them explicitly on rebuild.
+    const images = new Set();
     for (const image of j.images || []) {
       const view = j.bufferViews[image.bufferView], ext = image.mimeType === 'image/png' ? 'png' : 'jpg';
+      images.add(`${id}_${image.name}.${ext}`);
       fs.writeFileSync(`${dir}/${id}_${image.name}.${ext}`, bin.subarray(view.byteOffset || 0, (view.byteOffset || 0) + view.byteLength));
     }
-    report.models[id] = { triangles: j.meshes.reduce((sum, m) => sum + m.primitives.reduce((n, p) => n + j.accessors[p.indices].count / 3, 0), 0), bytes: b.length, rig: 'canonical', textureMax: 1024 };
+    for (const name of fs.readdirSync(dir).filter(n => n.startsWith(`${id}_`) && /\.(png|jpg)$/.test(n))) {
+      if (!images.has(name)) { fs.rmSync(`${dir}/${name}`); fs.rmSync(`${dir}/${name}.import`, { force: true }); }
+    }
+    report.models[id] = { triangles: j.meshes.reduce((sum, m) => sum + m.primitives.reduce((n, p) => n + j.accessors[p.indices].count / 3, 0), 0), bytes: b.length, rig: id === 'cliff_spider' ? 'spider' : 'canonical', textureMax: 1024 };
   }
   for (const name of fs.readdirSync(dir).filter(n => /\.(glb|png|jpg)$/.test(n))) report.files[name] = crypto.createHash('sha256').update(fs.readFileSync(`${dir}/${name}`)).digest('hex');
   fs.writeFileSync(`${dir}/manifest.json`, JSON.stringify(report, null, 2) + '\n');

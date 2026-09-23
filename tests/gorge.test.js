@@ -156,9 +156,10 @@ test('мобы ущелья: отдельная модель или явный �
   assert.ok(GORGE_KINDS.length >= 10);
   for (const kind of GORGE_KINDS) {
     const def = MOBS[kind], entry = manifest.actors[kind];
-    if (['fang_warrior', 'fang_shaman', 'stone_guard'].includes(kind)) {
+    if (['fang_warrior', 'fang_shaman', 'stone_guard', 'cliff_spider', 'outpost_guard'].includes(kind)) {
       assert.equal(entry.path, `res://assets/gorge-mobs/${kind}.glb`);
-      assert.equal(entry.rig, 'canonical');
+      if (kind === 'cliff_spider') assert.equal(entry.clips.windup, 'windup');
+      else assert.equal(entry.rig, 'canonical');
       assert.equal(entry.family, def.model, `${kind}: прежнее семейство звука и походки`);
       assert.equal(entry.base, undefined, `${kind}: отдельная модель, не перекрашенная основа`);
       assert.ok(fs.existsSync(entry.path.replace('res://', 'godot/')));

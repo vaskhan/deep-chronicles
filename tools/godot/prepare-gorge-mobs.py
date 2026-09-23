@@ -2,7 +2,10 @@
 blender -b -P tools/godot/prepare-gorge-mobs.py
 Source meshes, UVs and skin weights retained; anatomical T-pose fitted to library.
 """
-import bpy, math, os, random
+import bpy, math, os, random, sys
+sys.path.insert(0,os.path.dirname(__file__))
+import importlib
+style=importlib.import_module("mob-style")
 from mathutils import Vector, Matrix
 ROOT=os.path.abspath(os.path.join(os.path.dirname(__file__),'../..'))
 os.chdir(ROOT)
@@ -84,7 +87,7 @@ def pelt(arm):
  image.pixels[:]=pixels;image.pack()
  mat=material('Weathered hide',(.23,.145,.075));node=mat.node_tree.nodes.new('ShaderNodeTexImage');node.image=image
  mat.node_tree.links.new(node.outputs['Color'],mat.node_tree.nodes.get('Principled BSDF').inputs['Base Color'])
- for name,z,rx,ry,height,b in [('FurMantle',1.48,.38,.24,.29,'DEF-spine.003'),('FurKilt',1.0,.29,.20,.28,'DEF-hips')]:
+ for name,z,rx,ry,height,b in [('FurMantle',1.48,.50,.43,.29,'DEF-spine.003'),('FurKilt',1.0,.29,.20,.28,'DEF-hips')]:
   verts=[];faces=[];n=32
   for row in range(2):
    for i in range(n):
@@ -111,6 +114,7 @@ for id,source in [('fang_warrior','Orc'),('fang_shaman','Tribal')]:
  bpy.context.view_layer.update()
  meshes=[o for o in objs if o.type=='MESH'];graded=set()
  for o in meshes:
+  style.fang(o,id=='fang_shaman')
   world=o.matrix_world.copy();names={g.index:bone_name(g.name)for g in o.vertex_groups};weights=[]
   for v in o.data.vertices:
    source_pos=world@v.co
@@ -128,20 +132,8 @@ for id,source in [('fang_warrior','Orc'),('fang_shaman','Tribal')]:
   o.parent=None
   for mod in list(o.modifiers):o.modifiers.remove(mod)
   bind(o,arm,weights=weights)
-  for m in o.data.materials:
-   if m and m.use_nodes:
-    p=m.node_tree.nodes.get('Principled BSDF');p.inputs['Roughness'].default_value=.9
-    # Desaturate and darken the embedded author palette without changing UVs.
-    for node in list(m.node_tree.nodes):
-     if node.type=='TEX_IMAGE' and node.image.name not in graded:
-      graded.add(node.image.name)
-      # glTF does not export arbitrary shader nodes: bake palette adjustment into image.
-      image=node.image;pix=list(image.pixels[:])
-      for i in range(0,len(pix),4):
-       lum=sum(pix[i:i+3])/3
-       for c in range(3):pix[i+c]=(lum+(pix[i+c]-lum)*.55)*.68
-      image.pixels[:]=pix;image.update();image.pack();m.node_tree.links.new(node.outputs['Color'],p.inputs['Base Color'])
  bpy.data.objects.remove(old,do_unlink=True)
+ style.braids(arm,bind,id=='fang_shaman')
  if id=='fang_shaman':staff(arm)
  if id=='fang_warrior':pelt(arm)
  save(id,arm)
@@ -174,3 +166,153 @@ body=[o for o in bpy.context.scene.objects if o.type=='MESH' and o.parent==arm a
 for o in body:o.select_set(True)
 bpy.context.view_layer.objects.active=body[0];bpy.ops.object.join();bpy.context.object.name='StoneBody'
 save('stone_guard',arm)
+
+# KayKit CC0 warrior: retain author topology, fit the bind pose, reuse canonical clips.
+arm=canonical();objs=imp('art/sources/gorge-mobs/Skeleton_Warrior.glb');old=next(o for o in objs if o.type=='ARMATURE');old.animation_data_clear()
+for p in old.pose.bones:p.matrix_basis.identity()
+bpy.context.view_layer.update()
+def kaybone(n):
+ base={'root':'root','hips':'DEF-hips','spine':'DEF-spine.001','chest':'DEF-spine.003','head':'DEF-head'}
+ if n in base:return base[n]
+ for a,b in [('upperarm','upper_arm'),('lowerarm','forearm'),('wrist','hand'),('hand','hand'),('upperleg','thigh'),('lowerleg','shin'),('foot','foot'),('toes','toe')]:
+  if n.startswith(a+'.'):return 'DEF-'+b+'.'+n[-1].upper()
+ return 'root'
+def kayfit(v):
+ x,y,z=v
+ knots=[(0,0),(.292,.532),(.519,.932),(1.107,1.441),(1.241,1.61),(2.5,2.47)]
+ for (a,b),(c,d) in zip(knots,knots[1:]):
+  if z<=c:break
+ z1=b+(z-a)/(c-a)*(d-b)
+ return Vector((x*.9,y*.78,z1))
+for o in objs:
+ if o.type!='MESH':continue
+ world=o.matrix_world.copy();names={g.index:kaybone(g.name)for g in o.vertex_groups};weights=[]
+ for v in o.data.vertices:
+  ws={}
+  for g in v.groups:
+   n=names[g.group];ws[n]=ws.get(n,0)+g.weight
+  weights.append(ws or {'DEF-hips':1});v.co=kayfit(world@v.co)
+  if any(k in o.name for k in ['Head','Jaw','Eyes','Helmet']):
+   pivot=Vector((0,0,1.61));v.co=pivot+Vector(((v.co.x-pivot.x)*.73,(v.co.y-pivot.y)*.76,(v.co.z-pivot.z)*.86))
+ o.parent=None
+ for mod in list(o.modifiers):o.modifiers.remove(mod)
+ bind(o,arm,weights=weights)
+ # Preserve author gradient/albedo structure; the final colour is intentionally quiet.
+ for m in o.data.materials:
+  if not m or not m.use_nodes:continue
+  p=m.node_tree.nodes.get('Principled BSDF');p.inputs['Roughness'].default_value=.83
+  p.inputs['Emission Strength'].default_value=0
+  for n in m.node_tree.nodes:
+   if n.type=='TEX_IMAGE' and not n.image.get('styled'):
+    image=n.image;pix=list(image.pixels[:])
+    for i in range(0,len(pix),4):
+     r,g,b=pix[i:i+3];lum=.3*r+.5*g+.2*b
+     for c,mul in enumerate([.78,.76,.68]):pix[i+c]=(lum+(pix[i+c]-lum)*.22)*mul
+    image.pixels[:]=pix;image.pack();image['styled']=True
+ if 'Head' in o.name or 'Jaw' in o.name:
+  o.data.materials.clear();o.data.materials.append(style.surface('Outpost old bone',(.38,.35,.26)))
+ if 'Eyes' in o.name:
+  o.data.materials.clear();o.data.materials.append(material('Outpost embers',(.25,.11,.035)))
+ if 'Helmet' in o.name:
+  o.data.materials.clear();o.data.materials.append(style.surface('Outpost iron',(.27,.29,.28),'iron'))
+ if 'Cloak' in o.name:
+  o.data.materials.clear();o.data.materials.append(style.surface('Outpost worn cloth',(.25,.24,.20)))
+bpy.data.objects.remove(old,do_unlink=True)
+iron=style.surface('Outpost iron',(.27,.29,.28),'iron');leather=style.surface('Outpost shield hide',(.29,.25,.19));edge=style.surface('Outpost edge',(.35,.34,.29),'iron')
+# Tower shield in bind pose: long axis follows forearm; after lowering the arm
+# it stands vertically. Bevelled outline, raised central rib, iron border.
+outline=[(-.65,-.23),(-.54,-.31),(.45,-.31),(.59,-.18),(.64,0),(.59,.18),(.45,.31),(-.54,.31),(-.65,.23)]
+center=Vector((.61,-.23,1.44));verts=[]
+for depth,factor in [(0,1),(-.045,.86)]:
+ for x,y in outline:verts.append(center+Vector((x*factor,depth,y*factor)))
+verts.append(center+Vector((0,-.075,0)));faces=[];n=len(outline)
+for i in range(n):faces.append((i,(i+1)%n,(i+1)%n+n,i+n));faces.append((n+i,n+(i+1)%n,2*n))
+faces.append(tuple(reversed(range(n))))
+me=bpy.data.meshes.new('TowerShield');me.from_pydata(verts,[],faces);me.update();me.materials.append(iron);me.materials.append(leather)
+uv=me.uv_layers.new()
+for p in me.polygons:
+ p.material_index=1 if p.index%2 else 0
+ for li in p.loop_indices:
+  co=me.vertices[me.loops[li].vertex_index].co;uv.data[li].uv=(co.x,co.z)
+o=bpy.data.objects.new('TowerShield',me);bpy.context.collection.objects.link(o);bind(o,arm,bone='DEF-forearm.L')
+# Long narrow crest and broad shoulder plates read as armour, not bare ribs.
+for s,side in [(-1,'R'),(1,'L')]:
+ o=style.tube('OutpostPauldron',[(s*.23,0,1.46),(s*.32,0,1.46),(s*.43,0,1.45)],[.15,.20,.12],iron);bind(o,arm,bone='DEF-upper_arm.'+side)
+ o=style.tube('OutpostGreave',[(s*.10,.03,.16),(s*.10,.015,.33),(s*.10,0,.48)],[.07,.105,.10],iron);bind(o,arm,bone='DEF-shin.'+side)
+hand=arm.data.bones['DEF-hand.R'].head_local
+# Sword in the right palm, same orientation as the existing Fang club.
+o=style.tube('OutpostSword',[hand+Vector((-.055,0,-.13)),hand+Vector((-.055,0,.15)),hand+Vector((-.055,0,.80)),hand+Vector((-.055,0,.98))],[.035,.055,.045,.002],iron);bind(o,arm,bone='DEF-hand.R')
+save('outpost_guard',arm)
+
+# Rock spider: CC0 scan shell, authored eight articulated legs, no TRELLIS source.
+bpy.ops.wm.read_factory_settings(use_empty=True)
+rocks=imp('godot/assets/gorge/moss_boulder.glb');rock=next(o for o in rocks if o.type=='MESH')
+bpy.context.view_layer.objects.active=rock;rock.select_set(True)
+mod=rock.modifiers.new('Shell budget','DECIMATE');mod.ratio=.40;bpy.ops.object.modifier_apply(modifier=mod.name)
+coords=[v.co for v in rock.data.vertices];lo=Vector([min(v[i]for v in coords)for i in range(3)]);hi=Vector([max(v[i]for v in coords)for i in range(3)])
+for v in rock.data.vertices:v.co=Vector([(v.co[i]-(lo[i]+hi[i])/2)/(hi[i]-lo[i])for i in range(3)])
+rockmat=rock.data.materials[0]
+legmat=style.surface('Spider moss basalt',(.21,.24,.17),'skin')
+armdata=bpy.data.armatures.new('SpiderSkeleton');arm=bpy.data.objects.new('SpiderRig',armdata);bpy.context.collection.objects.link(arm);bpy.context.view_layer.objects.active=arm;arm.select_set(True)
+bpy.ops.object.mode_set(mode='EDIT')
+def spiderbone(name,head,tail,parent=None):
+ b=armdata.edit_bones.new(name);b.head=head;b.tail=tail
+ if parent:b.parent=armdata.edit_bones[parent]
+spiderbone('root',(0,0,0),(0,0,.2));spiderbone('body',(0,0,.65),(0,-.3,.65),'root');spiderbone('head',(0,-.35,.65),(0,-.8,.65),'body')
+legs=[]
+for s in [-1,1]:
+ for i in range(4):
+  y=-.57+i*.36;hip=(s*.30,y,.65);knee=(s*(1.08+(.13 if i in [1,2]else 0)),y+(-.3+i*.18),.86);toe=(s*(1.44+(.16 if i in [1,2]else 0)),y+(-.65+i*.36),.025)
+  n='leg_%s_%s'%(s,i);legs.append((n,hip,knee,toe));spiderbone(n,hip,knee,'body');spiderbone(n+'_lower',knee,toe,n)
+bpy.ops.object.mode_set(mode='OBJECT')
+for name,loc,dim,b in [('Abdomen',(0,.40,.72),(1.35,1.5,.65),'body'),('Carapace',(0,-.40,.63),(1.00,.90,.53),'head')]:
+ o=bpy.data.objects.new(name,rock.data.copy());bpy.context.collection.objects.link(o)
+ for v in o.data.vertices:v.co=Vector([v.co[i]*dim[i]+loc[i]for i in range(3)])
+ bind(o,arm,bone=b)
+for n,hip,knee,toe in legs:
+ mid=Vector(hip).lerp(Vector(knee),.42)+Vector((0,0,.06));o=style.tube('BasaltCoxa',[hip,mid,knee],[.10,.15,.10],legmat);bind(o,arm,bone=n)
+ mid=Vector(knee).lerp(Vector(toe),.48);o=style.tube('BasaltTibia',[knee,mid,toe],[.105,.068,.018],legmat);bind(o,arm,bone=n+'_lower')
+for o in rocks:bpy.data.objects.remove(o,do_unlink=True)
+chitin=style.surface('Spider dark chitin',(.18,.20,.16))
+for s in [-1,1]:
+ o=style.tube('Mandible',[(s*.20,-.73,.58),(s*.28,-.94,.44),(s*.10,-1.08,.31)],[.105,.078,.008],chitin);bind(o,arm,bone='head')
+# Small amber sensory pits, not luminous cartoon eyeballs.
+eye=material('Spider amber',(.28,.15,.04),.7)
+for s in [-1,1]:
+ for i in range(2):
+  bpy.ops.mesh.primitive_uv_sphere_add(segments=8,ring_count=4,radius=.025,location=(s*(.09+i*.095),-.815,.69+i*.025));o=bpy.context.object;o.name='SpiderEye';o.data.materials.append(eye);world=o.matrix_world.copy()
+  for v in o.data.vertices:v.co=world@v.co
+  bind(o,arm,bone='head')
+arm.animation_data_create()
+for clip,seconds in [('idle',3),('walk',1.1),('run',.65),('windup',.7),('attack',.42),('cast',.65),('hit',.24),('death',1.1)]:
+ action=bpy.data.actions.new(clip);arm.animation_data.action=action;frames=round(seconds*24)
+ for f in range(frames+1):
+  t=f/frames;phase=t*math.tau
+  for p in arm.pose.bones:p.rotation_mode='XYZ';p.rotation_euler=(0,0,0);p.location=(0,0,0);p.scale=(1,1,1)
+  body=arm.pose.bones['body'];head=arm.pose.bones['head']
+  if clip=='idle':body.scale=(1+math.sin(phase)*.008,1,1+math.sin(phase)*.006)
+  elif clip in ['walk','run']:
+   for j,(n,_,_,_) in enumerate(legs):
+    wave=math.sin(phase+((j%4+j//4)%2)*math.pi);p=arm.pose.bones[n];p.rotation_euler.z=wave*.18;p.rotation_euler.x=wave*.18
+    arm.pose.bones[n+'_lower'].rotation_euler.x=max(0,-wave)*.32
+  elif clip=='windup':head.rotation_euler.x=t*.24;body.location.y=-t*.04
+  elif clip in ['attack','cast']:head.rotation_euler.x=-math.sin(t*math.pi)*.3;body.location.z=-math.sin(t*math.pi)*.15
+  elif clip=='hit':body.rotation_euler.z=math.sin(t*math.pi)*.09
+  else:
+   fall=min(1,t*1.5);arm.pose.bones['root'].rotation_euler.z=fall*math.pi/2;arm.pose.bones['root'].location.y=math.sin(fall*math.pi/2)*1.5
+   for n,_,_,_ in legs:arm.pose.bones[n+'_lower'].rotation_euler.x=fall*.65
+  for p in arm.pose.bones:p.keyframe_insert('rotation_euler',frame=f);p.keyframe_insert('location',frame=f);p.keyframe_insert('scale',frame=f)
+ track=arm.animation_data.nla_tracks.new();track.name=clip;track.strips.new(clip,0,action);arm.animation_data.action=None
+for track in arm.animation_data.nla_tracks:track.mute=True
+for p in arm.pose.bones:p.matrix_basis.identity()
+bpy.ops.object.select_all(action='DESELECT');arm.select_set(True)
+for o in bpy.context.scene.objects:
+ if o.type=='MESH' and o.parent==arm:o.select_set(True)
+# One skinned mesh, four shared materials: eight legs do not cost sixteen draws.
+bpy.ops.object.select_all(action='DESELECT')
+parts=[o for o in bpy.context.scene.objects if o.type=='MESH' and o.parent==arm]
+for o in parts:o.select_set(True)
+bpy.context.view_layer.objects.active=parts[0];bpy.ops.object.join();bpy.context.object.name='RockSpiderBody'
+arm.select_set(True)
+bpy.context.scene.render.fps=24
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUT,'cliff_spider.glb'),export_format='GLB',use_selection=True,export_animations=True,export_animation_mode='NLA_TRACKS',export_skins=True)

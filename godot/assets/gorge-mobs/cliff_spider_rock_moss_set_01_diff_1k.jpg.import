@@ -2,19 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cx12tum53brh5"
-path="res://.godot/imported/fang_warrior_Atlas_Monsters.png-886c27e292b3ceaeecaa941702f8fd5d.ctex"
+uid="uid://c4f27211tw0w5"
+path="res://.godot/imported/cliff_spider_rock_moss_set_01_diff_1k.jpg-f47235f603c28f64ed96c82a4ab7e9c9.ctex"
 metadata={
 "vram_texture": false
-}
-generator_parameters={
-"md5": "818283a90526a928856ef83357305b56"
 }
 
 [deps]
 
-source_file="res://assets/gorge-mobs/fang_warrior_Atlas_Monsters.png"
-dest_files=["res://.godot/imported/fang_warrior_Atlas_Monsters.png-886c27e292b3ceaeecaa941702f8fd5d.ctex"]
+source_file="res://assets/gorge-mobs/cliff_spider_rock_moss_set_01_diff_1k.jpg"
+dest_files=["res://.godot/imported/cliff_spider_rock_moss_set_01_diff_1k.jpg-f47235f603c28f64ed96c82a4ab7e9c9.ctex"]
 
 [params]
 
