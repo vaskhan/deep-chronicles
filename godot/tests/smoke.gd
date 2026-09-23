@@ -190,18 +190,37 @@ func _run():
 	game.hud.assign_slot(8, "potion_hp")
 	check(game.hud.hotbar_bindings[8] == "potion_hp" and game.hud.Settings.read_value("hotbar", "warrior", [])[8] == "potion_hp", "custom action bindings are saved")
 	game.hud.hotbar_bindings = game.hud.default_bindings(); game.hud._save_hotbar(); game.hud.set_hotbar_locked(true)
-	game.hud.set_hotbar_rows(3); game.hud.set_hotbar_page(2); await process_frame
-	check(game.hud.hotbar_bindings.size() == 108 and game.hud.skill_buttons.size() == 36, "expanded hotbar has three pages of 36 slots")
+	game.hud.set_hotbar_rows(1); await process_frame; await process_frame
+	var bottom_row_y = game.hud.skill_buttons[0].get_global_rect().position.y
+	game.hud.hotbar_expand.pressed.emit(); await process_frame; await process_frame
+	check(is_equal_approx(bottom_row_y, game.hud.skill_buttons[0].get_global_rect().position.y), "expanding keeps the primary row at the same screen position")
+	check(game.hud.skill_buttons[12].get_global_rect().position.y < bottom_row_y, "new row opens above the primary row")
+	game.hud.hotbar_expand.pressed.emit(); await process_frame; await process_frame
+	check(game.hud.hotbar_bindings.size() == 36 and game.hud.skill_buttons.size() == 36, "hotbar has 36 slots without sets or pages")
 	check(game.hud.hotbar_row_nodes.all(func(row): return row.visible), "all three hotbar rows expand")
-	game.hud.assign_slot(107, "potion_hp")
-	check(game.hud.skill_buttons[35].index == 107 and game.hud.skill_buttons[35].tooltip_text.contains("Зелье"), "last slot of last page is assignable")
-	game.hud.assign_slot(106, "weapon_mastery")
-	check(game.hud.hotbar_bindings[106] == "empty", "passive skills cannot be assigned to the hotbar")
+	game.hud.assign_slot(35, "potion_hp")
+	check(game.hud.skill_buttons[35].index == 35 and game.hud.skill_buttons[35].tooltip_text.contains("Зелье"), "last upper-row slot is assignable")
+	game.hud.assign_slot(34, "weapon_mastery")
+	check(game.hud.hotbar_bindings[34] == "empty", "passive skills cannot be assigned to the hotbar")
 	await _screenshot("hotbar-expanded.png")
-	game.hud.set_hotbar_page(0); game.hud.set_hotbar_rows(1)
+	game.hud.hotbar_collapse.pressed.emit(); game.hud.hotbar_collapse.pressed.emit(); await process_frame; await process_frame
+	check(is_equal_approx(bottom_row_y, game.hud.skill_buttons[0].get_global_rect().position.y), "collapsing also preserves the primary row position")
+	for id in ["character", "inventory", "skills", "actions", "map", "party", "menu"]:
+		var menu_button = game.hud.menu_icons[id]
+		check(menu_button.text.is_empty() and menu_button.icon != null, "icon menu exposes " + id)
+	check(is_equal_approx(game.hud.menu_icons.skills.size.y, game.hud.skill_buttons[0].size.y), "right menu uses the same cell height as the skill bar")
+	check(is_equal_approx(game.hud.menu_icons.skills.get_global_rect().end.y, game.hud.skill_buttons[0].get_global_rect().end.y), "right menu and skill bar share their bottom baseline")
+	game.hud.menu_icons.actions.pressed.emit(); await process_frame
+	check(game.hud.window_kind == "actions", "action icon opens a dedicated action window")
+	var pickup_action = _find_button("action_icon", "pickup")
+	check(is_instance_valid(pickup_action) and pickup_action.icon != null, "pickup exists as a blue draggable action icon")
+	game.hud.set_hotbar_locked(false)
+	await _drag(pickup_action, game.hud.skill_buttons[11])
+	check(game.hud.hotbar_bindings[11] == "pickup", "action icon can be dragged onto the hotbar")
+	game.hud.set_hotbar_locked(true); game.hud.close_window()
 	await _test_hotbar_drag()
 	_test_gait()
-	check(game.hud.pickup_button.visible and game.hud.pickup_button.text.contains("Поднять"), "pickup has an explicit permanent action button")
+	check(not game.hud.quick_hint.visible, "shortcut hints do not add a text row beneath the hotbar")
 	await _screenshot("chat-actions.png")
 	await _town_overview()
 	var fixes_before_move = received.filter(func(m): return m.t == "fix").size()
@@ -292,7 +311,9 @@ func _run():
 		game.pick(game.camera.unproject_position(mob.position + Vector3.UP * 1.1))
 		check(await wait_for(func(): return game.target == mob and game.target_arrow.visible and game.hud.target_panel.visible and mob.selected), "clicking a mob displays its name, HP, arrow and selection ring")
 		await _screenshot("target-selected.png")
+		game.hud.show_window("actions"); await process_frame
 		game.hud.autoloot_button.button_pressed = false
+		game.hud.close_window()
 		check(await wait_for(func(): return game.profile.get("autoloot") == false), "autoloot toggle persists on the server")
 		var sp_before = int(game.profile.get("sp", 0))
 		var coins_before = int(game.profile.coins)

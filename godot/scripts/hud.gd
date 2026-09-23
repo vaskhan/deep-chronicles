@@ -68,13 +68,13 @@ var target_hint: Label
 var status_panel: PanelContainer
 const BAR_COLUMNS = 12
 const BAR_ROWS = 3
-const BAR_PAGES = 3
 const BAR_SIZE = BAR_COLUMNS * BAR_ROWS
-const BAR_CAPACITY = BAR_SIZE * BAR_PAGES
+const BAR_CAPACITY = BAR_SIZE
 var hotbar_rows = 1
-var hotbar_page = 0
 var hotbar_row_nodes: Array = []
-var hotbar_page_label: Label
+var hotbar_expand: Button
+var hotbar_collapse: Button
+var menu_icons: Dictionary = {}
 var hotbar_bottom: VBoxContainer
 var skills_filter = "active"
 var hotbar_labels: Array = []
@@ -90,8 +90,7 @@ var party_members_box: VBoxContainer
 var party_signature = ""
 var chat_frame: Control
 var autoloot_button: CheckBox
-var pickup_button: Button
-const ACTION_NAMES = {"attack": "Атака", "target": "Следующая цель", "talk": "Разговор", "pickup": "Поднять добычу", "skills": "Умения", "inventory": "Сумка", "character": "Персонаж", "map": "Карта", "empty": "Пусто"}
+const ACTION_NAMES = {"attack": "Атака", "target": "Следующая цель", "talk": "Разговор", "pickup": "Поднять добычу", "skills": "Умения", "inventory": "Сумка", "character": "Персонаж", "map": "Карта", "party": "Группа", "party_invite": "Пригласить в группу", "party_leave": "Выйти из группы", "actions": "Действия", "menu": "Системное меню", "empty": "Пусто"}
 
 var login_decoration: Control
 var registration_mode = false
@@ -250,7 +249,7 @@ func _game_hud():
 	var zoom_label = _label(zoom_row, "×%.1f" % (2.0 / minimap.zoom), 10); zoom_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL; zoom_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_button(zoom_row, "+", func(): minimap.change_zoom(0.8)).tooltip_text = "Приблизить миникарту"
 	minimap.zoom_changed.connect(func(value): zoom_label.text = "×%.1f" % (2.0 / value))
-	party_summary = Button.new(); party_summary.text = "Пати"; party_summary.position = Vector2(8, 120); party_summary.custom_minimum_size = Vector2(182, 24); game_ui.add_child(party_summary)
+	party_summary = Button.new(); party_summary.text = "Пати"; party_summary.position = Vector2(8, 120); party_summary.custom_minimum_size = Vector2(182, 24); game_ui.add_child(party_summary); party_summary.hide()
 	party_summary.pressed.connect(func(): toggle("party"))
 	var chat_box = _panel(game_ui, Vector2.ZERO, 282 if not touch else 306)
 	chat_box.get_parent().add_theme_stylebox_override("panel", _style(Color(0.03, 0.04, 0.035, 0.26), Color(0.48, 0.43, 0.31, 0.45), 0))
@@ -268,26 +267,20 @@ func _game_hud():
 	bottom.offset_left = -244; bottom.offset_right = 244; bottom.offset_top = -114 if not touch else -132; bottom.offset_bottom = -8
 	cast_bar = ProgressBar.new(); cast_bar.custom_minimum_size.y = 9; cast_bar.visible = false; bottom.add_child(cast_bar); cast_bar.show_percentage = false
 	cast_text = _label(bottom, "", 11); cast_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; cast_text.hide()
-	var actions_panel = PanelContainer.new(); bottom.add_child(actions_panel)
-	var actions = _row(actions_panel)
-	_button(actions, "Атака F", func(): action.emit("attack", null))
-	pickup_button = _button(actions, "Поднять Z", func(): action.emit("pickup", null)); pickup_button.tooltip_text = "Поднять ближайшую доступную добычу"
-	_button(actions, "Цель Q", func(): action.emit("target", null))
-	autoloot_button = CheckBox.new(); autoloot_button.text = "Автолут"; actions.add_child(autoloot_button)
-	autoloot_button.toggled.connect(func(value): action.emit("autoloot", value))
-	_button(actions, "Панель…", func(): toggle("actions"))
-	hotbar_lock = CheckBox.new(); hotbar_lock.text = "Замок"; hotbar_lock.tooltip_text = "Снимите замок, чтобы перетащить навыки из K и поменять ячейки местами"; actions.add_child(hotbar_lock)
-	hotbar_lock.toggled.connect(set_hotbar_locked)
-	var bar_controls = _row(bottom)
-	_button(bar_controls, "◀", func(): set_hotbar_page(hotbar_page - 1))
-	hotbar_page_label = _label(bar_controls, "Набор 1 / 3", 11); hotbar_page_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_button(bar_controls, "▶", func(): set_hotbar_page(hotbar_page + 1))
-	_button(bar_controls, "− Ряд", func(): set_hotbar_rows(hotbar_rows - 1))
-	_button(bar_controls, "+ Ряд", func(): set_hotbar_rows(hotbar_rows + 1))
 	var hotbar_panel = PanelContainer.new(); bottom.add_child(hotbar_panel)
-	var bars = VBoxContainer.new(); hotbar_panel.add_child(bars)
+	var bar_frame = HBoxContainer.new(); bar_frame.add_theme_constant_override("separation", 2); hotbar_panel.add_child(bar_frame)
+	var bars = VBoxContainer.new(); bars.add_theme_constant_override("separation", 2); bar_frame.add_child(bars)
+	bars.size_flags_horizontal = Control.SIZE_EXPAND_FILL; bars.alignment = BoxContainer.ALIGNMENT_END
+	var arrows = VBoxContainer.new(); arrows.add_theme_constant_override("separation", 1); arrows.alignment = BoxContainer.ALIGNMENT_END
+	bar_frame.add_child(arrows)
+	hotbar_expand = _button(arrows, "▴", func(): set_hotbar_rows(hotbar_rows + 1)); hotbar_expand.tooltip_text = "Показать ряд сверху"; hotbar_expand.custom_minimum_size = Vector2(22, 19)
+	hotbar_collapse = _button(arrows, "▾", func(): set_hotbar_rows(hotbar_rows - 1)); hotbar_collapse.tooltip_text = "Скрыть верхний ряд"; hotbar_collapse.custom_minimum_size = Vector2(22, 19)
+	for arrow in [hotbar_expand, hotbar_collapse]:
+		arrow.add_theme_font_size_override("font_size", 10)
+		for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+			arrow.add_theme_stylebox_override(state, _metal_style("bronze-selected" if state in ["hover", "pressed", "focus"] else "bronze-button", 1))
 	for row_index in BAR_ROWS:
-		var hotbar = _row(bars); hotbar.add_theme_constant_override("separation", 2); hotbar_row_nodes.append(hotbar)
+		var hotbar = _row(bars); hotbar.add_theme_constant_override("separation", 2); hotbar_row_nodes.append(hotbar); bars.move_child(hotbar, 0)
 		for col in BAR_COLUMNS:
 			var index = row_index * BAR_COLUMNS + col
 			var button = load("res://scripts/hotbar_slot.gd").new(); button.index = index
@@ -299,13 +292,17 @@ func _game_hud():
 			button.add_theme_font_size_override("font_size", 10)
 			var number = _label(button, hotbar_key(index), 9); number.position = Vector2(3, 0); number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			skill_buttons.append(button); hotbar_labels.append(number)
-	quick_hint = _label(bottom, "F — атака · Q — цель · Tab — сумка · Z — подбор · E — разговор", 10); quick_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	quick_hint = _label(bottom, "F — атака · Q — цель · Tab — сумка · Z — подбор · E — разговор", 10); quick_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; quick_hint.hide()
 	var commands = PanelContainer.new(); game_ui.add_child(commands)
 	commands.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-	commands.offset_left = -238; commands.offset_right = -8; commands.offset_top = -43; commands.offset_bottom = -8
-	var menu = _row(commands)
-	for entry in [["Герой", "character"], ["Сумка", "inventory"], ["Карта", "map"], ["Меню", "menu"]]:
-		var button = _button(menu, entry[0], func(): action.emit(entry[1], null)); button.custom_minimum_size = Vector2(51 if not touch else 60, 24 if not touch else 36); button.add_theme_font_size_override("font_size", 11)
+	var menu_slot_size = 46 if touch else 40
+	commands.offset_left = -(menu_slot_size * 7 + 28); commands.offset_right = -8; commands.offset_top = -(menu_slot_size + 22); commands.offset_bottom = -8
+	var menu = _row(commands); menu.add_theme_constant_override("separation", 1)
+	for id in ["character", "inventory", "skills", "actions", "map", "party", "menu"]:
+		var button = Button.new(); button.icon = load("res://assets/ui/action-" + id + ".svg"); button.expand_icon = true
+		button.custom_minimum_size = Vector2(menu_slot_size,menu_slot_size); button.add_theme_constant_override("icon_max_width", 30); _slot_style(button)
+		button.tooltip_text = ACTION_NAMES[id]; button.set_meta("menu_action", id); menu.add_child(button); menu_icons[id] = button
+		button.pressed.connect(func(): action.emit(id, null))
 	if touch:
 		joystick = load("res://scripts/joystick.gd").new(); game_ui.add_child(joystick)
 		joystick.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
@@ -330,15 +327,24 @@ func update_profile(p: Dictionary):
 	if hotbar_class != hotbar_signature:
 		hotbar_class = hotbar_signature
 		hotbar_bindings = Settings.read_value("hotbar", p.cls, default_bindings()).duplicate()
-		if hotbar_bindings.size() > BAR_CAPACITY: hotbar_bindings.resize(BAR_CAPACITY)
+		if hotbar_bindings.size() > BAR_CAPACITY:
+			# Keep a recoverable copy of removed sets; retain their unique bindings in free visible cells.
+			Settings.write_value("hotbar", p.cls + "_legacy_sets", hotbar_bindings.duplicate())
+			var overflow = hotbar_bindings.slice(BAR_CAPACITY)
+			hotbar_bindings.resize(BAR_CAPACITY)
+			for id in overflow:
+				if id == "empty" or id in hotbar_bindings: continue
+				var free = hotbar_bindings.find("empty")
+				if free < 0: break
+				hotbar_bindings[free] = id
+			Settings.write_value("hotbar", p.cls, hotbar_bindings)
 		while hotbar_bindings.size() < BAR_CAPACITY: hotbar_bindings.append("empty")
 		hotbar_rows = clampi(int(Settings.read_value("hotbar", "rows", 1)), 1, BAR_ROWS)
-		hotbar_page = clampi(int(Settings.read_value("hotbar", p.cls + "_page", 0)), 0, BAR_PAGES - 1)
 		var choices = binding_choices()
 		for i in BAR_CAPACITY:
 			if hotbar_bindings[i] not in choices: hotbar_bindings[i] = "empty"
 		hotbar_locked = bool(Settings.read_value("hotbar", "locked", true))
-	autoloot_button.set_pressed_no_signal(p.get("autoloot", true))
+	if is_instance_valid(autoloot_button): autoloot_button.set_pressed_no_signal(p.get("autoloot", true))
 	_refresh_hotbar()
 
 func update_values(p: Dictionary, s: Dictionary, pos: Vector3, target, cooldowns: Dictionary, cast_time: float):
@@ -367,7 +373,7 @@ func update_values(p: Dictionary, s: Dictionary, pos: Vector3, target, cooldowns
 	cast_bar.visible = cast_time > 0; cast_bar.max_value = maxf(0.01, cast_duration); cast_bar.value = cast_duration - cast_time
 	cast_text.visible = cast_time > 0; cast_text.text = "%s · %.1f с" % [cast_name, cast_time]
 	for i in BAR_SIZE:
-		var id = str(hotbar_bindings[hotbar_page * BAR_SIZE + i]); var button = skill_buttons[i]
+		var id = str(hotbar_bindings[i]); var button = skill_buttons[i]
 		var unavailable = not Network.authed or p.get("dead", false) or id == "empty"
 		if id in GameData.catalog.SKILLS:
 			var remaining = maxf(0, (cooldowns.get(id, 0) - Time.get_ticks_msec()) / 1000.0)
@@ -382,8 +388,8 @@ func update_values(p: Dictionary, s: Dictionary, pos: Vector3, target, cooldowns
 		# Editing must also work on empty cells and skills on cooldown.
 		button.disabled = unavailable and hotbar_locked
 		button.modulate = Color(0.55, 0.55, 0.55) if unavailable and not hotbar_locked else Color.WHITE
-	autoloot_button.disabled = not Network.authed
-	pickup_button.disabled = not Network.authed or p.get("dead", false)
+	if is_instance_valid(autoloot_button): autoloot_button.disabled = not Network.authed
+	_layout_hotbar()
 	chat.fit_height(get_viewport().get_visible_rect().size.y + chat_frame.offset_bottom - 152 - chat_frame.get_theme_stylebox("panel").get_minimum_size().y)
 	chat_frame.offset_top = chat_frame.offset_bottom - chat_frame.get_combined_minimum_size().y
 	if is_instance_valid(map_control): map_control.player_position = pos; map_control.queue_redraw()
@@ -408,7 +414,7 @@ func show_window(kind: String, refresh = false):
 	window = load("res://scripts/window_frame.gd").new(); game_ui.add_child(window)
 	window.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	var dimensions = get_viewport().get_visible_rect().size
-	var desired = {"inventory": Vector2(490, 478), "character": Vector2(410, 630), "shop": Vector2(500, 540), "map": Vector2(760, 530), "menu": Vector2(360, 405), "settings": Vector2(450, 540), "actions": Vector2(440, 530), "skills": Vector2(530, 570), "profession": Vector2(Tuning.PROFESSION_WINDOW_WIDTH, Tuning.PROFESSION_WINDOW_HEIGHT), "teleport": Vector2(480, 470), "priest": Vector2(370, 230), "controls": Vector2(500, 510)}.get(kind, Vector2(500, 520))
+	var desired = {"inventory": Vector2(490, 478), "character": Vector2(410, 630), "shop": Vector2(500, 540), "map": Vector2(760, 530), "menu": Vector2(360, 405), "settings": Vector2(450, 540), "actions": Vector2(420, 390), "skills": Vector2(530, 570), "profession": Vector2(Tuning.PROFESSION_WINDOW_WIDTH, Tuning.PROFESSION_WINDOW_HEIGHT), "teleport": Vector2(480, 470), "priest": Vector2(370, 230), "controls": Vector2(500, 510)}.get(kind, Vector2(500, 520))
 	if touch: desired.x += 35; desired.y += 35
 	if kind == "inventory" and touch: desired = Vector2(420, 640)
 	var half = Vector2(minf(desired.x, dimensions.x - 16), minf(desired.y, dimensions.y - 16)) * 0.5
@@ -764,7 +770,7 @@ func _skills(list):
 	list.add_child(HSeparator.new())
 	_label(list, "Очки навыков: %s SP" % _money(int(profile.get("sp", 0))), 17)
 	_wrapped(list, "SP накапливаются за убийства. Новые ранги открываются на указанных уровнях и изучаются здесь. Базовая атака первого уровня уже изучена.", 12)
-	_wrapped(list, "Снимите «Замок» над панелью и перетащите иконку изученного навыка в нужную ячейку.", 12)
+	_wrapped(list, "Снимите закрепление в окне действий и перетащите иконку изученного навыка в нужную ячейку.", 12)
 	_wrapped(list, "Обучение: воин — 5/10/15/20, далее шаг 4 до 40 и шаг 3 после. Маг — 7/14/20, далее шаг 5 до 40 и шаг 4 после.", 12)
 	var filters = _row(list)
 	_button(filters, "Активные", func(): skills_filter = "active"; show_window("skills",true))
@@ -904,7 +910,7 @@ func binding_name(id: String) -> String:
 func activate_slot(index: int):
 	if index < 0 or index >= BAR_SIZE: return
 	if not hotbar_locked or not Network.authed or profile.get("dead", false): return
-	var id = str(hotbar_bindings[hotbar_page * BAR_SIZE + index])
+	var id = str(hotbar_bindings[index])
 	if id in GameData.catalog.SKILLS and GameData.catalog.SKILLS[id].kind != "passive": action.emit("skill", id)
 	elif id in GameData.catalog.ITEMS: action.emit("use", id)
 	elif id != "empty": action.emit(id, null)
@@ -921,25 +927,18 @@ func _save_hotbar():
 	Settings.write_value("hotbar", profile.cls, hotbar_bindings); _refresh_hotbar()
 	if window_kind == "actions": show_window("actions", true)
 
-func set_hotbar_page(value: int):
-	hotbar_page = posmod(value, BAR_PAGES)
-	if not profile.is_empty(): Settings.write_value("hotbar", profile.cls + "_page", hotbar_page)
-	_refresh_hotbar()
-	if window_kind == "actions": show_window("actions", true)
-
 func set_hotbar_rows(value: int):
 	hotbar_rows = clampi(value, 1, BAR_ROWS); Settings.write_value("hotbar", "rows", hotbar_rows); _refresh_hotbar()
 
 func _refresh_hotbar():
 	if hotbar_bindings.size() != BAR_CAPACITY: return
-	hotbar_lock.set_pressed_no_signal(hotbar_locked)
-	hotbar_page_label.text = "Набор %s / %s · %s ряд." % [hotbar_page + 1, BAR_PAGES, hotbar_rows]
+	if is_instance_valid(hotbar_lock): hotbar_lock.set_pressed_no_signal(hotbar_locked)
+	hotbar_expand.disabled = hotbar_rows == BAR_ROWS
+	hotbar_collapse.disabled = hotbar_rows == 1
 	for row in BAR_ROWS: hotbar_row_nodes[row].visible = row < hotbar_rows
-	var width = (48 if touch else 42) * BAR_COLUMNS + 12
-	hotbar_bottom.offset_left = -width * 0.5; hotbar_bottom.offset_right = width * 0.5
-	hotbar_bottom.offset_top = -(116 + hotbar_rows * (50 if touch else 44)); hotbar_bottom.offset_bottom = -8
+	_layout_hotbar.call_deferred()
 	for i in BAR_SIZE:
-		var slot = hotbar_page * BAR_SIZE + i
+		var slot = i
 		var id = str(hotbar_bindings[slot]); var button = skill_buttons[i]
 		button.index = slot; button.locked = hotbar_locked; button.icon = GameData.icon(id); button.text = ""
 		if id in ACTION_NAMES and id != "empty": button.icon = load("res://assets/ui/action-" + id + ".svg")
@@ -947,24 +946,30 @@ func _refresh_hotbar():
 		if id in GameData.catalog.SKILLS: button.tooltip_text += "\n" + _skill_description(id)
 		if not hotbar_locked: button.tooltip_text += "\nПеретащите навык, расходник или действие"
 
+func _layout_hotbar():
+	# The bottom edge is invariant: newly revealed rows occupy space above row 1.
+	var width = (48 if touch else 42) * BAR_COLUMNS + 38
+	hotbar_bottom.offset_left = -width * 0.5; hotbar_bottom.offset_right = width * 0.5
+	var height = hotbar_bottom.get_combined_minimum_size().y
+	hotbar_bottom.offset_top = -8 - height; hotbar_bottom.offset_bottom = -8
+	hotbar_bottom.size.y = height
+
 func _actions_settings(list):
-	_wrapped(list, "До трёх рядов по 12 ячеек и три набора. 1–0, −, =; Ctrl — второй ряд, Alt — третий. Перетащите действие на разблокированную панель.", 12)
-	var actions = HFlowContainer.new(); list.add_child(actions)
-	for id in ACTION_NAMES:
-		if id == "empty": continue
-		var entry = VBoxContainer.new(); actions.add_child(entry)
-		var icon = load("res://scripts/skill_icon.gd").new(); icon.skill_id = id; icon.learned = true
-		icon.texture = load("res://assets/ui/action-" + id + ".svg"); icon.custom_minimum_size = Vector2(36,36); icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE; icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED; entry.add_child(icon)
-		icon.tooltip_text = ACTION_NAMES[id]; _label(entry,ACTION_NAMES[id],10)
-	var lock_button = CheckButton.new(); lock_button.text = "Заблокировать перетаскивание"; lock_button.button_pressed = hotbar_locked; list.add_child(lock_button)
-	lock_button.toggled.connect(set_hotbar_locked)
-	var choices = binding_choices()
-	for i in BAR_SIZE:
-		var index = hotbar_page * BAR_SIZE + i; var row = _row(list); _label(row, hotbar_key(i)).custom_minimum_size.x = 88
-		var select = OptionButton.new(); select.size_flags_horizontal = Control.SIZE_EXPAND_FILL; row.add_child(select)
-		for id in choices: select.add_item(binding_name(id))
-		select.select(choices.find(hotbar_bindings[index])); select.item_selected.connect(func(choice): assign_slot(index, choices[choice]))
-	_button(list, "Вернуть исходную панель", func(): hotbar_bindings = default_bindings(); _save_hotbar())
+	for group in [["Основные", ["attack", "target", "pickup", "talk"]], ["Группа", ["party", "party_invite", "party_leave"]]]:
+		_label(list, group[0], 14).modulate = Color("b4c9dd")
+		var grid = GridContainer.new(); grid.columns = 4; grid.add_theme_constant_override("h_separation", 12); grid.add_theme_constant_override("v_separation", 10); list.add_child(grid)
+		for id in group[1]:
+			var entry = VBoxContainer.new(); entry.custom_minimum_size.x = 80; grid.add_child(entry)
+			var icon = load("res://scripts/action_icon.gd").new(); icon.binding = id
+			icon.icon = load("res://assets/ui/action-" + id + ".svg"); icon.expand_icon = true; icon.custom_minimum_size = Vector2(44,44); icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER; icon.add_theme_constant_override("icon_max_width",40)
+			_slot_style(icon); icon.tooltip_text = ACTION_NAMES[id] + "\nНажмите или перетащите на панель"; icon.set_meta("action_icon",id); entry.add_child(icon)
+			icon.pressed.connect(func(): action.emit(id,null))
+			var caption = _label(entry,ACTION_NAMES[id],11); caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	list.add_child(HSeparator.new())
+	autoloot_button = CheckBox.new(); autoloot_button.text = "Автоматический подбор добычи"; autoloot_button.button_pressed = profile.get("autoloot",true); list.add_child(autoloot_button)
+	autoloot_button.toggled.connect(func(value): action.emit("autoloot",value))
+	hotbar_lock = CheckBox.new(); hotbar_lock.text = "Закрепить содержимое панели"; hotbar_lock.button_pressed = hotbar_locked; list.add_child(hotbar_lock); hotbar_lock.toggled.connect(set_hotbar_locked)
+	_wrapped(list, "Снимите закрепление, чтобы переносить сюда действия, умения из K и расходники из сумки. Стрелки справа раскрывают ряды вверх. 1–0, −, =; Ctrl — второй ряд, Alt — третий.",12)
 
 func set_hotbar_locked(value: bool):
 	hotbar_locked = value; Settings.write_value("hotbar", "locked", value); _refresh_hotbar()
@@ -1001,6 +1006,7 @@ const PARTY_TITLES = ["Случайному участнику", "Добивше
 func update_party(value: Dictionary):
 	party_state = value
 	var members = value.get("members", [])
+	party_summary.visible = not members.is_empty()
 	party_summary.text = "Пати · %s/6" % members.size() if not members.is_empty() else "Пати · пригласить"
 	party_summary.tooltip_text = "\n".join(members.map(func(m): return "%s · %s ур. · HP %s/%s · %s м" % [m.name, int(m.lvl), int(m.hp), int(m.maxHp), int(m.distance)]))
 	# Rebuild controls only when membership/mode changes; health ticks must not eat typing.

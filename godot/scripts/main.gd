@@ -588,6 +588,10 @@ func _action(kind: String, value):
 		"enchant": Network.send({"t": "ench", "scroll": value.scroll, "ref": value.ref})
 		"teleport": Network.send({"t": "tp", "id": value})
 		"wash": Network.send({"t": "wash"})
+		"party_invite":
+			if is_instance_valid(target) and target.kind == "p": Network.send({"t":"party", "action":"invite", "name":target.display_name})
+			else: hud.show_window("party")
+		"party_leave": Network.send({"t":"party", "action":"leave"})
 		"party_command": Network.send(value)
 		"chat": _chat(str(value))
 
