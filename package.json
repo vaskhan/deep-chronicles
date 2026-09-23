@@ -31,7 +31,8 @@
     "test:pipeline": "node --test tests/pipeline.test.js",
     "native:materials": "node tools/godot/materials.mjs",
     "native:scales": "node tools/godot/scales.mjs",
-    "native:lint": "node tools/godot/lint.mjs"
+    "native:lint": "node tools/godot/lint.mjs",
+    "native:perf": "node tools/godot/perf.mjs"
   },
   "dependencies": {
     "three": "^0.170.0",

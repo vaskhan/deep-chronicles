@@ -1,5 +1,6 @@
 extends Node3D
 const WorldScene = preload("res://scenes/world.tscn")
+const Quality = preload("res://scripts/quality.gd")
 const Actor = preload("res://scripts/actor.gd")
 const Hud = preload("res://scripts/hud.gd")
 var world: Node3D
@@ -75,6 +76,8 @@ func _ready():
 		if a == "--resume": resume_on_start = true
 		if a.begins_with("--capture="): capture_path = a.trim_prefix("--capture=")
 		if a.trim_prefix("--panel=") in ["inventory", "character", "settings"] and a.begins_with("--panel="): startup_panel = a.trim_prefix("--panel=")
+	# Пресет качества: мобильный по умолчанию (tuning.gd), ПК — флагом --quality=pc.
+	Quality.apply(get_viewport(), Quality.preset_from_args(OS.get_cmdline_user_args(), Tuning.QUALITY_PRESET))
 	world = WorldScene.instantiate(); add_child(world); world.build()
 	camera = Camera3D.new(); camera.name = "Camera"; camera.fov = Tuning.CAMERA_FOV; camera.far = Tuning.CAMERA_FAR; camera.near = Tuning.CAMERA_NEAR; add_child(camera); camera.current = true
 	camera.position = Vector3(-410, 30, 425); camera.look_at(Vector3(-430, 7, 390))

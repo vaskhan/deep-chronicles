@@ -211,5 +211,6 @@ test('клиент повторяет ось ущелья: константы ш
   assert.ok(shader.includes(`vec2(${GORGE.ax}.0, ${GORGE.az}.0)`), 'точка устья');
   assert.ok(shader.includes(`vec2(${GORGE.dx}, ${GORGE.dz})`) && shader.includes(`vec2(${GORGE.dz}, -${GORGE.dx})`), 'направление оси');
   assert.ok(shader.includes('24.0 * sin(u / 440.0'), 'изгиб оси');
+  for (const file of ['godot/tests/gorge_review.gd', 'godot/tests/perf_profile.gd']) assert.ok(fs.readFileSync(file, 'utf8').includes('24.0 * sin(u / 440.0 * PI * 1.6)'), `изгиб оси в ${file}`);
   for (const u of [0, 200, 400]) assert.ok(gorgeMask(u, 0) > 0.99);
 });

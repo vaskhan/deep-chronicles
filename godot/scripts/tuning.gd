@@ -45,3 +45,21 @@ const PROFESSION_WINDOW_HEIGHT = 600.0
 const EFFECT_ICONS_MAX = 8
 ## Радиус ауры элиты и чемпиона в долях радиуса моба.
 const ELITE_AURA_SCALE = 1.6
+
+# --- Качество графики (godot/scripts/quality.gd) ---
+## Пресет по умолчанию: 0 — мобильный (так игра выглядела до пресетов), 1 — ПК.
+## Флаг запуска --quality=pc или --quality=mobile переопределяет значение. Рендерер один — Mobile.
+const QUALITY_PRESET = 0
+## Сглаживание 3D: 0 — нет, 1 — MSAA 2x, 2 — MSAA 4x.
+const QUALITY_MOBILE_MSAA = 1
+const QUALITY_PC_MSAA = 2
+## Разрешение 3D относительно окна.
+const QUALITY_MOBILE_RENDER_SCALE = 1.0
+const QUALITY_PC_RENDER_SCALE = 1.0
+## Порог упрощения мешей (LOD) в пикселях: меньше — детальнее и дороже.
+const QUALITY_MOBILE_LOD_THRESHOLD = 1.0
+const QUALITY_PC_LOD_THRESHOLD = 0.5
+## Размер карты теней солнца в пикселях; 0 — как в настройках проекта
+## (4096 на ПК, 2048 на Android/iOS через переопределение .mobile).
+const QUALITY_MOBILE_SHADOW_SIZE = 0
+const QUALITY_PC_SHADOW_SIZE = 4096
