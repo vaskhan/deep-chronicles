@@ -1226,3 +1226,41 @@ test('лимит соединений без входа на адрес; X-Forwa
     await srv2.stop('server-anon-limit.log');
   }
 });
+
+test('полная сумка и сбой записи: подбор и покупка отказывают явно, добыча остаётся на земле, монеты целы', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const { BAG_SLOTS } = await import('../src/data.js');
+  const shop = buildProps().npcs.find((n) => n.role === 'merchant' && !n.shop);
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'Кладовщик', pass: 'test-secret', cls: 'warrior' });
+    const start = (await a.wait('authok')).p;
+    const snapWith = async (pred) => { for (let i = 0; i < 100; i++) { const m = await a.wait('snap'); if (pred(m.g || [])) return m.g; } throw Error('нет наземной добычи'); };
+    // 1) сбой записи: подбор отказывает, добыча возвращается на землю; покупка не списывает монеты
+    a.send({ t: 'dev', x: -448, z: 418, drop: 'pelt', failStore: true });
+    const pelt = (await snapWith((g) => g.some((d) => d.item === 'pelt' && d.ownerName === 'Кладовщик'))).find((d) => d.item === 'pelt' && d.ownerName === 'Кладовщик');
+    a.send({ t: 'dev', x: pelt.x, z: pelt.z }); await untilP(a, (p) => Math.abs(p.x - pelt.x) < 0.1);
+    a.send({ t: 'pickup', id: pelt.id });
+    assert.match((await a.wait('pickup_err')).reason, /Не удалось сохранить подбор/);
+    await snapWith((g) => g.some((d) => d.id === pelt.id));
+    a.send({ t: 'dev', x: shop.x + 2, z: shop.z + 2 }); await pause(300);
+    a.send({ t: 'buy', id: 'potion_mp', n: 1 });
+    await untilEv(a, /Не удалось сохранить покупку/, 'отказ покупки при сбое записи');
+    // 2) запись снова работает, сумка забита до предела: подбор отказывает с понятной причиной
+    a.send({ t: 'dev', failStore: false, item: 'sword_long', n: BAG_SLOTS - start.inv.length });
+    const full = await untilP(a, (p) => p.inv.length >= BAG_SLOTS, 'полная сумка');
+    assert.equal(full.coins, start.coins, 'монеты после отказов не изменились');
+    assert.ok(!full.inv.some((e) => e.id === 'potion_mp' || e.id === 'pelt'));
+    a.send({ t: 'dev', x: pelt.x, z: pelt.z }); await untilP(a, (p) => Math.abs(p.x - pelt.x) < 0.1);
+    a.send({ t: 'pickup', id: pelt.id });
+    assert.match((await a.wait('pickup_err')).reason, new RegExp(`Сумка полна \\(${BAG_SLOTS}/${BAG_SLOTS}\\)`));
+    await snapWith((g) => g.some((d) => d.id === pelt.id));
+    // 3) место освободилось — та же добыча поднимается и сохраняется
+    a.send({ t: 'dev', x: shop.x + 2, z: shop.z + 2 }); await pause(300);
+    a.send({ t: 'sell', idx: full.inv.length - 1, n: 1 });
+    await untilP(a, (p) => p.inv.length < BAG_SLOTS, 'продажа освободила ячейку');
+    a.send({ t: 'dev', x: pelt.x, z: pelt.z }); await untilP(a, (p) => Math.abs(p.x - pelt.x) < 0.1);
+    a.send({ t: 'pickup', id: pelt.id });
+    await untilP(a, (p) => p.inv.some((e) => e.id === 'pelt'), 'подбор после освобождения места');
+  } finally { a.ws.close(); await a.closed(); }
+});

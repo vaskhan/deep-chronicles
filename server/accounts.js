@@ -67,6 +67,21 @@ export function openDb(file) {
       q.save.run(json, Date.now(), key);
       return true;
     },
+    // Несколько профилей одной транзакцией: передача вещи между игроками либо записана у обоих,
+    // либо ни у кого. false — профиль не прошёл проверку (нет аккаунта, превышен SAVE_MAX).
+    storeMany(list) {
+      const rows = [];
+      for (const [key, save] of list) {
+        const row = q.get.get(key), json = row && cleanSave(row, save);
+        if (!json) return false;
+        rows.push([key, json]);
+      }
+      const now = Date.now();
+      db.exec('BEGIN IMMEDIATE');
+      try { for (const [key, json] of rows) q.save.run(json, now, key); db.exec('COMMIT'); }
+      catch (error) { db.exec('ROLLBACK'); throw error; }
+      return true;
+    },
     load(key) { const row = q.get.get(key); return row ? parse(row) : null; },
     count: () => q.count.get().n,
     close: () => db.close(),

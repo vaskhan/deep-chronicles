@@ -2,7 +2,7 @@
 // Клиент ничего из этого не считает — он только присылает команды и рисует события.
 import { resetMovement } from './movement.js';
 import { migrateProgression, effectiveSkill, learnError, skillRanks, applyProf, skillsOf } from '../../src/progression.js';
-import { CLASSES, ITEMS, PROFESSIONS, SKILLS, SHOP, SHOP_STOCK, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
+import { CLASSES, ITEMS, PROFESSIONS, SKILLS, SHOP, SHOP_STOCK, RECIPES, MAX_LEVEL, BAG_SLOTS, xpToNext } from '../../src/data.js';
 import { calcStats, equipFromBag, unequipSlot, migrate, MAX_ENCH } from '../../src/stats.js';
 import { TOWNS, TELEPORTS, heightAt, zoneAt } from '../../src/world-core.js';
 import { sellPrice, crystalsFor, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
@@ -79,6 +79,31 @@ export function addItem(P, id, n = 1, ench = 0) {
   if (e) e.n += n;
   else for (let k = 0; k < (it.stack ? 1 : n); k++) P.inv.push(ench ? { id, n: 1, e: ench } : { id, n: it.stack ? n : 1 });
 }
+// Сколько новых ячеек займут вещи: стопка к уже лежащей — ни одной, иначе одна на стопку
+// или по одной на каждую нестопочную вещь.
+export function slotsFor(P, drops) {
+  let need = 0; const fresh = new Set();
+  for (const d of drops) {
+    const it = ITEMS[d.item]; if (!it || d.item === 'coins') continue;
+    if (it.stack) { if (!P.inv.some((e) => e.id === d.item) && !fresh.has(d.item)) { fresh.add(d.item); need++; } }
+    else need += Math.max(1, d.n | 0);
+  }
+  return need;
+}
+// Отказ по месту в сумке с понятным текстом или null.
+export function bagError(P, drops) {
+  const need = slotsFor(P, drops);
+  if (need && P.inv.length + need > BAG_SLOTS) return `Сумка полна (${P.inv.length}/${BAG_SLOTS}), нужно свободных ячеек: ${P.inv.length + need - BAG_SLOTS}`;
+  return null;
+}
+// Записать изменение профиля или откатить его: сбой записи не должен выглядеть успешной выдачей.
+function commit(a, save, before, fail) {
+  try { if (save()) return true; } catch { /* ниже — откат */ }
+  Object.assign(a.P, before);
+  say(a, fail, 'bad');
+  return false;
+}
+const snapshot = (P) => ({ coins: P.coins, inv: structuredClone(P.inv), equip: { ...P.equip }, enc: { ...P.enc } });
 export function takeItem(P, id, n = 1) {
   let idx = P.inv.findIndex((i) => i.id === id && !i.e); if (idx < 0) idx = P.inv.findIndex((i) => i.id === id);
   if (idx < 0) return false;
@@ -130,8 +155,12 @@ export function place(a, x, z) {
 export function cmdEquip(a, idx, want) {
   const it = ITEMS[a.P.inv[idx | 0]?.id];
   if (!it) return say(a, 'Нет такой вещи', 'bad');
-  const err = equipFromBag(a.P, idx | 0, typeof want === 'string' ? want : undefined);
+  // Двуручное оружие или полный доспех снимают до двух вещей в сумку: проверяем место заранее.
+  const trial = structuredClone(a.P);
+  const err = equipFromBag(trial, idx | 0, typeof want === 'string' ? want : undefined);
   if (err) return say(a, err, 'bad');
+  if (trial.inv.length > BAG_SLOTS && trial.inv.length > a.P.inv.length) return say(a, `Сумка полна (${a.P.inv.length}/${BAG_SLOTS}): некуда снять надетое`, 'bad');
+  equipFromBag(a.P, idx | 0, typeof want === 'string' ? want : undefined);
   a.dirty = true; say(a, `Экипировано: ${it.name}`, 'good');
 }
 export function cmdUnequip(a, sl) {
@@ -139,6 +168,7 @@ export function cmdUnequip(a, sl) {
   // и роняли обработчик пакета. Снимаем только собственный слот с настоящим предметом.
   if (!Object.hasOwn(a.P.equip, sl) || !ITEMS[a.P.equip[sl]]) return;
   const it = ITEMS[a.P.equip[sl]];
+  if (a.P.inv.length >= BAG_SLOTS) return say(a, `Сумка полна (${a.P.inv.length}/${BAG_SLOTS}): некуда снять`, 'bad');
   unequipSlot(a.P, sl);
   a.dirty = true; say(a, `Снято: ${it.name}`);
 }
@@ -159,7 +189,7 @@ export function cmdUse(a, id) {
   }
 }
 // усиление: ref = { bag: индекс } | { slot: id }
-export function cmdEnch(a, scrollId, ref) {
+export function cmdEnch(a, scrollId, ref, save = () => true) {
   const sc = ITEMS[scrollId];
   if (sc?.use !== 'ench') return say(a, 'Нужен свиток усиления', 'bad');
   const entry = ref?.slot ? null : a.P.inv[ref?.bag | 0];
@@ -169,10 +199,14 @@ export function cmdEnch(a, scrollId, ref) {
   if (it.grade === 'none') return say(a, 'Вещь без грейда нельзя усилить', 'bad');
   const cur = ref.slot ? a.P.enc[ref.slot] || 0 : entry.e || 0;
   if (cur >= MAX_ENCH) return say(a, 'Максимальное усиление', 'bad');
+  // При неудаче надетая вещь превращается в кристаллы: им нужна ячейка, если стопки ещё нет.
+  if (ref.slot && bagError(a.P, [{ item: 'crystal', n: 1 }])) return say(a, `${bagError(a.P, [{ item: 'crystal', n: 1 }])} — для кристаллов на случай неудачи`, 'bad');
+  const before = snapshot(a.P);
   if (!takeItem(a.P, scrollId)) return say(a, 'Нет свитка', 'bad');
   a.dirty = true;
   if (enchSucceedsRated(cur, RATES)) {
     if (ref.slot) a.P.enc[ref.slot] = cur + 1; else entry.e = cur + 1;
+    if (!commit(a, save, before, 'Не удалось сохранить усиление. Свиток и вещь не изменились')) return;
     say(a, `Усиление удалось: ${it.name} +${cur + 1}`, 'rare');
     ev(a, { k: 'ench', ok: true, color: sc.color });
   } else {
@@ -180,6 +214,7 @@ export function cmdEnch(a, scrollId, ref) {
     else a.P.inv.splice(a.P.inv.indexOf(entry), 1);
     const n = crystalsFor(it.grade, cur);
     addItem(a.P, 'crystal', n);
+    if (!commit(a, save, before, 'Не удалось сохранить усиление. Свиток и вещь не изменились')) return;
     say(a, `Усиление не удалось — ${it.name} +${cur} рассыпается. Получено кристаллов: ${n}`, 'bad');
     ev(a, { k: 'ench', ok: false });
   }
@@ -187,7 +222,7 @@ export function cmdEnch(a, scrollId, ref) {
 
 // торговля — только рядом с торговцем
 const npcNear = (a, npcs, role) => npcs.some((n) => n.role === role && flatDist(a, n) < NPC_RANGE);
-export function cmdBuy(a, npcs, id, n) {
+export function cmdBuy(a, npcs, id, n, save = () => true) {
   if (!npcNear(a, npcs, 'merchant')) return say(a, 'Торговец далеко', 'bad');
   const it = ITEMS[id];
   if (!it || !SHOP.includes(id)) return say(a, 'Такого товара нет', 'bad');
@@ -195,18 +230,23 @@ export function cmdBuy(a, npcs, id, n) {
   n = clamp(n | 0 || 1, 1, 99);
   const cost = rateBuyPrice(it.price, RATES) * n;
   if (a.P.coins < cost) return say(a, 'Недостаточно монет', 'bad');
+  const full = bagError(a.P, [{ item: id, n }]); if (full) return say(a, full, 'bad');
+  const before = snapshot(a.P);
   a.P.coins -= cost; addItem(a.P, id, n);
+  if (!commit(a, save, before, 'Не удалось сохранить покупку. Монеты не списаны')) return;
   a.dirty = true; say(a, `Куплено: ${it.name}${n > 1 ? ` ×${n}` : ''} за ${cost} мон.`, 'good');
 }
-export function cmdSell(a, npcs, idx, n) {
+export function cmdSell(a, npcs, idx, n, save = () => true) {
   if (!npcNear(a, npcs, 'merchant')) return say(a, 'Торговец далеко', 'bad');
   const e = a.P.inv[idx | 0]; const it = ITEMS[e?.id];
   if (!it) return say(a, 'Нет такой вещи', 'bad');
   n = clamp(n | 0 || 1, 1, e.n);
   const gain = rateSellPrice(sellPrice(it), RATES) * n;
   if (gain <= 0) return say(a, 'Этот предмет нельзя продать', 'bad');
+  const before = snapshot(a.P);
   e.n -= n; if (e.n <= 0) a.P.inv.splice(idx | 0, 1);
   a.P.coins += gain;
+  if (!commit(a, save, before, 'Не удалось сохранить продажу. Вещь осталась в сумке')) return;
   a.dirty = true; say(a, `Продано: ${it.name}${n > 1 ? ` ×${n}` : ''} за ${gain} мон.`, 'good');
 }
 export function cmdTeleport(a, npcs, id) {
@@ -279,6 +319,8 @@ export function cmdProf(a, id, save) {
 
 // Одна транзакционная точка выдачи для ручного подбора и автолута.
 export function creditLoot(a, drops, save) {
+  const full = bagError(a.P, drops);
+  if (full) { say(a, `${full}. Добыча осталась на земле`, 'bad'); return false; }
   const before = { coins: a.P.coins, inv: structuredClone(a.P.inv) };
   for (const d of drops) {
     if (d.item === 'coins') a.P.coins += d.n;
@@ -309,6 +351,7 @@ export function cmdCraft(a, npcs, id, request, save) {
     for (const entry of a.P.inv) if (entry.id === part) { const n = Math.min(entry.n, remaining); entry.n -= n; remaining -= n; }
   }
   a.P.inv = a.P.inv.filter(e => e.n > 0); addItem(a.P, id);
+  if (a.P.inv.length > BAG_SLOTS && a.P.inv.length > before.inv.length) { Object.assign(a.P, before); return say(a, `Сумка полна (${a.P.inv.length}/${BAG_SLOTS}): некуда положить изделие`, 'bad'); }
   a.P.craftReceipts = [...before.craftReceipts, request].slice(-32);
   try { if (!save()) throw Error('save failed'); }
   catch { Object.assign(a.P, before); return say(a, 'Изготовление не сохранено. Материалы и монеты возвращены', 'bad'); }

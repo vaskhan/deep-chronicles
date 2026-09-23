@@ -70,6 +70,10 @@ export const SLOTS = [
 ];
 
 // w — вес, twoHand — занимает и щит, robe — мантия (не для воина), full — закрывает поножи, set — комплект
+// Предел ячеек сумки. Стопка занимает одну ячейку. Держит сохранение профиля намного ниже
+// предела записи (server/accounts.js, 64 000 байт): 200 ячеек — около 10 КБ.
+export const BAG_SLOTS = 200;
+
 export const ITEMS = {
   // оружие
   sword_novice: { name: 'Меч новичка', slot: 'weapon', grade: 'none', patk: 6, price: 0, w: 3, color: 0xa0a0a0 },

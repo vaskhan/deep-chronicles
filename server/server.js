@@ -118,7 +118,19 @@ const tooMany = (ip) => {
 };
 setInterval(() => { const now = Date.now(); for (const [ip, t] of tries) if (now - t.at > 60_000) tries.delete(ip); }, 60_000);
 
-const store = (p) => { if (p.key && p.a) acc.store(p.key, PL.profileOf(p.a)); };
+// Единая точка записи профиля. false — запись не прошла: вызывающий откатывает изменение.
+// DEV_CMD-тесты могут включить сбой записи игроку (dev {failStore}), чтобы проверить откаты.
+function storeNow(p) {
+  if (!p.key || !p.a) return false;
+  const started = performance.now();
+  try {
+    const ok = !(DEV_CMD && p.a.devFailStore) && acc.store(p.key, PL.profileOf(p.a));
+    if (!ok) console.warn(`SAVE_FAIL player=${p.id} bytes=${JSON.stringify(PL.profileOf(p.a)).length}`);
+    return ok;
+  } finally { perf.stores++; perf.storeMs += performance.now() - started; }
+}
+const saver = (p) => () => storeNow(p);
+const store = (p) => { if (p.key && p.a) storeNow(p); };
 
 // ===== надёжность: границы операций, журнал сбоев, учёт времени =====
 // Исключение в одной команде или у одного игрока не должно останавливать мир для остальных.
@@ -250,18 +262,20 @@ function onMessage(p, m, ip) {
       case 'autoloot': {
         if (typeof m.enabled !== 'boolean') return;
         const before = a.P.autoloot; a.P.autoloot = m.enabled;
-        try { if (!acc.store(p.key, PL.profileOf(a))) throw Error('save failed'); }
+        try { if (!storeNow(p)) throw Error('save failed'); }
         catch { a.P.autoloot = before; PL.say(a, 'Не удалось сохранить автолут', 'bad'); }
         a.dirty = true; return;
       }
-      case 'learn': return PL.cmdLearn(a, String(m.id || ''), m.rank, () => acc.store(p.key, PL.profileOf(a)));
-      case 'prof': return PL.cmdProf(a, String(m.id || ''), () => acc.store(p.key, PL.profileOf(a)));
+      case 'learn': return PL.cmdLearn(a, String(m.id || ''), m.rank, saver(p));
+      case 'prof': return PL.cmdProf(a, String(m.id || ''), saver(p));
       case 'skill': return onSkill(p, a, String(m.id || ''), now);
       case 'pickup': {
         const result = groundLoot.claim(String(m.id || ''), a, p.key, now);
         if (result.error) return refuse(p, { t: 'pickup_err', id: m.id, reason: result.error });
         const d = result.drop;
-        if (!PL.creditLoot(a, [d], () => acc.store(p.key, PL.profileOf(a)))) {
+        const full = PL.bagError(a.P, [d]);
+        if (full) { groundLoot.restore(d); return refuse(p, { t: 'pickup_err', id: d.id, reason: `${full}. Добыча осталась на земле.` }); }
+        if (!PL.creditLoot(a, [d], saver(p))) {
           groundLoot.restore(d);
           return refuse(p, { t: 'pickup_err', id: d.id, reason: 'Не удалось сохранить подбор. Добыча осталась на земле.' });
         }
@@ -270,10 +284,10 @@ function onMessage(p, m, ip) {
       case 'use': return PL.cmdUse(a, String(m.id || ''));
       case 'equip': return PL.cmdEquip(a, m.idx | 0, m.slot);
       case 'unequip': return PL.cmdUnequip(a, String(m.slot || ''));
-      case 'craft': return PL.cmdCraft(a, world.npcs, String(m.id || ''), m.request, () => acc.store(p.key, PL.profileOf(a)));
-      case 'buy': return PL.cmdBuy(a, world.npcs, String(m.id || ''), m.n);
-      case 'sell': return PL.cmdSell(a, world.npcs, m.idx | 0, m.n);
-      case 'ench': return PL.cmdEnch(a, String(m.scroll || ''), m.ref || {});
+      case 'craft': return PL.cmdCraft(a, world.npcs, String(m.id || ''), m.request, saver(p));
+      case 'buy': return PL.cmdBuy(a, world.npcs, String(m.id || ''), m.n, saver(p));
+      case 'sell': return PL.cmdSell(a, world.npcs, m.idx | 0, m.n, saver(p));
+      case 'ench': return PL.cmdEnch(a, String(m.scroll || ''), m.ref && typeof m.ref === 'object' ? m.ref : {}, saver(p));
       case 'tp': return PL.cmdTeleport(a, world.npcs, String(m.id || ''));
       case 'respawn': return PL.respawn(a);
       case 'dev': {
@@ -287,6 +301,7 @@ function onMessage(p, m, ip) {
         if (m.drop && ITEMS[m.drop]) groundLoot.spawn(a, { coins: 17, drops: [m.drop] }, p.key, p.name, now);
         if (m.xp != null) PL.gainXp(a, num(m.xp, 1e7) | 0);
         a.dirty = true;
+        if (m.failStore != null) a.devFailStore = !!m.failStore;
         if (m.stats) { send(p, { t: 'devstats', perf: perfReport() }); if (m.stats === 'reset') perfReset(); }
         // Проверка изоляции сбоев: исключение в команде (после правки профиля) или в тике игрока.
         if (m.fault === 'tick') a.devFault = true;
@@ -409,7 +424,7 @@ function damageMob(a, mb, dmg, crit, now, dot = false) {
   const recipient = plan.recipient;
   const drops = [{ item: 'coins', n: rw.coins }, ...rw.drops.map(item => ({ item, n: 1 }))];
   // Pickup mode deliberately leaves the reward on the ground; autoloot cannot win the race.
-  const auto = plan.mode !== 'pickup' && recipient.a.P.autoloot && PL.creditLoot(recipient.a, drops, () => acc.store(recipient.key, PL.profileOf(recipient.a)));
+  const auto = plan.mode !== 'pickup' && recipient.a.P.autoloot && PL.creditLoot(recipient.a, drops, saver(recipient));
   if (!auto) groundLoot.spawn(mb, rw, recipient.key, plan.mode === 'pickup' ? 'участникам группы' : recipient.name, now, plan.allowed);
   for (const share of plan.shares) share.player.a.out.push({ k: 'kill', mob: mb.kind, name: mb.def.name, xp: share.xp, coins: share.player === recipient ? rw.coins : 0, sp: share.sp, ground: share.player === recipient && !auto, boss: !!mb.def.boss });
   if (plan.shares.length > 1) for (const share of plan.shares) PL.say(share.player.a, plan.mode === 'pickup' ? 'Добыча на земле: подбирает первый участник группы.' : `Добыча: ${recipient.name}${auto ? ' (автолут)' : ' — на земле'}.`);
@@ -620,25 +635,43 @@ function onPlayerDied(v, killer) {
   // с умершего PK падает вещь — достаётся убийце
   if (victimWasRed) pkDrop(v, killer);
 }
-// PK умер: с шансом теряет вещь; убийце-игроку она достаётся
+// PK умер: с шансом теряет вещь; убийце-игроку она достаётся. Передача пишется одной транзакцией
+// у обоих: при сбое записи вещь остаётся у PK. Полная сумка убийцы — вещь не выпадает.
 function pkDrop(v, killer) {
   if (Math.random() > PVP.dropChance) return;
   const P = v.P;
   const bag = P.inv.map((e, i) => ({ i, e })).filter(({ e }) => !ITEMS[e.id].loot || Math.random() < 0.3);
   const worn = Object.entries(P.equip).filter(([, id]) => id && ITEMS[id].grade !== 'none');
+  const vp = players.get(v.id), kp = killer ? players.get(killer.id) : null;
+  const beforeV = structuredClone(P), beforeK = killer ? structuredClone(killer.P) : null;
   let item = null;
   if (worn.length && Math.random() < 0.35) {
     const [sl, id] = worn[Math.floor(Math.random() * worn.length)];
-    item = { id, n: 1, e: P.enc[sl] || 0 }; P.equip[sl] = null; delete P.enc[sl];
+    item = { id, n: 1, e: P.enc[sl] || 0 };
+    if (killer && PL.bagError(killer.P, [{ item: id, n: 1 }])) return PL.say(killer, 'Сумка полна — вещь с PK не выпала', 'bad');
+    P.equip[sl] = null; delete P.enc[sl];
   } else if (bag.length) {
     const { i, e } = bag[Math.floor(Math.random() * bag.length)];
-    item = { ...e }; P.inv.splice(i, 1);
+    item = { ...e };
+    if (killer && PL.bagError(killer.P, [{ item: e.id, n: e.n }])) return PL.say(killer, 'Сумка полна — вещь с PK не выпала', 'bad');
+    P.inv.splice(i, 1);
   }
   if (!item) return;
+  if (killer) PL.addItem(killer.P, item.id, item.n, item.e);
+  const saved = (() => {
+    if (!vp?.key) return true; // сессия уже закрывается: запишет обычное сохранение при выходе
+    if (DEV_CMD && (v.devFailStore || killer?.devFailStore)) return false;
+    try { return acc.storeMany([[vp.key, PL.profileOf(v)], ...(kp?.key ? [[kp.key, PL.profileOf(killer)]] : [])]); }
+    catch (error) { logFault('pk-drop-store', vp, error); return false; }
+  })();
+  if (!saved) {
+    Object.assign(v.P, beforeV); if (killer) Object.assign(killer.P, beforeK);
+    console.warn(`SAVE_FAIL pk-drop victim=${v.id}`);
+    return;
+  }
   v.dirty = true;
   PL.say(v, `Вы потеряли: ${ITEMS[item.id].name}${item.n > 1 ? ` ×${item.n}` : ''}`, 'bad');
   if (!killer) return;
-  PL.addItem(killer.P, item.id, item.n, item.e);
   killer.dirty = true;
   PL.say(killer, `Вы подобрали с ${v.name}: ${ITEMS[item.id].name}`, 'rare');
   broadcast({ t: 'announce', text: `С PK ${v.name} упала вещь — её подобрал ${killer.name}` });
