@@ -29,6 +29,7 @@ func _run():
  for id in titles:
   var actor = Actor.new(); actor.kind = "m"; scene.add_child(actor); actor.setup(id,titles[id]); actor.set_process(false)
   check(actor.art_model, id+": real model")
+  check(actor.art_base == {"fang_warrior":"orc", "fang_shaman":"orc", "stone_guard":"golem"}[id], id+": sound and gait family survives model replacement")
   if not before: check(not Art.entry_of(id).has("base"), id+": distinct source")
   var skeleton: Skeleton3D = actor.model.find_child("Skeleton3D",true,false)
   check(skeleton != null, id+": skeleton")

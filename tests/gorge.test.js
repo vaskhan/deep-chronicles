@@ -159,6 +159,7 @@ test('мобы ущелья: отдельная модель или явный �
     if (['fang_warrior', 'fang_shaman', 'stone_guard'].includes(kind)) {
       assert.equal(entry.path, `res://assets/gorge-mobs/${kind}.glb`);
       assert.equal(entry.rig, 'canonical');
+      assert.equal(entry.family, def.model, `${kind}: прежнее семейство звука и походки`);
       assert.equal(entry.base, undefined, `${kind}: отдельная модель, не перекрашенная основа`);
       assert.ok(fs.existsSync(entry.path.replace('res://', 'godot/')));
     } else {

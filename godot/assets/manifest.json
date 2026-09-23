@@ -159,12 +159,14 @@
     "fang_warrior": {
       "path": "res://assets/gorge-mobs/fang_warrior.glb",
       "height": 3.3,
-      "rig": "canonical"
+      "rig": "canonical",
+      "family": "orc"
     },
     "fang_shaman": {
       "path": "res://assets/gorge-mobs/fang_shaman.glb",
       "height": 3.0,
-      "rig": "canonical"
+      "rig": "canonical",
+      "family": "orc"
     },
     "river_drowned": {
       "base": "ghoul",
@@ -179,7 +181,8 @@
     "stone_guard": {
       "path": "res://assets/gorge-mobs/stone_guard.glb",
       "height": 4.6,
-      "rig": "canonical"
+      "rig": "canonical",
+      "family": "golem"
     },
     "outpost_guard": {
       "base": "skeleton",

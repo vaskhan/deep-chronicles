@@ -46,7 +46,7 @@ var motion_distance = 0.0
 var previous_position = Vector3.ZERO
 var have_motion_sample = false
 var stride_length = 3.8
-## Модель-основа из манифеста: у псевдонима (скальный паук → spider) — исходный вид.
+## Семейство звука/походки сохраняется при замене геометрии отдельным GLB.
 var art_base = ""
 var visual_height = 2.5
 var attack_sequence = 0
@@ -81,7 +81,7 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	add_child(model)
 	model_rest_y = model.position.y
 	model_rest_position = model.position; model_rest_rotation = model.rotation
-	art_base = Art.base_of(model_id)
+	art_base = str(Art.entry_of(model_id).get("family", Art.base_of(model_id)))
 	stride_length = {"rabbit": 1.2, "wolf": 2.8, "boar": 2.6, "spider": 2.8, "scorpion": 2.8, "treant": 5.6, "golem": 5.4}.get(art_base, 3.8)
 	animator = model.find_child("AnimationPlayer", true, false)
 	if animator:
