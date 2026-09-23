@@ -245,6 +245,23 @@
     "lod": "Godot import meshes/generate_lods=true; distance culling; fern MultiMesh tiles 32 m",
     "cliff_geometry": "Скан нормализован для модульной расстановки; исходные UV сохранены. Открытые края перекрываются рельефом, дополнительная геометрия не достраивается.",
     "waterfall_audio": "../audio/manifest.json#kurt-stream",
-    "cliff_triangles": 9999
+    "cliff_triangles": 9999,
+    "route_pass_2": {
+      "script": "godot/scripts/gorge_art.gd",
+      "sources_reused": [
+        "rock_moss_set_01",
+        "fern_02",
+        "rock_face",
+        "mossy_rock",
+        "dry_ground_01"
+      ],
+      "license": "CC0-1.0",
+      "geometry": "Original GLB/UV unchanged; partially buried stone groups, low moss hummocks; shared MultiMesh cells.",
+      "fern_height_m": [
+        0.35,
+        0.85
+      ],
+      "water": "Procedural continuous indexed river/pool mesh; local shaders; no external assets."
+    }
   }
 }

@@ -52,7 +52,7 @@ func set_region(pos: Vector3):
 		"waste": {"fog": Color("c4a589"), "density": 0.00025, "sun": Color("ffdbb6"), "energy": 1.15, "ambient": 0.32},
 		"gorge_terraces": {"fog": Color("6d8c8b"), "density": 0.0007, "sun": Color("ffe6bf"), "energy": 1.05, "ambient": 0.38},
 		"gorge_falls": {"fog": Color("7d9c9b"), "density": 0.0011, "sun": Color("ffe5c4"), "energy": 1.02, "ambient": 0.38},
-		"gorge_summit": {"fog": Color("c3d0dc"), "density": 0.00035, "sun": Color("f3f6ff"), "energy": 1.08, "ambient": 0.3},
+		"gorge_summit": {"fog": Color("c3d0dc"), "density": 0.0007, "sun": Color("f3f6ff"), "energy": 1.08, "ambient": 0.3},
 		"crypt": {"fog": Color("191e30"), "density": 0.008, "sun": Color("9fb1da"), "energy": 0.12, "ambient": 0.23},
 	}.get(id, {})
 	var e = environment.environment
@@ -134,7 +134,8 @@ func _props():
 	var ico = SphereMesh.new(); ico.radius = 1; ico.height = 2; ico.radial_segments = 8; ico.rings = 4; shapes.ico = ico
 	var groups: Dictionary = {}
 	for row in GameData.world.shapes:
-		var key = "%s_%s_%s_%s_%s" % [row[0], int(row[1]), row[9], floori(row[2] / 200), floori(row[4] / 200)]
+		var in_gorge = GameData.zone_at(Vector3(row[2],row[3],row[4])).id == "gorge"
+		var key = "%s_%s_%s_%s_%s_%s" % [row[0], int(row[1]), row[9], floori(row[2] / 200), floori(row[4] / 200), in_gorge]
 		if not groups.has(key): groups[key] = []
 		groups[key].append(row)
 	for rows in groups.values():
@@ -147,7 +148,17 @@ func _props():
 			var basis = Basis(Vector3.UP, rotation_y).scaled_local(Vector3(r[6], r[7], r[8]))
 			mm.set_instance_transform(i, Transform3D(basis, Vector3(r[2], r[3], r[4])))
 		var node = MultiMeshInstance3D.new(); node.multimesh = mm
-		node.material_override = _material(int(first[1]), first[9]); add_child(node)
+		node.material_override = _material(int(first[1]), first[9])
+		if first[9] in ["brick","plain"] and GameData.zone_at(Vector3(first[2],first[3],first[4])).id == "gorge":
+			if not materials.has("gorge_ruin"):
+				var ruin = StandardMaterial3D.new(); ruin.albedo_color = Color("68716d")
+				ruin.albedo_texture = load("res://assets/gorge/rock_face_diff.jpg")
+				ruin.normal_enabled = true; ruin.normal_texture = load("res://assets/gorge/rock_face_nor.jpg"); ruin.normal_scale = .6
+				ruin.roughness_texture = load("res://assets/gorge/rock_face_arm.jpg"); ruin.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
+				ruin.uv1_triplanar = true; ruin.uv1_world_triplanar = true; ruin.uv1_scale = Vector3.ONE*.2
+				materials.gorge_ruin = ruin
+			node.material_override = materials.gorge_ruin
+		add_child(node)
 
 func _material(value: int, kind: String) -> Material:
 	var key = str(value) + kind
@@ -198,7 +209,7 @@ func _models():
 		var row = original_row.duplicate()
 		if row[0] == "rock_a":
 			var pos = Vector3(row[1], row[2], row[3])
-			if GameData.zone_at(pos).id == "gorge" and GameData.gorge_tier(pos).id != "summit": row[0] = "moss_boulder"
+			if GameData.zone_at(pos).id == "gorge": row[0] = "moss_boulder"
 		if row[0] in ["oak", "pine"]:
 			var zone = GameData.zone_at(Vector3(row[1], row[2], row[3]))
 			var choice = posmod(hash("tree:%s:%s" % [row[1],row[3]]), 100)
@@ -222,6 +233,10 @@ func _models():
 				while parent != source and parent is Node3D:
 					local = parent.transform * local; parent = parent.get_parent()
 				var display_mesh = mesh.mesh
+				if id == "moss_boulder":
+					display_mesh = display_mesh.duplicate()
+					for surface in display_mesh.get_surface_count():
+						display_mesh.surface_set_material(surface,preload("res://scripts/gorge_art.gd").boulder_material(display_mesh.surface_get_material(surface)))
 				if id in ["elm_field","elm_slender","alder_round","pine_natural"]:
 					display_mesh = display_mesh.duplicate()
 					for surface in display_mesh.get_surface_count():

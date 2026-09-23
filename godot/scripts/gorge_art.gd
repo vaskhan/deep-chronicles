@@ -13,6 +13,7 @@ func build():
  rng.seed=23092026
  _cliffs()
  _ferns()
+ _boulders()
 
 func _cliffs():
  var source=load("res://assets/gorge/coastal_cliff_02.glb").instantiate()
@@ -61,8 +62,10 @@ func _ferns():
  material.set_shader_parameter("fade_end",Tuning.GORGE_FERN_RANGE)
  var groups: Dictionary={}
  for i in Tuning.GORGE_FERN_COUNT:
-  var u=rng.randf_range(0,190)
-  var s=rng.randf_range(-38,35)
+  var cluster=i/16
+  var u=fmod(float(cluster)*27.7,186.0)+rng.randf_range(-4,4)
+  var s=(-32.0 if cluster%3==0 else (29.0 if cluster%3==1 else -8.0))+rng.randf_range(-4,4)
+  if absf(s-(10-18*smoothstep(110,185,u)+3*sin(u*.04)))<4: continue
   var river=-20+3*sin(u*.045)
   if absf(s-river)<6: continue
   var pos=_at(u,s)
@@ -74,7 +77,7 @@ func _ferns():
   if blocked: continue
   var key=Vector2i(floori(pos.x/32),floori(pos.z/32))
   if not groups.has(key): groups[key]=[]
-  var scale3=Vector3.ONE*rng.randf_range(1.4,2.5)
+  var scale3=Vector3.ONE*rng.randf_range(.35,.85)/maxf(mesh.get_aabb().size.y,.01)
   var basis=Basis(Vector3.UP,rng.randf()*TAU).scaled_local(scale3)
   var box=mesh.get_aabb()
   var offset=Vector3(-box.get_center().x,-box.position.y-.025,-box.get_center().z)
@@ -93,3 +96,61 @@ func _ferns():
   node.extra_cull_margin=.3
   add_child(node)
  source.free()
+
+## Камни с теми же CC0 UV, сгруппированные по ячейкам для отсечения.
+## Крупные группы — у стен; в проходимом русле только низкие камни.
+var bank_rocks: Array = []
+func _boulders():
+ var source=load("res://assets/gorge/moss_boulder.glb").instantiate()
+ var box=Art.aabb(source)
+ var placements: Array=[]
+ for u in range(4,188,13):
+  for side in [-1,1]:
+   var centre=_at(u,side*rng.randf_range(34,39))
+   for j in 3:
+    var p=GameData.position_at(centre.x+rng.randf_range(-3,3),centre.z+rng.randf_range(-3,3))
+    var size3=Vector3(rng.randf_range(2,4),rng.randf_range(.8,2.6),rng.randf_range(2,4))
+    placements.append([p,size3,rng.randf()*TAU])
+  var s=-20+3*sin(u*.045)
+  for side in [-1,1]:
+   var p=_at(u+rng.randf_range(-2,2),s+side*rng.randf_range(3.4,5.0))
+   var size3=Vector3(rng.randf_range(1.0,2.0),rng.randf_range(.5,1.1),rng.randf_range(1.0,2.0))
+   placements.append([p,size3,rng.randf()*TAU])
+   bank_rocks.append(Vector4(p.x,p.y,p.z,maxf(size3.x,size3.z)*.6))
+ # Плоские мшистые сканы — кочки, а не ещё один слой высокой травы.
+ for i in 70:
+  var u=rng.randf_range(-10,184); var s=rng.randf_range(-9,32)
+  if absf(s-(10-18*smoothstep(110,185,u)+3*sin(u*.04)))<4: continue
+  placements.append([_at(u,s),Vector3(rng.randf_range(.6,1.3),rng.randf_range(.12,.28),rng.randf_range(.6,1.3)),rng.randf()*TAU])
+ for part in source.find_children("*","MeshInstance3D",true,false):
+  var local=part.transform; var parent=part.get_parent()
+  while parent != source and parent is Node3D:
+   local=parent.transform*local; parent=parent.get_parent()
+  var groups: Dictionary={}
+  for p in placements:
+   var scale3: Vector3=p[1]/box.size
+   var basis=Basis(Vector3.UP,p[2]).scaled_local(scale3)
+   var offset=Vector3(-box.get_center().x,-box.position.y,-box.get_center().z)
+   var pos: Vector3=p[0]-Vector3.UP*p[1].y*.28
+   var transform=Transform3D(basis,pos+basis*offset)*local
+   var key=Vector2i(floori(pos.x/48),floori(pos.z/48))
+   if not groups.has(key): groups[key]=[]
+   groups[key].append(transform)
+  var material=boulder_material(part.mesh.surface_get_material(0))
+  for key in groups:
+   var mm=MultiMesh.new(); mm.transform_format=MultiMesh.TRANSFORM_3D; mm.mesh=part.mesh; mm.instance_count=groups[key].size()
+   var origin=Vector3(key.x*48,0,key.y*48)
+   for i in mm.instance_count:
+    var transform: Transform3D=groups[key][i]; transform.origin-=origin; mm.set_instance_transform(i,transform)
+   var node=MultiMeshInstance3D.new(); node.name="BankStoneCluster"; node.position=origin; node.multimesh=mm
+   node.material_override=material
+   node.visibility_range_end=Tuning.GORGE_STONE_RANGE
+   add_child(node)
+ source.free()
+
+static func boulder_material(original: StandardMaterial3D) -> ShaderMaterial:
+ var mat=ShaderMaterial.new(); mat.shader=preload("res://shaders/gorge_boulder.gdshader")
+ mat.set_shader_parameter("stone",original.albedo_texture)
+ mat.set_shader_parameter("stone_normal",original.normal_texture)
+ mat.set_shader_parameter("moss",load("res://assets/gorge/mossy_rock_diff.jpg"))
+ return mat
