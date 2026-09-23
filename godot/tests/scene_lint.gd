@@ -6,7 +6,9 @@ const WorldScene = preload("res://scenes/world.tscn")
 
 var errors: Array[String] = []
 var warnings: Array[String] = []
-var counts := {"meshes": 0, "lights": 0, "surfaces": 0, "vertices": 0}
+var counts := {"meshes": 0, "lights": 0, "surfaces": 0, "vertices": 0, "multimeshes": 0, "instances": 0}
+## Общий меш множества MultiMesh (деревья, трава, уровни LOD) проверяется один раз.
+var checked_meshes := {}
 var strict = false
 var world: Node3D
 
@@ -26,6 +28,8 @@ func _ready():
 
 func _walk(node: Node):
 	if node is MeshInstance3D: _check_mesh(node)
+	if node is MultiMeshInstance3D: _check_multimesh(node)
+	if node is GeometryInstance3D: _check_visibility_range(node)
 	if node is Light3D: _check_light(node)
 	if node is Node3D: _check_transform(node)
 	for child in node.get_children(): _walk(child)
@@ -66,6 +70,35 @@ func _check_mesh(instance: MeshInstance3D):
 		if instance.get_active_material(surface) == null:
 			errors.append("Поверхность %d без материала: %s" % [surface, path])
 		if mesh is ArrayMesh: _check_surface_arrays(mesh, surface, path)
+
+## Инстансинг: пустой MultiMesh, меш без поверхностей или без материала не роняют игру,
+## а просто не рисуются. Массивы общего меша проверяются теми же правилами, что у MeshInstance3D.
+func _check_multimesh(instance: MultiMeshInstance3D):
+	var path := _path(instance)
+	var mm := instance.multimesh
+	if mm == null: errors.append("MultiMeshInstance3D без MultiMesh: " + path); return
+	counts.multimeshes += 1
+	if mm.instance_count <= 0: errors.append("MultiMesh без экземпляров: " + path); return
+	counts.instances += mm.instance_count if mm.visible_instance_count < 0 else mm.visible_instance_count
+	var mesh := mm.mesh
+	if mesh == null: errors.append("MultiMesh без меша: " + path); return
+	if mesh.get_surface_count() == 0: errors.append("Меш MultiMesh без поверхностей: " + path); return
+	# AABB самого MultiMesh считает сервер отрисовки (в headless он пуст) — проверяем меш.
+	if mesh.get_aabb().size.length() <= 0.0001: errors.append("Пустой AABB у меша MultiMesh: " + path)
+	for surface in mesh.get_surface_count():
+		if instance.material_override == null and mesh.surface_get_material(surface) == null:
+			errors.append("Поверхность %d MultiMesh без материала: %s" % [surface, path])
+	var id := mesh.get_instance_id()
+	if checked_meshes.has(id): return
+	checked_meshes[id] = true
+	for surface in mesh.get_surface_count():
+		counts.surfaces += 1
+		if mesh is ArrayMesh: _check_surface_arrays(mesh, surface, path)
+
+## Уровни детализации: диапазон видимости с началом дальше конца прячет объект навсегда.
+func _check_visibility_range(instance: GeometryInstance3D):
+	if instance.visibility_range_end > 0.0 and instance.visibility_range_begin >= instance.visibility_range_end:
+		errors.append("Пустой диапазон видимости %.0f..%.0f: %s" % [instance.visibility_range_begin, instance.visibility_range_end, _path(instance)])
 
 func _check_surface_arrays(mesh: ArrayMesh, surface: int, path: String):
 	var arrays := mesh.surface_get_arrays(surface)
@@ -129,7 +162,7 @@ func _report():
 	var failures := errors.size() + (warnings.size() if strict else 0)
 	print("SCENE_LINT ", JSON.stringify({
 		"meshes": counts.meshes, "surfaces": counts.surfaces, "vertices": counts.vertices,
-		"lights": counts.lights, "warnings": warnings.size(), "errors": errors.size(), "strict": strict,
+		"lights": counts.lights, "multimeshes": counts.multimeshes, "instances": counts.instances, "warnings": warnings.size(), "errors": errors.size(), "strict": strict,
 	}))
 	if failures == 0: print("SCENE_LINT_OK failures=0")
 	else: print("SCENE_LINT_FAILED failures=", failures)
