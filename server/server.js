@@ -19,6 +19,7 @@ import { createMobs } from './sim/mobs.js';
 import { loadRates, logRates } from './rates.js';
 import * as PL from './sim/player.js';
 import { performance } from 'node:perf_hooks';
+import { createLimiter } from './guard.js';
 
 const acc = openDb(process.env.DB || path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'realms.db'));
 
@@ -31,6 +32,8 @@ const TICK = 100;  // мс — шаг симуляции
 const LAG_M = 4;
 // отладочные команды для автотестов: включаются только переменной окружения, в проде их нет
 const DEV_CMD = process.env.DEV_CMD === '1';
+// фаззинг в автотестах шлёт сотни пакетов разом: лимиты снимаются только вместе с DEV_CMD
+const NO_LIMITS = DEV_CMD && process.env.NO_LIMITS === '1';
 const CHAT = { party: { cd: 800 }, all: { cd: 3000 }, trade: { cd: 10000 }, near: { cd: 800 } };
 const wss = new WebSocketServer({ port: PORT, host: process.env.HOST, maxPayload: 8000 });
 const players = new Map();
@@ -51,7 +54,23 @@ const UNSAFE_KEYS = new Set(['toString', 'valueOf', 'toJSON', '__proto__', 'cons
 const safeKeys = (k, v) => (UNSAFE_KEYS.has(k) ? undefined : v);
 const num = (v, lim = 1e5) => (Number.isFinite(+v) ? Math.max(-lim, Math.min(lim, +v)) : 0);
 const cleanText = (s) => String(s || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 160);
-const send = (p, m) => { if (p.ws.readyState === 1) p.ws.send(typeof m === 'string' ? m : JSON.stringify(m)); };
+// Потолок исходящего буфера: клиент, который не успевает читать, отключается, а не копит память
+// сервера. Порог — несколько секунд обычного потока снапшотов.
+const OUT_MAX_BYTES = Number(process.env.OUT_MAX_BYTES) || 2_000_000;
+// Потолок событий `ev` за тик: при переполнении остаются последние (самые свежие) события.
+const OUT_EVENTS_MAX = 400;
+const send = (p, m) => {
+  const ws = p.ws;
+  if (ws.readyState !== 1) return;
+  if (ws.bufferedAmount > OUT_MAX_BYTES) {
+    if (!p.slow) { p.slow = true; console.warn(`SLOW_CLIENT player=${p.id} buffered=${ws.bufferedAmount}`); ws.terminate(); }
+    return;
+  }
+  ws.send(typeof m === 'string' ? m : JSON.stringify(m));
+};
+// Ответ-отказ (pickup_err, chatwait, pmerr, washerr, autherr): ограничен отдельно, чтобы поток
+// неверных команд не превращался в поток ответов.
+const refuse = (p, m) => { if (p.limiter.refusal()) send(p, m); };
 const d2 = (a, b) => Math.hypot(a.a.x - b.a.x, a.a.z - b.a.z);
 const actors = () => [...players.values()].filter((p) => p.key).map((p) => p.a);
 // внешний вид: сервер собирает его сам из экипировки — клиент на него не влияет
@@ -140,12 +159,22 @@ function perfReset() { Object.assign(perf, { ticks: [], handlerMs: 0, messages: 
 
 wss.on('connection', (ws, req) => {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
-  const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0 };
+  const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0, limiter: createLimiter() };
   players.set(p.id, p);
   send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, professions: 1, timedEffects: 1, eliteMobs: 1, mobPacks: 1, rates: 1 }, rates: RATES });
   ws.on('message', (raw) => {
-    let m; try { m = JSON.parse(raw, safeKeys); } catch { return; }
-    if (!m || typeof m !== 'object') return;
+    let m = null; try { m = JSON.parse(raw, safeKeys); } catch { /* нечитаемый пакет тоже считается */ }
+    const kind = m && typeof m === 'object' && typeof m.t === 'string' ? m.t : 'invalid';
+    // Лимит на вид команды и общий бюджет соединения; отладочные команды автотестов — без лимита.
+    if (!(DEV_CMD && (kind === 'dev' || NO_LIMITS)) && !p.limiter.allow(kind)) {
+      if (p.limiter.flooding() && !p.flood) {
+        p.flood = true;
+        console.warn(`FLOOD player=${p.id} dropped=${p.limiter.dropped}`);
+        ws.close(1008, 'too many commands');
+      }
+      return;
+    }
+    if (kind === 'invalid') return;
     const started = performance.now();
     guardedCommand(p, m, () => onMessage(p, m, ip));
     perf.handlerMs += performance.now() - started; perf.messages++;
@@ -207,11 +236,11 @@ function onMessage(p, m, ip) {
       case 'skill': return onSkill(p, a, String(m.id || ''), now);
       case 'pickup': {
         const result = groundLoot.claim(String(m.id || ''), a, p.key, now);
-        if (result.error) return send(p, { t: 'pickup_err', id: m.id, reason: result.error });
+        if (result.error) return refuse(p, { t: 'pickup_err', id: m.id, reason: result.error });
         const d = result.drop;
         if (!PL.creditLoot(a, [d], () => acc.store(p.key, PL.profileOf(a)))) {
           groundLoot.restore(d);
-          return send(p, { t: 'pickup_err', id: d.id, reason: 'Не удалось сохранить подбор. Добыча осталась на земле.' });
+          return refuse(p, { t: 'pickup_err', id: d.id, reason: 'Не удалось сохранить подбор. Добыча осталась на земле.' });
         }
         return;
       }
@@ -249,9 +278,9 @@ function onMessage(p, m, ip) {
 
 function onAuth(p, m, ip) {
   if (p.key) return;
-  if (m.t !== 'auth' && tooMany(ip)) return send(p, { t: 'autherr', reason: 'Слишком много попыток, подождите минуту' });
+  if (m.t !== 'auth' && tooMany(ip)) return refuse(p, { t: 'autherr', reason: 'Слишком много попыток, подождите минуту' });
   const r = m.t === 'auth' ? acc.byToken(m.token) : m.t === 'login' ? acc.login(m.name, m.pass) : acc.register(m.name, m.pass, m.cls);
-  if (r.err) return send(p, { t: 'autherr', reason: r.err, kind: m.t });
+  if (r.err) return refuse(p, { t: 'autherr', reason: r.err, kind: m.t });
   // тот же аккаунт с другого устройства — старое соединение закрываем
   for (const q of players.values()) if (q !== p && q.key === r.key) {
     // Вход прочитал БД до сохранения активной сессии. Передаем ее текущий
@@ -595,7 +624,7 @@ function onWash(p, a) {
   if (a.karma <= 0) return;
   const cost = karmaWashCost(a.karma);
   if (!world.npcs.some((n) => n.role === 'priest' && flatDist(a, n) < 8)) return PL.say(a, 'Жрец далеко', 'bad');
-  if (a.P.coins < cost) return send(p, { t: 'washerr', cost });
+  if (a.P.coins < cost) return refuse(p, { t: 'washerr', cost });
   a.P.coins -= cost; a.karma = 0; a.dirty = true;
   sendMe(a); send(p, { t: 'washok', cost });
 }
@@ -608,7 +637,7 @@ function onPm(p, m) {
   const key = String(m.to || '').trim().toLowerCase();
   let q = null;
   for (const x of players.values()) if (x.key === key) q = x;
-  if (!q) return send(p, { t: 'pmerr', to: String(m.to || '').slice(0, 16), reason: 'не в сети' });
+  if (!q) return refuse(p, { t: 'pmerr', to: String(m.to || '').slice(0, 16), reason: 'не в сети' });
   const msg = JSON.stringify({ t: 'pm', from: p.name, to: q.name, text });
   send(q, msg);
   if (q !== p) send(p, msg);
@@ -618,9 +647,9 @@ function onChat(p, m) {
   const text = cleanText(m.text);
   if (!text) return;
   const wait = (p.lastChat[ch] || 0) + CHAT[ch].cd - Date.now();
-  if (wait > 0) return send(p, { t: 'chatwait', ch, wait });
+  if (wait > 0) return refuse(p, { t: 'chatwait', ch, wait });
   p.lastChat[ch] = Date.now();
-  if (ch === 'party' && !parties.groupOf(p.id)) return send(p, { t: 'party_err', reason: 'Вы не в группе.' });
+  if (ch === 'party' && !parties.groupOf(p.id)) return refuse(p, { t: 'party_err', reason: 'Вы не в группе.' });
   const s = JSON.stringify({ t: 'chat', ch, from: p.name, id: p.id, text });
   for (const q of players.values()) {
     if (!q.key) continue;
@@ -662,6 +691,7 @@ function broadcastTo(p, list, now) {
   }
   if (fresh.length) send(p, { t: 'mobs', n: fresh });
   send(p, { t: 'snap', ts: now, o, m: mobs, g: groundLoot.snapshotFor(a, VIEW, p.key, now), me: { hp: Math.round(a.P.hp), mp: Math.round(a.P.mp), x: +a.x.toFixed(2), z: +a.z.toFixed(2), dead: a.dead, ...(a.effects.length ? { fx: snapshotEffects(a.effects, now) } : {}) } });
+  if (a.out.length > OUT_EVENTS_MAX) { perf.outTrimmed = (perf.outTrimmed || 0) + a.out.length - OUT_EVENTS_MAX; a.out = a.out.slice(-OUT_EVENTS_MAX); }
   if (a.out.length) { send(p, { t: 'ev', e: a.out }); a.out = []; }
   if (a.dirty) {
     a.dirty = false;
@@ -719,7 +749,9 @@ function tick() {
   }
   // рассылка
   for (const p of players.values()) {
-    if (!p.key || !p.a) continue;
+    // вытесненная сессия ещё закрывается: события ей больше не нужны
+    if (!p.key) { if (p.a) p.a.out.length = 0; continue; }
+    if (!p.a) continue;
     playerStep(p, 'send', () => broadcastTo(p, list, now));
   }
 }

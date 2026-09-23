@@ -871,7 +871,8 @@ test('соседи того же семейства вступаются за с
     await a.wait('authok');
     // Пауки агрессивны сами: встаём вне их радиуса агрессии (14), но в пределах огненной стрелы.
     const AWAY = 24;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    // мобы бродят случайно, а соседние тесты могли их увести: несколько попыток расстановки
+    for (let attempt = 0; attempt < 10; attempt++) {
       const ax = spawns[first].x - spawns[second].x, az = spawns[first].z - spawns[second].z;
       const len = Math.hypot(ax, az) || 1;
       a.send({ t: 'dev', hp: 99999, x: spawns[first].x + (ax / len) * AWAY, z: spawns[first].z + (az / len) * AWAY });
@@ -1102,9 +1103,11 @@ test('сбой команды и тика одного игрока не ост�
 });
 
 test('искажённые аргументы всех команд не вызывают исключений на сервере', async () => {
-  const a = client(); await a.open();
+  // отдельный сервер без лимитов команд: иначе сотни пакетов разом закрыли бы соединение как поток
+  const srv2 = await ratedServer({ NO_LIMITS: '1' });
+  const a = client(srv2.port); await a.open();
   try {
-    const before = faultCount();
+    const before = 0;
     // до входа: вход по токену и паролю с мусором вместо строк
     for (const v of [null, 0, [], {}, { toString: 1 }, 'constructor', 'x'.repeat(300)]) {
       a.send({ t: 'auth', token: v }); a.send({ t: 'login', name: v, pass: v });
@@ -1119,7 +1122,62 @@ test('искажённые аргументы всех команд не выз�
     await pause(1500);
     a.send({ t: 'ping' }); await a.wait('pong');
     assert.equal(a.ws.readyState, WebSocket.OPEN);
-    const faults = serverOutput.split('\n').filter((line) => line.includes('SERVER_FAULT')).slice(before).map((line) => line.slice(0, 240));
+    const faults = srv2.log.text.split('\n').filter((line) => line.includes('SERVER_FAULT')).slice(before).map((line) => line.slice(0, 240));
     assert.deepEqual(faults, [], 'сервер упал на искажённых аргументах');
-  } finally { a.ws.close(); await a.closed(); }
+  } finally { a.ws.close(); await a.closed(); await srv2.stop('server-fuzz.log'); }
+});
+
+test('поток команд одного клиента: второй получает снапшоты вовремя, отказы ограничены, поток отключается', async () => {
+  const a = client(), b = client(); await Promise.all([a.open(), b.open()]);
+  try {
+    a.send({ t: 'register', name: 'ПотокА', pass: 'test-secret', cls: 'warrior' });
+    b.send({ t: 'register', name: 'ПотокБ', pass: 'test-secret', cls: 'warrior' });
+    await a.wait('authok'); await b.wait('authok');
+    let refusals = 0;
+    a.ws.on('message', (raw) => { const t = JSON.parse(raw).t; if (t === 'pickup_err' || t === 'chatwait' || t === 'pmerr') refusals++; });
+    const closed = new Promise((r) => a.ws.once('close', (code) => r(code)));
+    const watch = snapRate(b, 2500);
+    // тысячи законных по форме мелких команд вперемешку с мусором
+    const kinds = [{ t: 'pickup', id: 'нет-такой' }, { t: 'chat', ch: 'all', text: 'флуд' }, { t: 'pm', to: 'никто', text: 'эй' }, { t: 'use', id: 'potion_hp' },
+      { t: 'atk', id: 1, kind: 'm', hold: true }, { t: 'skill', id: 'power_strike' }, { t: 'unequip', slot: 'legs' }, { t: 'sell', idx: 99 }, { t: 'st', x: 0, z: 0 }];
+    for (let i = 0; i < 6000 && a.ws.readyState === WebSocket.OPEN; i++) {
+      if (i % 10 === 9) a.ws.send('{не json'); else a.send(kinds[i % kinds.length]);
+      if (i % 500 === 499) await pause(20);
+    }
+    const rate = await watch;
+    assert.ok(rate.n >= 20, `второй клиент получил мало снапшотов: ${rate.n}`);
+    assert.ok(rate.gap < 400, `разрыв снапшотов у второго клиента ${rate.gap} мс`);
+    assert.equal(await closed, 1008, 'поток команд должен закрыть соединение');
+    assert.ok(refusals <= 20, `отказов слишком много: ${refusals}`);
+    assert.match(serverOutput, /FLOOD player=\d+ dropped=\d+/);
+    // второй клиент продолжает играть
+    b.send({ t: 'ping' }); await b.wait('pong');
+  } finally { a.ws.close(); b.ws.close(); await Promise.all([a.closed(), b.closed()]); }
+});
+
+test('медленный клиент, не читающий сокет, отключается по потолку буфера; остальные играют', async () => {
+  const srv2 = await ratedServer({ OUT_MAX_BYTES: '65536' });
+  const slow = client(srv2.port), fast = client(srv2.port);
+  await Promise.all([slow.open(), fast.open()]);
+  try {
+    slow.send({ t: 'register', name: 'Медленный', pass: 'test-secret', cls: 'warrior' });
+    fast.send({ t: 'register', name: 'Быстрый', pass: 'test-secret', cls: 'warrior' });
+    const id = (await slow.wait('authok')).id; await fast.wait('authok');
+    // перестаём читать сокет, но продолжаем провоцировать профиль и снапшоты
+    slow.ws._socket.pause();
+    let left = false;
+    fast.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'leave' && m.id === id) left = true; });
+    // наземная добыча рядом раздувает каждый снапшот: буфер ядра заполняется за секунды
+    for (let i = 0; i < 400 && !left; i++) {
+      for (let k = 0; k < 5; k++) slow.send({ t: 'dev', drop: 'potion_hp' });
+      slow.send({ t: 'dev', xp: 1 });
+      await pause(100);
+    }
+    assert.ok(left, 'сервер не отключил клиента, который не читает сокет');
+    assert.match(srv2.log.text, /SLOW_CLIENT player=\d+ buffered=\d+/);
+    fast.send({ t: 'ping' }); await fast.wait('pong');
+  } finally {
+    slow.ws.terminate(); fast.ws.close();
+    await srv2.stop('server-slow-client.log');
+  }
 });
