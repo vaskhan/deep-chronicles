@@ -19,3 +19,6 @@ godot/export_credentials.cfg
 
 __pycache__/
 *.py[cod]
+
+# Optional local reference assets; never included in public builds.
+godot/local_assets/

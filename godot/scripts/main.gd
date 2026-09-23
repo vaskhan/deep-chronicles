@@ -88,6 +88,7 @@ func _ready():
 		var actor = Actor.new(); actor.kind = "n"; actor.definition = n
 		add_child(actor); actor.setup("warrior" if n.role == "guard" else "npc", n.name, n)
 		actor.position = GameData.position_at(n.x, n.z)
+		actor.rotation.y = float(n.get("rotation",0))
 		actor.apply_look({"body": n.color, "w": 0xb6c5d1 if n.role == "guard" else null, "mat": "chain" if n.role == "guard" else "cloth", "robe": n.role != "guard", "gear": {}})
 		npcs.append(actor)
 	selection = _ring(Color("ff684a"), 1.2); marker = _ring(Color("c9d5ed"), 0.7)
@@ -471,11 +472,37 @@ func _move_hero(dt):
 
 func _update_camera(dt):
 	var aim = hero.position + Vector3.UP * 1.4
-	var offset = Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
+	var room: Dictionary = {}
+	for shop in GameData.world.get("townShops",[]):
+		if not shop.get("frontage",false): continue
+		var centre = Vector2(shop.x,shop.z-7*shop.scale)
+		var half = (Vector2(shop.w,shop.d)-Vector2.ONE*2.4)*shop.scale*.5
+		if absf(hero.position.x-centre.x)<half.x and absf(hero.position.z-centre.y)<half.y:
+			room={"centre":centre,"half":half};break
+	var distance = camera_distance if room.is_empty() else minf(camera_distance,Tuning.CAMERA_INDOOR_DISTANCE)
+	var pitch = camera_pitch if room.is_empty() else Tuning.CAMERA_INDOOR_PITCH
+	var offset = Vector3(sin(camera_yaw) * cos(pitch), sin(pitch), cos(camera_yaw) * cos(pitch)) * distance
 	var desired = aim + offset
 	desired.y = maxf(desired.y, GameData.height_at(desired.x, desired.z) + 1.0)
 	if hero.position.x > 2100: desired.y = minf(desired.y, 6.7)
-	camera.position = desired if initial_camera else camera.position.lerp(desired, 1 - exp(-dt * 12))
+	if not room.is_empty():
+		var extent: Vector2 = room.half-Vector2.ONE*Tuning.CAMERA_INDOOR_WALL_MARGIN
+		desired.x=clampf(desired.x,room.centre.x-extent.x,room.centre.x+extent.x)
+		desired.z=clampf(desired.z,room.centre.y-extent.y,room.centre.y+extent.y)
+		desired.y=minf(desired.y,hero.position.y+Tuning.CAMERA_INDOOR_CEILING)
+		var safe=aim
+		var steps=maxi(1,ceili(aim.distance_to(desired)/Tuning.CAMERA_INDOOR_TRACE_STEP))
+		for step in range(1,steps+1):
+			var point=aim.lerp(desired,float(step)/steps)
+			var cell=Vector2i(floori(point.x/24),floori(point.z/24))
+			var blocked=false
+			for obstacle in GameData.grid.get(cell,[]):
+				if Vector2(point.x-obstacle.x,point.z-obstacle.z).length()<float(obstacle.r)+Tuning.CAMERA_INDOOR_TRACE_RADIUS:
+					blocked=true;break
+			if blocked:break
+			safe=point
+		if safe.distance_to(aim)>.1:desired=safe
+	camera.position = desired if initial_camera or not room.is_empty() else camera.position.lerp(desired, 1 - exp(-dt * 12))
 	initial_camera = false; camera.look_at(aim)
 
 func set_target(actor):

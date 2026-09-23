@@ -1,3 +1,4 @@
+import { harborLandscapeHeight } from './harbor-landscape.js';
 import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight } from './town-layout.js';
 import { GORGE, GORGE_TIERS, GORGE_ARRIVAL, FALLS, POOL, SUMMIT_YARD, gorgeHeight, inGorge, gorgeLocal, gorgeWorld, gorgeObstacles, gorgeSpawns, halfWidth, floorAt, riverS, tierAt } from './gorge.js';
 // Ядро мира без three.js: рельеф, зоны, расстановка построек, препятствия, спавны.
@@ -73,6 +74,7 @@ export function heightAt(x, z) {
   const w = ZONES[2]; h = lerp(h, h * 0.35 + 2, smooth(w.r, w.r * 0.5, Math.hypot(x - w.x, z - w.z)));
   // Громовое ущелье: горный массив с коридором; вне своего прямоугольника высоту не трогает
   h = gorgeHeight(x, z, h);
+  h = harborLandscapeHeight(x, z, h);
   // города — ровные площадки
   for (const t of TOWNS) { const d = Math.hypot(x - t.x, z - t.z); h = lerp(4, h, smooth(t.r, t.r + 60, d)); }
   h = harborHeight((x-TOWNS[0].x)/TOWNS[0].scale,(z-TOWNS[0].z)/TOWNS[0].scale,h);
@@ -147,7 +149,7 @@ function buildTownPlan(t, B, npcs, heightAt) {
   }
   // площадь и фонтан
   B.use('cobble');
-  B.add('cyl', 0xcfc6b0, t.x, y + 0.1, t.z, 0, 40, 0.3, 40);
+  B.add('cyl', 0xcfc6b0, t.x, y + 0.1, t.z, 0, t.id==='harbor'?18:40, 0.3, t.id==='harbor'?18:40);
   B.use('stone');
   B.add('cyl', 0x8a9aa8, t.x, y + 1, t.z, 0, 8, 2, 8);
   B.add('cyl', 0xd8d0c0, t.x, y + 3, t.z, 0, 1.2, 5, 1.2);
@@ -173,7 +175,7 @@ function buildTownPlan(t, B, npcs, heightAt) {
   npcs.push({ id: t.id + ':gk', town: t.id, role: 'gatekeeper', name: 'Хранитель врат', x: t.x + 12, z: t.z + 10, color: 0x9040d0 });
   npcs.push({ id: t.id + ':shop', town: t.id, role: 'merchant', name: 'Рыночный торговец', x: t.x - 20.5, z: t.z + 7, color: 0xd09030 });
   npcs.push({ id: t.id + ':priest', town: t.id, role: 'priest', name: 'Жрец', x: tx, z: tz + 13, color: 0xf0e8d0 });
-  for (const shop of layout.shops) npcs.push({id:t.id+':'+shop.id,town:t.id,role:'merchant',shop:shop.id,name:shop.name,x:t.x+shop.x,z:t.z+shop.z+2,color:0xc4a479});
+  for (const shop of layout.shops) npcs.push({id:t.id+':'+shop.id,town:t.id,role:'merchant',shop:shop.id,name:shop.name,rotation:shop.frontage?-Math.PI/2:0,x:t.x+shop.x+(shop.frontage?3.9*shop.modelScale/.8:0),z:t.z+shop.z+(shop.frontage?-7:2),color:0xc4a479});
   // Стражи стоят у настоящих входов.
   layout.gates.forEach((g,i)=>{const c=Math.cos(g.rotation),s=Math.sin(g.rotation);
     for(const k of [-1,1])npcs.push({id:`${t.id}:guard${i}${k}`,town:t.id,role:'guard',name:'Страж',x:t.x+g.x+s*8+c*k*5,z:t.z+g.z+c*8-s*k*5,color:0x8090a0});

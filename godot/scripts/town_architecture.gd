@@ -56,6 +56,7 @@ func window(x: float, y: float, z: float, shutters: bool, color: String):
 			for dy in [-.45,.45]: b._box(Vector3(x+side*.79,y+dy,z+.14),Vector3(.42,.12,.05),"timber")
 
 func house(data: Dictionary):
+	if data.get("town", "") == "harbor" and _local_house(data): return
 	var w = float(data.w); var d = float(data.d); var h = float(data.h)
 	var variant = int(data.get("variant",abs(int(data.x*3+data.z)))) % 4
 	var plaster = ["plaster_ivory","plaster_sage","plaster_ochre","plaster_rose"][variant]
@@ -107,3 +108,43 @@ func house(data: Dictionary):
 	else:
 		b._box(Vector3(0,h+1,d/2+.04),Vector3(1.9,1.7,.15),plaster)
 		window(0,h+1,d/2+.15,false,"green")
+
+# Optional reference kit. Missing files retain the distributable procedural town.
+var _house_cache: Dictionary = {}
+func _local_house(data: Dictionary) -> bool:
+	var names = ["SI_H01", "SI_H02", "SI_H03", "SI_H04", "SI_SH01", "SI_SH02", "SI_SH03"]
+	var id: String = str(data.get("model", names[posmod(int(data.x * 3 + data.z * 7), names.size())]))
+	var path = "res://local_assets/l2-houses/%s.glb" % id
+	if not ResourceLoader.exists(path): return false
+	if not _house_cache.has(id):
+		var source = load(path).instantiate()
+		var parts: Array = []
+		for part in preload("res://scripts/lod.gd").scene_parts(source):
+			for surface in part.mesh.get_surface_count():
+				var mesh = ArrayMesh.new()
+				mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, part.mesh.surface_get_arrays(surface))
+				var material = part.mesh.surface_get_material(surface)
+				if material is BaseMaterial3D:
+					material = material.duplicate()
+					material.cull_mode = BaseMaterial3D.CULL_DISABLED
+					material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+					material.roughness = .9
+				var key = "local_house_%s_%s" % [id, parts.size()]
+				b.materials[key] = material
+				parts.append({"mesh":mesh, "transform":part.transform, "key":key})
+		_house_cache[id] = {"box":preload("res://scripts/art_assets.gd").aabb(source), "parts":parts}
+		source.free()
+	# Closed ground floor and a stone plinth; imported exterior shells have no underside.
+	b._box(Vector3(0, .12, 0), Vector3(_house_cache[id].box.size.x * float(data.get("modelScale",2.4)) / b.orientation.x.length(), .24, _house_cache[id].box.size.z * float(data.get("modelScale",2.4)) / b.orientation.z.length()), "masonry")
+	var entry = _house_cache[id]
+	var box: AABB = entry.box
+	# Preserve source proportions: one scale for all three model axes.
+	var factor = float(data.get("modelScale", 2.4))
+	# Town plan scales horizontal coordinates by .8. Cancel that for the imported model.
+	var basis = Basis.from_scale(Vector3(factor / b.orientation.x.length(), factor, factor / b.orientation.z.length()))
+	var offset = Vector3(-box.get_center().x, -box.position.y, -box.get_center().z)
+	var fit = Transform3D(basis, basis * offset)
+	for part in entry.parts:
+		var tr: Transform3D = fit * part.transform
+		b._part(part.mesh, tr.origin, part.key, part.key, tr.basis)
+	return true

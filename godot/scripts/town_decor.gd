@@ -23,6 +23,8 @@ func build():
 	_material("paving",Color("b3ad9f"),"res://assets/materials/paving_albedo.jpg")
 	_material("trim",Color("645e50"),"res://assets/materials/paving_albedo.jpg")
 	_material("lawn",Color("78805b"),"res://assets/terrain/grass.png")
+	var dirt = ShaderMaterial.new(); dirt.shader = load("res://shaders/town_dirt.gdshader")
+	dirt.set_shader_parameter("ground_texture",load("res://assets/terrain/dirt.png")); materials["dirt_road"] = dirt
 	architecture = preload("res://scripts/town_architecture.gd").new(self)
 	for town in GameData.world.towns:
 		origin = GameData.position_at(town.x,town.z); orientation = _plan_basis(town)
@@ -31,6 +33,7 @@ func build():
 			origin = Vector3(town.x,0,town.z); _harbor(); _temple_terrace()
 			origin = GameData.position_at(town.x,town.z)
 		else: _cylinder(Vector3(0,.01,0),87,.06,"paving")
+		if town.id == "harbor": continue
 		for x in [-18,18]: _box(Vector3(x,.075,34),Vector3(16,.05,7),"lawn")
 		_garland(Vector3(-32,7,-8),Vector3(-18,6.3,-8))
 		_garland(Vector3(-32,7,22),Vector3(-18,6.3,22))
@@ -239,9 +242,12 @@ func _lamp():
 	light.distance_fade_enabled = true; light.distance_fade_begin = 35; light.distance_fade_length = 15; add_child(light)
 
 func _shop(shop: Dictionary):
+	if shop.get("frontage", false):
+		_shop_frontage(shop)
+		return
 	var saved_origin = origin
 	origin += orientation*Vector3(0,0,-7)
-	architecture.house({"x":shop.x,"z":shop.z,"w":10,"d":7,"h":7.8,"roof":"blue" if shop.id == "clothes" else "red"})
+	architecture.house({"town":shop.get("town", ""),"x":shop.x,"z":shop.z,"w":10,"d":7,"h":7.8,"roof":"blue" if shop.id == "clothes" else "red"})
 	origin = saved_origin
 	# Открытый дворик перед прилавком позволяет войти и видеть продавца с игровой камеры.
 	_box(Vector3(0,.06,0),Vector3(10,.12,8),"stone")
@@ -274,6 +280,29 @@ func _shop(shop: Dictionary):
 	sign.modulate = Color("fff0cc"); sign.outline_size = 6; sign.position = origin + orientation*Vector3(0,4.85,4.4)
 	sign.visibility_range_end = 100; add_child(sign)
 	_barrel(Vector3(3.5,0,-.3))
+
+func _shop_frontage(shop: Dictionary):
+	var path="res://local_assets/l2-houses/merchant_complete.glb"
+	if not ResourceLoader.exists(path):
+		# The complete local kit is excluded from distribution; keep a usable fallback.
+		var fallback=shop.duplicate();fallback.frontage=false;_shop(fallback);return
+	var shell=Art.packed(path).instantiate()
+	var factor=float(shop.modelScale)
+	shell.scale=Vector3.ONE*factor
+	shell.position=origin+orientation*Vector3(0,0,-7)+Vector3.UP*(.08-.11175*factor)
+	add_child(shell)
+	for part in shell.find_children("*","MeshInstance3D",true,false):
+		for surface in part.mesh.get_surface_count():
+			var source=part.get_active_material(surface)
+			if source is BaseMaterial3D:
+				var material=source.duplicate();material.cull_mode=BaseMaterial3D.CULL_DISABLED
+				material.texture_filter=BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+				part.set_surface_override_material(surface,material)
+	var light=OmniLight3D.new();light.position=shell.position+Vector3(0,3.0,0)
+	light.light_color=Color("ffdcad");light.light_energy=1.3;light.omni_range=13;add_child(light)
+	var sign=Label3D.new();sign.text=shop.name;sign.font_size=44;sign.pixel_size=.011
+	sign.modulate=Color("fff0cc");sign.outline_size=6
+	sign.position=shell.position+Vector3(.65,3.25,4.5);sign.visibility_range_end=70;add_child(sign)
 
 func _ring(inner: float, outer: float, y: float, material: String):
 	var ring = TorusMesh.new(); ring.inner_radius = inner; ring.outer_radius = outer; ring.rings = 64; ring.ring_segments = 6
@@ -349,9 +378,10 @@ func _well():
 	_box(Vector3(0,2.5,0),Vector3(.035,1.9,.035),"iron")
 	_cylinder(Vector3(0,1.4,0),.28,.4,"wood")
 
-func _surface(vertices: PackedVector3Array, material: String):
+func _surface(vertices: PackedVector3Array, material: String, uv: PackedVector2Array = PackedVector2Array()):
 	var arrays = []; arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
+	if not uv.is_empty(): arrays[Mesh.ARRAY_TEX_UV] = uv
 	var normals = PackedVector3Array(); normals.resize(vertices.size()); normals.fill(Vector3.UP)
 	arrays[Mesh.ARRAY_NORMAL] = normals
 	var mesh = ArrayMesh.new(); mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -359,32 +389,35 @@ func _surface(vertices: PackedVector3Array, material: String):
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF; add_child(node)
 
 func _road(road: Dictionary):
-	var vertices = PackedVector3Array()
-	for i in range(road.points.size()-1):
-		var a = Vector2(road.points[i][0],road.points[i][1]); var b = Vector2(road.points[i+1][0],road.points[i+1][1])
-		var normal = Vector2(-(b-a).y,(b-a).x).normalized() * float(road.width)*.5
-		var steps = maxi(1,ceili(a.distance_to(b)/2))
+	# Shared centerline stays walkable; only the soft shoulders vary in width.
+	var vertices = PackedVector3Array(); var uv = PackedVector2Array()
+	var points: Array = road.points
+	var distance = 0.0
+	for i in range(points.size()-1):
+		var a = Vector2(points[i][0],points[i][1]); var b = Vector2(points[i+1][0],points[i+1][1])
+		var direction = (b-a).normalized()
+		var before = (a-Vector2(points[maxi(0,i-1)][0],points[maxi(0,i-1)][1])).normalized() if i > 0 else direction
+		var after = (Vector2(points[mini(points.size()-1,i+2)][0],points[mini(points.size()-1,i+2)][1])-b).normalized() if i+2 < points.size() else direction
+		var n0 = Vector2(-(before+direction).y,(before+direction).x).normalized()
+		var n1 = Vector2(-(after+direction).y,(after+direction).x).normalized()
+		var steps = maxi(1,ceili(a.distance_to(b)))
 		for j in steps:
-			var p = a.lerp(b,float(j)/steps); var q = a.lerp(b,float(j+1)/steps)
-			var points = [p-normal,p+normal,q-normal,q+normal]
+			var strip: Array[Vector2] = []
+			for end in 2:
+				var t = float(j+end)/steps; var center = a.lerp(b,t)
+				var along = distance+a.distance_to(b)*t
+				var width = float(road.width)*.5 + .35*sin(along*.63)+.18*sin(along*1.71)
+				var normal = n0.lerp(n1,t).normalized()*width
+				strip.append(center-normal); strip.append(center+normal)
 			for k in [0,2,1,1,2,3]:
-				var v = points[k]; vertices.append(GameData.position_at(v.x,v.y)+Vector3.UP*.09)
-	_surface(vertices,"stone")
+				var v = strip[k]; vertices.append(GameData.position_at(v.x,v.y)+Vector3.UP*.065)
+				uv.append(Vector2(k%2,0))
+		distance += a.distance_to(b)
+	_surface(vertices,"dirt_road",uv)
 
-func _district_ground(town: Dictionary):
-	var outline = PackedVector2Array()
-	for p in GameData.world.townOutlines[0].points: outline.append(Vector2(p[0],p[1]))
-	var vertices = PackedVector3Array()
-	for x in range(-145,114,4):
-		for z in range(-144,140,4):
-			var s = float(town.get("scale",1.0))
-			var a = Vector2(town.x+x*s,town.z+z*s)
-			if not Geometry2D.is_point_in_polygon(a+Vector2(2,2)*s,outline): continue
-			# Зелёные внутренние дворы у жилых домов остаются свободными от мощения.
-			if (x < -100 and z < -70) or (x > 15 and x < 55 and z > 95): continue
-			for offset in [Vector2(0,0),Vector2(4,0),Vector2(0,4),Vector2(4,0),Vector2(4,4),Vector2(0,4)]:
-				var p = a+offset*s; vertices.append(GameData.position_at(p.x,p.y)+Vector3.UP*.045)
-	_surface(vertices,"paving")
+func _district_ground(_town: Dictionary):
+	# Natural terrain remains between houses; only the fountain has a stone apron.
+	_cylinder(Vector3(0,.025,0),9,.05,"paving")
 
 func _temple_terrace():
 	for x in range(39,111,3):
@@ -402,7 +435,7 @@ func _temple_terrace():
 
 func _hall(hall: Dictionary):
 	var w = float(hall.w); var d = float(hall.d); var h = float(hall.h)
-	architecture.house({"x":hall.x,"z":hall.z,"w":w,"d":d,"h":h,"roof":"blue","variant":2 if hall.id == "guild" else 0})
+	architecture.house({"model":"SI_SH02","modelScale":1.6,"town":hall.get("town", ""),"x":hall.x,"z":hall.z,"w":w,"d":d,"h":h,"roof":"blue","variant":2 if hall.id == "guild" else 0})
 	var label = Label3D.new(); label.text = hall.name; label.font_size = 40; label.pixel_size = .018
 	label.position = origin + orientation*Vector3(0,5.3,d*.5+.3); label.modulate = Color("f6e2ac"); label.visibility_range_end = 90; add_child(label)
 	if hall.id == "forge":
