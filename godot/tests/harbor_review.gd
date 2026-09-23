@@ -14,7 +14,7 @@ func _run():
  for arg in OS.get_cmdline_user_args():
   if arg.begins_with("--output="): out=arg.trim_prefix("--output=")
  DirAccess.make_dir_recursive_absolute(out)
- for view in [["overview",Vector3(-480,105,490),Vector3(-465,5,345)],["street",Vector3(-466,7,347),Vector3(-510,7,347)],["quarter",Vector3(-535,35,393),Vector3(-485,5,342)],["shops",Vector3(-451,12,403),Vector3(-474,8,414)],["interior",Vector3(-473.2,6.5,415.3),Vector3(-473.2,5.8,407.0)],["merchant",Vector3(-472,6.1,413),Vector3(-467.76,5.4,412)],["landscape",Vector3(-390,42,260),Vector3(-435,6,135)]]:
+ for view in [["waterfront",Vector3(-304,21,478),Vector3(-363,0,438)],["pier",Vector3(-320,1,443),Vector3(-348,-1,440)],["overview",Vector3(-480,105,490),Vector3(-465,5,345)],["street",Vector3(-466,7,347),Vector3(-510,7,347)],["quarter",Vector3(-535,35,393),Vector3(-485,5,342)],["shops",Vector3(-451,12,403),Vector3(-474,8,414)],["interior",Vector3(-473.2,6.5,415.3),Vector3(-473.2,5.8,407.0)],["merchant",Vector3(-472,6.1,413),Vector3(-467.76,5.4,412)],["landscape",Vector3(-390,42,260),Vector3(-435,6,135)]]:
   camera.position=view[1];camera.look_at(view[2]);world.set_region(view[2])
   await create_timer(4).timeout
   await RenderingServer.frame_post_draw

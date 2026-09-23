@@ -81,6 +81,7 @@ TOWN_DECOR.push({kind:'cart',x:-36,z:0,r:2.8,rotation:.2});
 TOWN_DECOR.push({kind:'well',x:45,z:-12,r:2,rotation:0});
 
 // Светлая Гавань: отдельный мастер-план. Каменный Брод сохраняет прежнюю схему.
+export const HARBOR_PIERS = [25,50,75].map(z=>({x0:105,x1:155,z,halfWidth:2.9,y:-2.75}));
 const harbor = {
   temple:{x:66,z:-76},
   outline:[[-119,-75],[-62,-115],[32,-120],[102,-114],[119,-50],[110,90],[55,110],[-30,108],[-111,78],[-130,20]],
@@ -192,7 +193,7 @@ for(let z=-103;z<=96;z+=5)for(let x=-113;x<=90;x+=5){
 export function townLayout(id) {
   return id==='harbor'?harbor:{temple:{x:0,z:-26},outline:null,gates:TOWN_GATES,shops:TOWN_SHOPS,houses:TOWN_HOUSES,roads:TOWN_ROADS,decor:TOWN_DECOR,civic:[]};
 }
-export function harborHeight(x,z,base) {
+export function harborHeight(x,z,base,walkable=true) {
   const smooth=(a,b,v)=>{const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);};
   const temple=smooth(24,44,x)*smooth(-28,-52,z)*(1-smooth(115,138,x))*(1-smooth(-110,-135,z));
   let h=base+8*temple;
@@ -201,6 +202,6 @@ export function harborHeight(x,z,base) {
   const sea=smooth(113,129,x)*(1-smooth(130,190,Math.abs(z-25)))*(1-smooth(225,290,x));
   h=h*(1-sea)-13*sea;
   // Плоский настил причалов — часть общей поверхности движения.
-  if(x>=105&&x<=155&&[25,50,75].some(p=>Math.abs(z-p)<=3))h=-3;
+  if(walkable)for(const p of HARBOR_PIERS)if(x>=p.x0&&x<=p.x1&&Math.abs(z-p.z)<=p.halfWidth)h=p.y;
   return h;
 }

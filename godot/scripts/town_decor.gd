@@ -379,6 +379,7 @@ func _well():
 	_cylinder(Vector3(0,1.4,0),.28,.4,"wood")
 
 func _surface(vertices: PackedVector3Array, material: String, uv: PackedVector2Array = PackedVector2Array()):
+	if vertices.is_empty(): return
 	var arrays = []; arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	if not uv.is_empty(): arrays[Mesh.ARRAY_TEX_UV] = uv
@@ -409,6 +410,11 @@ func _road(road: Dictionary):
 				var width = float(road.width)*.5 + .35*sin(along*.63)+.18*sin(along*1.71)
 				var normal = n0.lerp(n1,t).normalized()*width
 				strip.append(center-normal); strip.append(center+normal)
+			var middle = (strip[0]+strip[1]+strip[2]+strip[3])*.25
+			var on_pier = false
+			for pier in GameData.world.get("townPiers", []):
+				if middle.x >= pier.x0 and middle.x <= pier.x1 and absf(middle.y-pier.z) <= pier.halfWidth: on_pier = true
+			if on_pier: continue
 			for k in [0,2,1,1,2,3]:
 				var v = strip[k]; vertices.append(GameData.position_at(v.x,v.y)+Vector3.UP*.065)
 				uv.append(Vector2(k%2,0))
@@ -444,10 +450,16 @@ func _hall(hall: Dictionary):
 
 func _harbor():
 	# Деревянные причалы лежат на той же отметке, что и поверхность движения.
-	for z in [25,50,75]:
-		for x in range(106,155): _box(Vector3(x,-2.87,z),Vector3(.94,.25,5.8),"wood")
-		for x in range(111,156,7):
-			for side in [-1,1]: _cylinder(Vector3(x,-6,z+side*2.8),.25,7,"wood")
+	var saved_origin = origin; var saved_orientation = orientation
+	origin = Vector3.ZERO; orientation = Basis.IDENTITY
+	for pier in GameData.world.get("townPiers", []):
+		var count = ceili((pier.x1-pier.x0)/.8)
+		var plank_width = (pier.x1-pier.x0)/count
+		for i in count:
+			_box(Vector3(pier.x0+(i+.5)*plank_width,pier.y-.125,pier.z),Vector3(plank_width+.01,.25,pier.halfWidth*2),"wood")
+		for i in range(1,count,7):
+			for side in [-1,1]: _cylinder(Vector3(pier.x0+i*plank_width,pier.y-3.3,pier.z+side*(pier.halfWidth-.2)),.2,7,"wood")
+	origin = saved_origin; orientation = saved_orientation
 	for z in range(-24,106,3):
 		if absf(z-25)<5 or absf(z-50)<5 or absf(z-75)<5: continue
 		var y = GameData.height_at(origin.x+114*orientation.x.length(),origin.z+z*orientation.z.length())

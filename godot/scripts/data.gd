@@ -24,6 +24,11 @@ func color(value) -> Color:
 	return Color.hex((int(value) << 8) | 255)
 
 func height_at(x: float, z: float) -> float:
+	for pier in world.get("townPiers", []):
+		if x >= pier.x0 and x <= pier.x1 and absf(z-pier.z) <= pier.halfWidth: return pier.y
+	return terrain_height_at(x,z)
+
+func terrain_height_at(x: float, z: float) -> float:
 	if x > 2100: return 0.0
 	var t = world.terrain
 	var fx = clampf((x - t.start) / t.step, 0, t.count - 1.001)

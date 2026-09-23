@@ -1,5 +1,5 @@
 import { harborLandscapeHeight } from './harbor-landscape.js';
-import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight } from './town-layout.js';
+import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight, HARBOR_PIERS } from './town-layout.js';
 import { GORGE, GORGE_TIERS, GORGE_ARRIVAL, FALLS, POOL, SUMMIT_YARD, gorgeHeight, inGorge, gorgeLocal, gorgeWorld, gorgeObstacles, gorgeSpawns, halfWidth, floorAt, riverS, tierAt } from './gorge.js';
 // Ядро мира без three.js: рельеф, зоны, расстановка построек, препятствия, спавны.
 // Формы передаются наружу через «эмиттер» B — клиент строит из них меши, сервер берёт пустышку.
@@ -56,7 +56,7 @@ export function zoneAt(x, z) {
   return best;
 }
 
-export function heightAt(x, z) {
+export function heightAt(x, z, walkable = true) {
   if (x > DUNGEON.x0 - 100) return 0;
   let h = fbm(x * 0.006, z * 0.006) * 34 - 12;
   h += Math.pow(fbm(x * 0.02 + 5, z * 0.02), 2) * 6;
@@ -77,7 +77,7 @@ export function heightAt(x, z) {
   h = harborLandscapeHeight(x, z, h);
   // города — ровные площадки
   for (const t of TOWNS) { const d = Math.hypot(x - t.x, z - t.z); h = lerp(4, h, smooth(t.r, t.r + 60, d)); }
-  h = harborHeight((x-TOWNS[0].x)/TOWNS[0].scale,(z-TOWNS[0].z)/TOWNS[0].scale,h);
+  h = harborHeight((x-TOWNS[0].x)/TOWNS[0].scale,(z-TOWNS[0].z)/TOWNS[0].scale,h,walkable);
   // площадка у склепа
   h = lerp(heightAtBase(CRYPT.x, CRYPT.z), h, smooth(14, 30, Math.hypot(x - CRYPT.x, z - CRYPT.z)));
   return h;
@@ -412,7 +412,9 @@ export function buildProps(B = nullEmitter) {
     }
   }
   const placed=(key)=>TOWNS.flatMap(t=>(townLayout(t.id)[key]||[]).map(v=>({...v,town:t.id,scale:t.scale,x:t.x+(v.x||0)*t.scale,z:t.z+(v.z||0)*t.scale,...(v.points?{points:v.points.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])}:{})})));
-  props = {npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
+  const harbor=TOWNS[0];
+  const townPiers=HARBOR_PIERS.map(p=>({x0:harbor.x+p.x0*harbor.scale,x1:harbor.x+p.x1*harbor.scale,z:harbor.z+p.z*harbor.scale,halfWidth:p.halfWidth*harbor.scale,y:p.y}));
+  props = {townPiers,npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
   return props;
 }
 

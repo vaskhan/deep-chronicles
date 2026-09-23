@@ -134,8 +134,18 @@ func _local_house(data: Dictionary) -> bool:
 				parts.append({"mesh":mesh, "transform":part.transform, "key":key})
 		_house_cache[id] = {"box":preload("res://scripts/art_assets.gd").aabb(source), "parts":parts}
 		source.free()
-	# Closed ground floor and a stone plinth; imported exterior shells have no underside.
-	b._box(Vector3(0, .12, 0), Vector3(_house_cache[id].box.size.x * float(data.get("modelScale",2.4)) / b.orientation.x.length(), .24, _house_cache[id].box.size.z * float(data.get("modelScale",2.4)) / b.orientation.z.length()), "masonry")
+	# A rigid, level building sits on a foundation reaching the lowest perimeter point.
+	var size: Vector3 = _house_cache[id].box.size * float(data.get("modelScale",2.4))
+	var floor_width = size.x / b.orientation.x.length()
+	var floor_depth = size.z / b.orientation.z.length()
+	var lowest = b.origin.y
+	for ix in 7:
+		for iz in 7:
+			if ix > 0 and ix < 6 and iz > 0 and iz < 6: continue
+			var point: Vector3 = b.origin+b.orientation*Vector3((float(ix)/6-.5)*floor_width,0,(float(iz)/6-.5)*floor_depth)
+			lowest = minf(lowest,GameData.terrain_height_at(point.x,point.z))
+	var depth = maxf(.24,b.origin.y-lowest+.2)
+	b._box(Vector3(0,(.24-depth)*.5,0),Vector3(floor_width,depth+.24,floor_depth),"masonry")
 	var entry = _house_cache[id]
 	var box: AABB = entry.box
 	# Preserve source proportions: one scale for all three model axes.

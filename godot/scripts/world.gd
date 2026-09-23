@@ -111,13 +111,9 @@ func _terrain():
 			for z in 26:
 				for x in 26:
 					var px = cx + x * 4.0; var pz = cz + z * 4.0
-					var ground = GameData.position_at(px, pz)
-					# Ходьба по причалам использует отметку настила; дно под ними остаётся под водой.
-					if px > -317 and px < -268:
-						for pier_z in [425,450,475]:
-							if absf(pz-pier_z)<8: ground.y = -13
+					var ground = Vector3(px,GameData.terrain_height_at(px,pz),pz)
 					vertices.append(ground)
-					normals.append(Vector3(GameData.height_at(px - 1, pz) - GameData.height_at(px + 1, pz), 2, GameData.height_at(px, pz - 1) - GameData.height_at(px, pz + 1)).normalized())
+					normals.append(Vector3(GameData.terrain_height_at(px - 1, pz) - GameData.terrain_height_at(px + 1, pz), 2, GameData.terrain_height_at(px, pz - 1) - GameData.terrain_height_at(px, pz + 1)).normalized())
 					if x < 25 and z < 25:
 						var a = z * 26 + x
 						indices.append_array(PackedInt32Array([a, a + 1, a + 26, a + 1, a + 27, a + 26]))

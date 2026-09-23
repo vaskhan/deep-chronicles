@@ -32,3 +32,14 @@ test('Complete shop doorway is walkable and the merchant stands inside behind th
   assert.equal(blockedAt(originX+2*f,originZ,.6),null,`${shop.id} interaction point`);
  }
 });
+
+test('All three pier decks have exact walkable height up to both edges, independently of seabed',async()=>{
+ const {heightAt}=await import('../src/world-core.js');
+ const {townPiers}=buildProps();
+ assert.equal(townPiers.length,3);
+ for(const p of townPiers)for(let x=p.x0;x<=p.x1;x+=.37){
+  for(const offset of [-p.halfWidth+.02,0,p.halfWidth-.02])assert.equal(heightAt(x,p.z+offset),p.y);
+  assert.equal(blockedAt(x,p.z,.6),null,'pier entrance and deck stay clear');
+ }
+ for(const p of townPiers)assert.ok(heightAt(p.x1-1,p.z,false)<p.y-5,'sea floor stays below the deck');
+});
