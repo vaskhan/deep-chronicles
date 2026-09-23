@@ -575,6 +575,7 @@ func _test_mob_telegraph():
 	# описывает удар, который игрок физически не успел увидеть. Берём следующий,
 	# у которого на экране ещё остаётся время на реакцию.
 	var announced = false
+	var fresh_warning = false
 	var mob = null
 	var windup_at = 0
 	for attempt in 3:
@@ -584,7 +585,7 @@ func _test_mob_telegraph():
 			for packet in received.slice(from_message):
 				if packet.t == "ev":
 					for event in packet.e:
-						if event.k == "mob_windup" and int(event.p) == game.own_id: warning.merge(event, true); return true
+						if event.k == "mob_windup" and int(event.p) == game.own_id and int(event.m) == orc_id: warning.merge(event, true); return true
 			return false, 10)
 		if not announced: break
 		windup_at = Time.get_ticks_msec()
@@ -593,9 +594,13 @@ func _test_mob_telegraph():
 		# Остаток сектора на экране: жизнь эффекта равна замаху плюс 0.25 с послесвечения.
 		# Пропавший сектор — тот же случай: под нагрузкой тест проснулся уже после
 		# удара, замах закончился и `mob_strike` снял телеграф. Берём следующий.
-		if telegraph != null and float(telegraph.life) - float(telegraph.age) >= float(warning.get("t", 0.0)) * 0.6: break
+		# Послесвечение НЕ является временем для уклонения: считаем от серверного t.
+		if telegraph != null and float(warning.get("t", 0.0)) - float(telegraph.age) >= float(warning.get("t", 0.0)) * 0.6:
+			fresh_warning = true; break
 		print("TELEGRAPH_SKIP stale=", snappedf(float(telegraph.age), 0.01) if telegraph else "consumed")
 	check(announced, "an aggressive server mob announces its wind-up before damage")
+	check(fresh_warning, "dodge starts inside the actual wind-up, excluding afterglow")
+	if not fresh_warning: return
 	if warning.is_empty(): return
 	game.set_target(mob)
 	check(is_instance_valid(mob) and mob.winding_up and game.combat_fx.telegraphs.has(mob.get_instance_id()), "server wind-up drives the monster pose and the matching ground sector")
