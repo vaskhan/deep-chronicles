@@ -147,3 +147,39 @@ test('storeMany пишет несколько профилей одной тра
   assert.equal(acc.load(x.key).coins, 1);
   acc.close();
 });
+
+// ===== очередь сохранений =====
+import { createSaveQueue } from '../server/save-queue.js';
+
+test('очередь сохранений: много операций — одна запись пачкой, игрок в пачке один раз', () => {
+  const calls = [];
+  const q = createSaveQueue({ write: (list) => { calls.push(list.map((p) => p.id)); return { rejected: new Set() }; } });
+  const p1 = { id: 1, key: 'a', a: { out: [] } }, p2 = { id: 2, key: 'b', a: { out: [] } };
+  for (let i = 0; i < 50; i++) q.stage(i % 2 ? p1 : p2, { undo() { throw Error('не должен вызываться'); } });
+  q.mark(p1);
+  assert.equal(q.flush(), true);
+  assert.deepEqual(calls, [[2, 1]]);
+  assert.equal(q.pending(), 0);
+  assert.equal(q.flush(), true); assert.equal(calls.length, 1, 'пустая очередь не пишет');
+});
+
+test('очередь сохранений: сбой пачки откатывает операции в обратном порядке и убирает их события', () => {
+  const order = [], p = { id: 1, key: 'a', a: { out: [] } };
+  const q = createSaveQueue({ write: () => { throw Error('SQLITE_IOERR'); } });
+  for (const n of [1, 2, 3]) { const e = { k: 'pickup', n }; p.a.out.push(e); q.stage(p, { events: [e], undo: () => order.push(n) }); }
+  p.a.out.push({ k: 'msg', text: 'чужое событие' });
+  assert.equal(q.flush(), false);
+  assert.deepEqual(order, [3, 2, 1]);
+  assert.deepEqual(p.a.out, [{ k: 'msg', text: 'чужое событие' }]);
+  // отвергнутый игрок откатывается один, остальные записаны
+  const good = { id: 2, key: 'g', a: { out: [] } }, bad = { id: 3, key: 'x', a: { out: [] } };
+  let undone = 0;
+  const q2 = createSaveQueue({ write: () => ({ rejected: new Set([bad]) }), onRejected: () => {} });
+  q2.stage(good, { undo: () => undone++ }); q2.stage(bad, { undo: () => undone += 10 });
+  assert.equal(q2.flush(), false);
+  assert.equal(undone, 10);
+  // критичная запись игрока закрывает его очередь
+  const q3 = createSaveQueue({ write: () => { throw Error('не должен писать'); } });
+  q3.stage(good, {}); q3.settle(good);
+  assert.equal(q3.flush(), true);
+});

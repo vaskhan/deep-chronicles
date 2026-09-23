@@ -871,6 +871,7 @@ test('соседи того же семейства вступаются за с
     await a.wait('authok');
     // Пауки агрессивны сами: встаём вне их радиуса агрессии (14), но в пределах огненной стрелы.
     const AWAY = 24;
+    let lastMiss = null;
     // мобы бродят случайно, а соседние тесты могли их увести: несколько попыток расстановки
     for (let attempt = 0; attempt < 10; attempt++) {
       const ax = spawns[first].x - spawns[second].x, az = spawns[first].z - spawns[second].z;
@@ -906,10 +907,12 @@ test('соседи того же семейства вступаются за с
       }
       a.ws.off('message', listener);
       if (!hits.length) continue; // выстрел не дошёл — пробуем снова из новой расстановки
-      assert.ok(closed, `сородич не пошёл на помощь: было ${startDistance.toFixed(1)}`);
+      // Сородич, уже занятый погоней или возвратом домой (src/pack.js), на крик не отвечает:
+      // в полном наборе его мог увести соседний тест. Такая попытка не считается.
+      if (!closed) { lastMiss = startDistance; continue; }
       return;
     }
-    throw new Error('не удалось поймать пару сородичей в нужной расстановке');
+    throw new Error(lastMiss != null ? `сородич не пошёл на помощь ни в одной попытке: было ${lastMiss.toFixed(1)}` : 'не удалось поймать пару сородичей в нужной расстановке');
   } finally { a.ws.close(); await a.closed(); }
 });
 
@@ -1263,4 +1266,38 @@ test('полная сумка и сбой записи: подбор и поку
     a.send({ t: 'pickup', id: pelt.id });
     await untilP(a, (p) => p.inv.some((e) => e.id === 'pelt'), 'подбор после освобождения места');
   } finally { a.ws.close(); await a.closed(); }
+});
+
+test('SIGTERM записывает несохранённый прогресс перед выходом', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realms-term-')), db = path.join(dir, 'term.db');
+  const boot = async () => {
+    const probe = net.createServer(); await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+    const port = probe.address().port; await new Promise((r) => probe.close(r));
+    const proc = spawn('node', ['--no-warnings', 'server/server.js'], { env: { ...process.env, PORT: String(port), DB: db, DEV_CMD: '1', AUTH_TRIES: '1000', SAVE_EVERY_MS: '600000' }, stdio: 'pipe' });
+    let text = ''; for (const s of [proc.stdout, proc.stderr]) s.on('data', (c) => { text += c; });
+    await new Promise((r) => proc.stdout.once('data', r));
+    return { port, proc, log: () => text };
+  };
+  let s1 = await boot(), s2 = null;
+  try {
+    const a = client(s1.port); await a.open();
+    a.send({ t: 'register', name: 'Терминатор', pass: 'test-secret', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    // опыт и монеты меняются только в памяти: периодическая запись отложена на 10 минут
+    a.send({ t: 'dev', xp: 50, coins: 4321 });
+    await untilP(a, (p) => p.coins === 4321 && p.xp >= 50);
+    s1.proc.kill('SIGTERM');
+    const code = await new Promise((r) => (s1.proc.exitCode !== null ? r(s1.proc.exitCode) : s1.proc.once('exit', r)));
+    assert.equal(code, 0);
+    s2 = await boot();
+    const b = client(s2.port); await b.open();
+    b.send({ t: 'auth', token: auth.token });
+    const ok = await b.wait('authok');
+    assert.equal(ok.p.coins, 4321); assert.ok(ok.p.xp >= 50);
+    b.ws.close(); await b.closed();
+    assert.doesNotMatch(s1.log() + s2.log(), /SERVER_FAULT|SAVE_FAIL/);
+  } finally {
+    for (const s of [s1, s2]) if (s && s.proc.exitCode === null) { s.proc.kill(); await new Promise((r) => s.proc.once('exit', r)); }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

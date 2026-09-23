@@ -10,6 +10,9 @@ const SAVE_MAX = 64_000;
 export function openDb(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
+  // На macOS обычный fsync не сбрасывает данные на носитель; DB_FULLFSYNC=1 включает F_FULLFSYNC,
+  // чтобы замеры записи на Mac были честными, как fsync на Linux. На других системах не действует.
+  if (process.env.DB_FULLFSYNC === '1') db.exec('PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;');
   db.exec(`PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS accounts (key TEXT PRIMARY KEY, name TEXT NOT NULL, salt BLOB NOT NULL, hash BLOB NOT NULL, created INTEGER NOT NULL, save TEXT, saved INTEGER);
     CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, key TEXT NOT NULL, created INTEGER NOT NULL);`);
@@ -81,6 +84,23 @@ export function openDb(file) {
       try { for (const [key, json] of rows) q.save.run(json, now, key); db.exec('COMMIT'); }
       catch (error) { db.exec('ROLLBACK'); throw error; }
       return true;
+    },
+    // Пачка профилей одной транзакцией (очередь сохранений): негодный профиль (нет аккаунта,
+    // превышен SAVE_MAX) не валит остальных — его ключ возвращается в rejected.
+    // Ошибка SQLite откатывает всю пачку и пробрасывается вызывающему.
+    storeBatch(list) {
+      const rows = [], rejected = new Set();
+      for (const [key, save] of list) {
+        const row = q.get.get(key), json = row && cleanSave(row, save);
+        if (json) rows.push([key, json]); else rejected.add(key);
+      }
+      if (rows.length) {
+        const now = Date.now();
+        db.exec('BEGIN IMMEDIATE');
+        try { for (const [key, json] of rows) q.save.run(json, now, key); db.exec('COMMIT'); }
+        catch (error) { db.exec('ROLLBACK'); throw error; }
+      }
+      return { rejected };
     },
     load(key) { const row = q.get.get(key); return row ? parse(row) : null; },
     count: () => q.count.get().n,

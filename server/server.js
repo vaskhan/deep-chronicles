@@ -18,8 +18,9 @@ import { createMovement } from './sim/movement.js';
 import { createMobs } from './sim/mobs.js';
 import { loadRates, logRates } from './rates.js';
 import * as PL from './sim/player.js';
-import { performance } from 'node:perf_hooks';
+import { performance, monitorEventLoopDelay } from 'node:perf_hooks';
 import { createLimiter } from './guard.js';
+import { createSaveQueue } from './save-queue.js';
 
 const acc = openDb(process.env.DB || path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'realms.db'));
 
@@ -129,8 +130,51 @@ function storeNow(p) {
     return ok;
   } finally { perf.stores++; perf.storeMs += performance.now() - started; }
 }
-const saver = (p) => () => storeNow(p);
-const store = (p) => { if (p.key && p.a) storeNow(p); };
+// Критичная запись (торговля, заточка, изготовление, обучение): сразу, своей транзакцией.
+// После неё очередь игрока уже в базе.
+const saver = (p) => () => { const ok = storeNow(p); if (ok) saves.settle(p); return ok; };
+const store = (p) => { if (p.key && p.a && storeNow(p)) saves.settle(p); };
+
+// Очередь сохранений (server/save-queue.js): подбор, автолут и периодическое сохранение пишутся
+// одной транзакцией в тике перед рассылкой — клиент видит результат только после фиксации.
+// Раз в SAVE_EVERY_MS в очередь попадают все игроки; неизменившийся профиль не переписывается.
+const SAVE_EVERY_MS = Number(process.env.SAVE_EVERY_MS) || 10_000;
+const saves = createSaveQueue({
+  write(list) {
+    const started = performance.now(), rejected = new Set(), rows = [], byKey = new Map();
+    for (const p of list) {
+      if (DEV_CMD && p.a.devFailStore) { rejected.add(p); continue; }
+      const profile = PL.profileOf(p.a), json = JSON.stringify(profile);
+      if (json === p.savedJson && !p.stagedSince) continue;
+      rows.push([p.key, profile]); byKey.set(p.key, [p, json]);
+    }
+    try {
+      const res = acc.storeBatch(rows);
+      for (const [key, [p, json]] of byKey) { if (res.rejected.has(key)) rejected.add(p); else p.savedJson = json; p.stagedSince = 0; }
+      return { rejected };
+    } finally { perf.stores += rows.length; perf.storeMs += performance.now() - started; perf.batches = (perf.batches || 0) + 1; }
+  },
+  onRejected(p, error) {
+    console.warn(`SAVE_FAIL batch player=${p.id}${error ? ` ${oneLine(error).slice(0, 200)}` : ''}`);
+  },
+});
+// Выдача добычи через очередь: применяется сразу, пишется пачкой перед рассылкой тика.
+// При сбое записи выдача отменяется обратным действием, её события не уходят клиенту.
+function creditQueued(p, drops, onUndo) {
+  const a = p.a, mark = a.out.length;
+  if (!PL.creditLoot(a, drops, () => true)) return false;
+  const events = a.out.slice(mark);
+  p.stagedSince ||= Date.now();
+  saves.stage(p, { events, undo() {
+    for (const d of drops) {
+      if (d.item === 'coins') a.P.coins = Math.max(0, a.P.coins - d.n);
+      else PL.takeItem(a.P, d.item, d.n);
+    }
+    a.dirty = true;
+    onUndo();
+  } });
+  return true;
+}
 
 // ===== надёжность: границы операций, журнал сбоев, учёт времени =====
 // Исключение в одной команде или у одного игрока не должно останавливать мир для остальных.
@@ -140,6 +184,8 @@ const store = (p) => { if (p.key && p.a) storeNow(p); };
 // исключение процесса — контролируемый перезапуск: профили сохраняются, процесс выходит с кодом 1,
 // Docker/systemd поднимает его заново (restart: unless-stopped).
 const perf = { ticks: [], handlerMs: 0, messages: 0, faults: 0, storeMs: 0, stores: 0, since: Date.now() };
+// задержка цикла событий: синхронная запись в SQLite или долгий обработчик видны здесь, даже вне тика
+const loopDelay = monitorEventLoopDelay({ resolution: 5 }); loopDelay.enable();
 const MUTATING = new Set(['autoloot', 'learn', 'prof', 'skill', 'pickup', 'use', 'equip', 'unequip', 'craft', 'buy', 'sell', 'ench', 'tp', 'respawn', 'dev', 'wash', 'party']);
 const FAULT_KICK = 5, FAULT_WINDOW = 60_000, WORLD_FAULT_LIMIT = 50;
 const oneLine = (error) => String(error?.stack || error).replace(/\s*\n\s*/g, ' | ').slice(0, 2000);
@@ -184,9 +230,10 @@ function perfReport() {
   const t = [...perf.ticks].sort((x, y) => x - y), secs = Math.max(0.001, (Date.now() - perf.since) / 1000);
   const r = (v) => Math.round(v * 1000) / 1000;
   return { ticks: t.length, p50: r(percentile(t, 0.5)), p95: r(percentile(t, 0.95)), p99: r(percentile(t, 0.99)), max: r(t.at(-1) || 0),
-    handlerMsPerSec: r(perf.handlerMs / secs), messages: perf.messages, stores: perf.stores, storeMs: r(perf.storeMs), faults: perf.faults, seconds: r(secs) };
+    handlerMsPerSec: r(perf.handlerMs / secs), messages: perf.messages, stores: perf.stores, storeMs: r(perf.storeMs), batches: perf.batches || 0, faults: perf.faults, seconds: r(secs),
+    loopDelayMs: { p50: r(loopDelay.percentile(50) / 1e6), p99: r(loopDelay.percentile(99) / 1e6), max: r(loopDelay.max / 1e6) } };
 }
-function perfReset() { Object.assign(perf, { ticks: [], handlerMs: 0, messages: 0, storeMs: 0, stores: 0, since: Date.now() }); }
+function perfReset() { loopDelay.reset(); Object.assign(perf, { ticks: [], handlerMs: 0, messages: 0, storeMs: 0, stores: 0, batches: 0, since: Date.now() }); }
 
 wss.on('connection', (ws, req) => {
   const ip = clientIp(req);
@@ -275,10 +322,8 @@ function onMessage(p, m, ip) {
         const d = result.drop;
         const full = PL.bagError(a.P, [d]);
         if (full) { groundLoot.restore(d); return refuse(p, { t: 'pickup_err', id: d.id, reason: `${full}. Добыча осталась на земле.` }); }
-        if (!PL.creditLoot(a, [d], saver(p))) {
-          groundLoot.restore(d);
-          return refuse(p, { t: 'pickup_err', id: d.id, reason: 'Не удалось сохранить подбор. Добыча осталась на земле.' });
-        }
+        const failed = () => { groundLoot.restore(d); refuse(p, { t: 'pickup_err', id: d.id, reason: 'Не удалось сохранить подбор. Добыча осталась на земле.' }); };
+        if (!creditQueued(p, [d], failed)) failed();
         return;
       }
       case 'use': return PL.cmdUse(a, String(m.id || ''));
@@ -424,7 +469,10 @@ function damageMob(a, mb, dmg, crit, now, dot = false) {
   const recipient = plan.recipient;
   const drops = [{ item: 'coins', n: rw.coins }, ...rw.drops.map(item => ({ item, n: 1 }))];
   // Pickup mode deliberately leaves the reward on the ground; autoloot cannot win the race.
-  const auto = plan.mode !== 'pickup' && recipient.a.P.autoloot && PL.creditLoot(recipient.a, drops, saver(recipient));
+  const auto = plan.mode !== 'pickup' && recipient.a.P.autoloot && creditQueued(recipient, drops, () => {
+    groundLoot.spawn(mb, rw, recipient.key, recipient.name, Date.now(), plan.allowed);
+    PL.say(recipient.a, 'Не удалось сохранить автолут — добыча осталась на земле', 'bad');
+  });
   if (!auto) groundLoot.spawn(mb, rw, recipient.key, plan.mode === 'pickup' ? 'участникам группы' : recipient.name, now, plan.allowed);
   for (const share of plan.shares) share.player.a.out.push({ k: 'kill', mob: mb.kind, name: mb.def.name, xp: share.xp, coins: share.player === recipient ? rw.coins : 0, sp: share.sp, ground: share.player === recipient && !auto, boss: !!mb.def.boss });
   if (plan.shares.length > 1) for (const share of plan.shares) PL.say(share.player.a, plan.mode === 'pickup' ? 'Добыча на земле: подбирает первый участник группы.' : `Добыча: ${recipient.name}${auto ? ' (автолут)' : ' — на земле'}.`);
@@ -803,6 +851,8 @@ function tick() {
       autoAttack(a, dt, now);
     });
   }
+  // Очередь сохранений — одной транзакцией до рассылки: клиент не увидит незаписанную выдачу.
+  worldStep('save', () => saves.flush());
   // рассылка
   for (const p of players.values()) {
     // вытесненная сессия ещё закрывается: события ей больше не нужны
@@ -823,7 +873,7 @@ setInterval(() => worldStep('announce', () => {
   for (const a of actors()) if (a.karma > 0) broadcast({ t: 'announce', text: `PK ${a.name} (карма ${a.karma}) замечен: ${zoneAt(a.x, a.z).name}`, pk: a.id });
 }), PVP.announceMs);
 // периодическое сохранение
-setInterval(() => { for (const p of players.values()) playerStep(p, 'save', () => store(p)); }, 30_000);
+setInterval(() => { for (const p of players.values()) if (p.key && p.a) saves.mark(p); }, SAVE_EVERY_MS);
 // пинг, чтобы nginx не рвал простаивающие соединения
 setInterval(() => {
   for (const p of players.values()) {
@@ -845,6 +895,7 @@ function shutdown(code = 0, reason = '') {
   if (stopping) return;
   stopping = true;
   if (reason) console.error(`SERVER_RESTART ${reason}`);
+  try { saves.flush(); } catch (error) { logFault('shutdown-flush', null, error); }
   for (const p of players.values()) { try { store(p); } catch (error) { logFault('shutdown-store', p, error); } }
   try { acc.close(); } catch { /* база уже закрыта */ }
   process.exit(code);
