@@ -65,6 +65,7 @@ var rank = ""
 var rank_aura: MeshInstance3D
 ## Активные эффекты цели из снапшота: [[id, вид, осталось мс], …]. Считает их сервер.
 var effects: Array = []
+var stone_ward: MeshInstance3D
 
 func setup(model_id: String, title: String, def: Dictionary = {}):
 	definition = def; display_name = title; base_model = model_id
@@ -95,6 +96,9 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	if shield_node: shield_node.visible = false
 	if helm_node: helm_node.visible = false
 	if kind == "n" and weapon_node: weapon_node.visible = false
+	if art_id == "stone_guard":
+		stone_ward = model.find_child("StoneWard", true, false)
+		if stone_ward: stone_ward.visible = false
 	label = Label3D.new(); label.text = title
 	visual_height = float(Art.manifest().actors.get(art_id, {}).get("height", 2.5))
 	label.position.y = visual_height + 0.45
@@ -206,11 +210,14 @@ func snapshot(row: Array, timestamp: float):
 	if snapshots.size() > 30: snapshots.pop_front()
 	# Девятый столбец снапшота — активные эффекты; сервер шлёт его только когда они есть.
 	effects = row[8] if row.size() > 8 else []
+	if is_instance_valid(stone_ward):
+		stone_ward.visible = effects.any(func(effect): return effect.size() >= 3 and effect[0] == "stone_guard:guard" and float(effect[2]) > 0)
 	var flags = int(row[5]); moving = (flags & 1) != 0; casting = (flags & 4) != 0
 	var attack_flag = (flags & 2) != 0
 	if attack_flag and not previous_attack_flag and action_until <= 0 and windup_remaining <= 0: play_action("attack")
 	previous_attack_flag = attack_flag
 	dead = (flags & 8) != 0; hp = row[6]
+	if dead and is_instance_valid(stone_ward): stone_ward.visible = false
 	# Восьмой столбец у мобов — возраст смерти, у игроков — PvP-статус.
 	if kind == "m" and dead and row.size() > 7: death_elapsed = maxf(death_elapsed,float(row[7])/1000.0)
 	status = int(row[7]) if kind != "m" and row.size() > 7 else 0

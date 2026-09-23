@@ -65,6 +65,10 @@ static func actor(id: String) -> Node3D:
 		if anim_id in ["goblin", "orc", "ghoul", "treant", "golem"]:
 			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"; clips.idle = "Idle"
 		if anim_id in ["wraith", "lich"]: clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id == "fang_shaman":
+			clips.idle = "Spell_Simple_Idle"; clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id == "stone_guard":
+			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"
 		for key in clips:
 			var clip = canonical_clips[clips[key]].duplicate()
 			clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "walk", "run", "cast"] else Animation.LOOP_NONE

@@ -1063,7 +1063,8 @@ func _test_gorge():
 	check(await wait_for(func(): return _gorge_elite() != null, 14), "server sends a ranked gorge mob with its aura")
 	var elite = _gorge_elite()
 	if elite:
-		check(str(data.catalog.MOBS[elite.base_model].get("model", "")) != "" and elite.art_model and elite.art_base == str(data.catalog.MOBS[elite.base_model].model), "gorge mob reuses its manifest base model")
+		var art = load("res://scripts/art_assets.gd")
+		check(elite.art_model and elite.active_art == elite.base_model and elite.model.scene_file_path == str(art.entry_of(elite.base_model).path), "gorge mob uses its own manifest model or explicit alias")
 		# Герой ниже по оси ущелья, камера за ним смотрит вверх по оси — элита в кадре перед героем.
 		var up = Vector2(float(data.world.gorge.axis.x), float(data.world.gorge.axis.z))
 		await _dev({"x": elite.position.x - up.x * 10, "z": elite.position.z - up.y * 10, "hp": 99999})
@@ -1176,4 +1177,17 @@ func _gorge_benchmark_route():
 	game.camera_distance=34; game.camera_pitch=.28
 	await _gorge_benchmark("waterfall")
 	await _screenshot("gorge-game-waterfall.png")
+	# Фаза 2: настоящие смешанная стая Клыка и группа каменных стражей.
+	for pair in [["gorge4", "fang_shaman", "fang-pack"], ["gorge10", "stone_guard", "stone-pack"]]:
+		for i in spawns.size():
+			if spawns[i].get("pack", "") != pair[0]: continue
+			game._cancel_attack(); game.set_target(null)
+			await _dev({"x":spawns[i].x-axis.x*9,"z":spawns[i].z-axis.y*9,"hp":99999})
+			check(await wait_for(func(): return game.mobs.values().any(func(m): return m.base_model == pair[1] and m.visible and not m.dead), 5), "model benchmark receives " + pair[1])
+			game.camera_distance=16; game.camera_pitch=.50
+			if game.mobs.has(i+1) and not game.mobs[i+1].dead:
+				game.set_target(game.mobs[i+1]); game.attack()
+			await _gorge_benchmark(pair[2])
+			await _screenshot("gorge-game-"+pair[2]+".png")
+			break
 	refill.queue_free()

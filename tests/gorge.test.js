@@ -151,13 +151,20 @@ test('уступ водопада непроходим у реки: подъём
   assert.ok(free, 'пандус у правой стены перекрыт');
 });
 
-test('мобы ущелья: модель-основа из манифеста, семейство, добыча из каталога, кривая наград растёт', () => {
+test('мобы ущелья: отдельная модель или явный псевдоним, семейство, добыча из каталога, кривая наград растёт', () => {
   const manifest = JSON.parse(fs.readFileSync('godot/assets/manifest.json', 'utf8'));
   assert.ok(GORGE_KINDS.length >= 10);
   for (const kind of GORGE_KINDS) {
     const def = MOBS[kind], entry = manifest.actors[kind];
-    assert.ok(entry && entry.base === def.model && manifest.actors[entry.base]?.path, `${kind}: запись-псевдоним на готовую модель`);
-    assert.match(entry.tint, /^[0-9a-f]{6}$/);
+    if (['fang_warrior', 'fang_shaman', 'stone_guard'].includes(kind)) {
+      assert.equal(entry.path, `res://assets/gorge-mobs/${kind}.glb`);
+      assert.equal(entry.rig, 'canonical');
+      assert.equal(entry.base, undefined, `${kind}: отдельная модель, не перекрашенная основа`);
+      assert.ok(fs.existsSync(entry.path.replace('res://', 'godot/')));
+    } else {
+      assert.ok(entry && entry.base === def.model && manifest.actors[entry.base]?.path, `${kind}: явный псевдоним на готовую модель`);
+      assert.match(entry.tint, /^[0-9a-f]{6}$/);
+    }
     assert.ok(def.fam && def.social && def.aggro, `${kind}: стайный агрессивный`);
     for (const id of Object.keys(def.drops)) assert.ok(ITEMS[id], `${kind}: нет предмета ${id}`);
     assert.ok(def.lvl < MAX_LEVEL);

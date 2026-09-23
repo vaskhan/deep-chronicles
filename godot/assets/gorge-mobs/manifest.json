@@ -1,0 +1,34 @@
+{
+  "sources": "art/sources/gorge-mobs/sources.json",
+  "models": {
+    "fang_warrior": {
+      "triangles": 7472,
+      "bytes": 372020,
+      "rig": "canonical",
+      "textureMax": 1024
+    },
+    "fang_shaman": {
+      "triangles": 6748,
+      "bytes": 335920,
+      "rig": "canonical",
+      "textureMax": 1024
+    },
+    "stone_guard": {
+      "triangles": 10565,
+      "bytes": 1098096,
+      "rig": "canonical",
+      "textureMax": 1024
+    }
+  },
+  "files": {
+    "fang_shaman.glb": "1f424e132f305f5d44970a45ed1b49429f9843b1a4caae63139c9bb41515ecc6",
+    "fang_shaman_Atlas_Monsters.png": "902017c1a20c44f416fd11b7db53a133a17f5f4f63544b2e6166fba25c803931",
+    "fang_warrior.glb": "e6d36bd21545a92e4a51436c5397a698e7fbe1469a84d5fe86e1624bfac96e75",
+    "fang_warrior_Atlas_Monsters.png": "902017c1a20c44f416fd11b7db53a133a17f5f4f63544b2e6166fba25c803931",
+    "fang_warrior_Fang hide.png": "cbe33031bb5e48f38f7c4e9e1c6d6bc7b2909d933f5779607398e64329b8102e",
+    "stone_guard.glb": "f879774f1aa792cda007ef35ba8b0d7df5e8351e3e80698714fc71ec0d15f33a",
+    "stone_guard_rock_moss_set_01_diff_1k.jpg": "b1fa645fccc8b59458cf680cab4c1ba41d66d7c2d68c83f3b56a5227d7461856",
+    "stone_guard_rock_moss_set_01_nor_gl_1k.jpg": "9a078330334c2510f7084588d03bc23a7f6222272a7350bc377e5de115351edc",
+    "stone_guard_rock_moss_set_01_rough_1k.jpg": "696634b206b854cb54bc537dd9c2a41e6cf25ee78416c63c66efb37f88bc0ebb"
+  }
+}

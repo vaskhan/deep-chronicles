@@ -12,7 +12,7 @@
     "dev": "node tools/godot/run.mjs",
     "build": "node tools/godot/build.mjs",
     "test:unit": "node --test tests/unit.test.js tests/progression.test.js tests/movement.test.js tests/party.test.js tests/tuning.test.js tests/effects.test.js tests/rates.test.js tests/gorge.test.js tests/reliability.test.js",
-    "test": "npm run test:pipeline && npm run test:unit && npm run test:server && npm run native:lint && npm run test:native",
+    "test": "npm run test:pipeline && npm run test:unit && npm run test:server && npm run native:lint && npm run native:mob-models -- --headless && npm run test:native",
     "server": "node --no-warnings server/server.js",
     "test:server": "node --no-warnings --test tests/server.test.js",
     "deploy": "bash deploy/deploy.sh",
@@ -33,7 +33,8 @@
     "native:scales": "node tools/godot/scales.mjs",
     "native:lint": "node tools/godot/lint.mjs",
     "native:perf": "node tools/godot/perf.mjs",
-    "native:gorge-assets": "node tools/godot/gorge-assets.mjs"
+    "native:gorge-assets": "node tools/godot/gorge-assets.mjs",
+    "native:mob-models": "node tools/godot/gorge-mobs.mjs"
   },
   "dependencies": {
     "three": "^0.170.0",
