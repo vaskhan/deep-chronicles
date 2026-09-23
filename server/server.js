@@ -35,7 +35,26 @@ const DEV_CMD = process.env.DEV_CMD === '1';
 // фаззинг в автотестах шлёт сотни пакетов разом: лимиты снимаются только вместе с DEV_CMD
 const NO_LIMITS = DEV_CMD && process.env.NO_LIMITS === '1';
 const CHAT = { party: { cd: 800 }, all: { cd: 3000 }, trade: { cd: 10000 }, near: { cd: 800 } };
-const wss = new WebSocketServer({ port: PORT, host: process.env.HOST, maxPayload: 8000 });
+// По умолчанию только локальный интерфейс: снаружи мир доступен через nginx. В контейнере HOST=0.0.0.0
+// задан явно (Dockerfile/docker-compose), а наружу порт публикуется только на 127.0.0.1 хоста.
+const HOST = process.env.HOST || '127.0.0.1';
+const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 8000 });
+// Heartbeat: ping раз в HEARTBEAT_MS; кто не ответил pong (и не прислал ни одного пакета) до
+// следующего цикла — terminate. Соединение без входа закрывается после ANON_IDLE_MS тишины
+// (сайт и экран входа шлют JSON ping раз в 10 с), и их не больше ANON_PER_IP с одного адреса.
+const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS) || 25_000;
+const ANON_IDLE_MS = Number(process.env.ANON_IDLE_MS) || 60_000;
+const ANON_PER_IP = Number(process.env.ANON_PER_IP) || 32;
+// X-Forwarded-For принимается только от доверенного прокси: TRUST_PROXY=1 — всегда (контейнер за
+// nginx), 0 — никогда, по умолчанию — только с loopback (nginx на том же хосте).
+const TRUST_PROXY = process.env.TRUST_PROXY;
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function clientIp(req) {
+  const remote = String(req.socket.remoteAddress || '');
+  const trusted = TRUST_PROXY === '1' || (TRUST_PROXY !== '0' && LOOPBACK.has(remote));
+  const forwarded = trusted ? String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean).at(-1) : '';
+  return forwarded || remote;
+}
 const players = new Map();
 let seq = 0;
 
@@ -158,11 +177,15 @@ function perfReport() {
 function perfReset() { Object.assign(perf, { ticks: [], handlerMs: 0, messages: 0, storeMs: 0, stores: 0, since: Date.now() }); }
 
 wss.on('connection', (ws, req) => {
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
-  const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0, limiter: createLimiter() };
+  const ip = clientIp(req);
+  let anon = 0; for (const q of players.values()) if (!q.key && q.ip === ip) anon++;
+  if (anon >= ANON_PER_IP) { console.warn(`ANON_LIMIT ip=${ip}`); ws.on('error', () => {}); ws.close(1013, 'too many connections'); return; }
+  const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0, limiter: createLimiter(), ip, alive: true, lastIn: Date.now() };
   players.set(p.id, p);
   send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, professions: 1, timedEffects: 1, eliteMobs: 1, mobPacks: 1, rates: 1 }, rates: RATES });
+  ws.on('pong', () => { p.alive = true; });
   ws.on('message', (raw) => {
+    p.alive = true; p.lastIn = Date.now();
     let m = null; try { m = JSON.parse(raw, safeKeys); } catch { /* нечитаемый пакет тоже считается */ }
     const kind = m && typeof m === 'object' && typeof m.t === 'string' ? m.t : 'invalid';
     // Лимит на вид команды и общий бюджет соединения; отладочные команды автотестов — без лимита.
@@ -769,8 +792,19 @@ setInterval(() => worldStep('announce', () => {
 // периодическое сохранение
 setInterval(() => { for (const p of players.values()) playerStep(p, 'save', () => store(p)); }, 30_000);
 // пинг, чтобы nginx не рвал простаивающие соединения
-setInterval(() => { for (const p of players.values()) if (p.ws.readyState === 1) p.ws.ping(); }, 25000);
-wss.on('listening', () => { console.log(`realms-ws :${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`); logRates(RATES_INFO); });
+setInterval(() => {
+  for (const p of players.values()) {
+    if (p.ws.readyState !== 1) continue;
+    if (!p.alive) { console.warn(`DEAD_CLIENT player=${p.id}`); p.ws.terminate(); continue; }
+    p.alive = false;
+    try { p.ws.ping(); } catch { p.ws.terminate(); }
+  }
+}, HEARTBEAT_MS);
+setInterval(() => {
+  const now = Date.now();
+  for (const p of players.values()) if (!p.key && p.ws.readyState === 1 && now - p.lastIn > ANON_IDLE_MS) p.ws.close(4000, 'idle without login');
+}, Math.min(5000, ANON_IDLE_MS));
+wss.on('listening', () => { console.log(`realms-ws ${HOST}:${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`); logRates(RATES_INFO); });
 
 // Save active profiles before systemd or a local runner restarts the process.
 let stopping = false;

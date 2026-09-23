@@ -30,8 +30,8 @@ after(async () => {
 });
 
 // клиент: ждёт сообщения нужного типа
-function client(port = PORT) {
-  const ws = new WebSocket(`ws://localhost:${port}`), inbox = [], waiters = [];
+function client(port = PORT, options = {}) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, options), inbox = [], waiters = [];
   ws.on('message', (d) => { const m = JSON.parse(d); const w = waiters.findIndex((x) => x.types.includes(m.t)); if (w >= 0) waiters.splice(w, 1)[0].res(m); else inbox.push(m); });
   return {
     ws, send: (m) => ws.send(JSON.stringify(m)),
@@ -1179,5 +1179,50 @@ test('медленный клиент, не читающий сокет, отк�
   } finally {
     slow.ws.terminate(); fast.ws.close();
     await srv2.stop('server-slow-client.log');
+  }
+});
+
+test('heartbeat: клиент без pong отключается, отвечающий остаётся; тихое соединение без входа закрывается', async () => {
+  const srv2 = await ratedServer({ HEARTBEAT_MS: '300', ANON_IDLE_MS: '700' });
+  const mute = client(srv2.port, { autoPong: false }), live = client(srv2.port), anon = client(srv2.port);
+  await Promise.all([mute.open(), live.open(), anon.open()]);
+  try {
+    mute.send({ t: 'register', name: 'Немой', pass: 'test-secret', cls: 'warrior' });
+    live.send({ t: 'register', name: 'Живой', pass: 'test-secret', cls: 'warrior' });
+    await mute.wait('authok'); await live.wait('authok');
+    const anonClosed = new Promise((r) => anon.ws.once('close', (code) => r(code)));
+    const started = Date.now();
+    await mute.closed();
+    assert.ok(Date.now() - started < 2000, 'клиент без pong должен отключиться за два цикла');
+    assert.equal(await anonClosed, 4000, 'соединение без входа и без пакетов закрывается по таймауту');
+    // отвечающий на ping клиент остаётся, даже если сам ничего не шлёт
+    await pause(1200);
+    assert.equal(live.ws.readyState, WebSocket.OPEN);
+    assert.match(srv2.log.text, /DEAD_CLIENT player=\d+/);
+  } finally {
+    live.ws.close(); await live.closed();
+    await srv2.stop('server-heartbeat.log');
+  }
+});
+
+test('лимит соединений без входа на адрес; X-Forwarded-For не обходит его без доверенного прокси', async () => {
+  const srv2 = await ratedServer({ ANON_PER_IP: '2', TRUST_PROXY: '0' });
+  const opened = [];
+  const connect = (ip) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${srv2.port}`, { headers: { 'x-forwarded-for': ip } });
+    opened.push(ws);
+    return new Promise((r) => { ws.once('message', () => r('hi')); ws.once('close', (code) => r(code)); ws.once('error', () => {}); });
+  };
+  try {
+    assert.equal(await connect('10.0.0.1'), 'hi');
+    assert.equal(await connect('10.0.0.2'), 'hi');
+    // подложный заголовок не делает соединение «другим адресом»
+    assert.equal(await connect('10.0.0.3'), 1013);
+    assert.match(srv2.log.text, /ANON_LIMIT ip=/);
+    // по умолчанию сервер слушает только локальный интерфейс
+    assert.match(serverOutput, /realms-ws 127\.0\.0\.1:\d+/);
+  } finally {
+    for (const ws of opened) ws.terminate();
+    await srv2.stop('server-anon-limit.log');
   }
 });

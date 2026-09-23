@@ -17,7 +17,9 @@ COPY src ./src
 RUN mkdir -p /data && chown -R node:node /data /app
 USER node
 
-ENV PORT=8790 DB=/data/realms.db NODE_ENV=production
+# Внутри контейнера слушаем все интерфейсы (по умолчанию сервер слушает только 127.0.0.1);
+# X-Forwarded-For выставляет nginx хоста, другого пути к порту нет.
+ENV PORT=8790 DB=/data/realms.db NODE_ENV=production HOST=0.0.0.0 TRUST_PROXY=1
 EXPOSE 8790
 
 # Сервер отвечает приветствием сразу после подключения — это и есть признак живого мира.
