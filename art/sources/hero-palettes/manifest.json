@@ -1,0 +1,18 @@
+{
+  "sourceCommit": "499d3110d79be6389ef5f2bdbbc1ae6000d022b6",
+  "license": "Existing project hero textures; provenance in art/README.md, not third-party CC0 pack assets.",
+  "sources": {
+    "warrior_cloth_Image_0.webp": "4b376ead6ff61b03a3eb07578888eda44ea27cb608bbfbc5cfc30afb67b673bc",
+    "warrior_cloth_Image_1.webp": "ef425cd8c51a84c547e9edcd23b54be0d602fb96e6e97865676023da94635072",
+    "mage_native_Image_0.webp": "499c80026390eb2e3d7f6a1e79bc1c8ec54ec3a4c6ddee6eb08531cf7cb2464c",
+    "mage_native_Image_1.webp": "b3492d2fde6ab09c2dd37bab8c43d6636da26cce0b7a6b07f597e2bdbeeb3a71"
+  },
+  "outputs": {
+    "warrior_cloth_Image_0.webp": "6ac84b814a44fe512ac95585c71464f6d6975930c5621f25882a9831f60f2d59",
+    "warrior_cloth_Image_1.webp": "93f35498ee2722e6bde1d9e21afb67542c1086e5d89e6af1104dd8da681326e1",
+    "warrior_cloth.glb": "41e0ac29a97b7689089e75ed8d0e6f954308a215a47f494dcf8d9811f8808890",
+    "mage_native_Image_0.webp": "7557cbdacba1135c2b5f824bb6639c5c67a6d0c17e5258c662b33f617f534f71",
+    "mage_native_Image_1.webp": "eab96ce1dba795f1fa4a036c4cde76ac5d9354935ee7e27b07580f3ae6dce716",
+    "mage_native.glb": "f2a004b15ea719f2634dea5d7a8c6f10bc786d541e7ac86032e3de0634b4341d"
+  }
+}
