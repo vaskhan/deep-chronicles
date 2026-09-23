@@ -292,12 +292,17 @@ test('мобы приходят с сервера и их можно убить'
   // иначе штраф за разницу уровней срезал бы монеты до нуля
   a.send({ t: 'dev', lvl: 6, hp: 99999, x: -260, z: 180 });
   await pause(400);
-  // ждём снапшот с мобами
-  let mob = null;
-  for (let i = 0; i < 40 && !mob; i++) {
-    const s = await a.wait('snap');
+  // ждём снапшот с мобами. Бой после ребаланса медленнее: кабан 8 уровня (450 HP) не успевает
+  // умереть за отведённое время, поэтому цель — ближайший кролик; вид приходит сообщением mobs.
+  let mob = null; const kinds = new Map();
+  const near = (rows) => rows.sort((x, y) => Math.hypot(x[1] + 260, x[3] - 180) - Math.hypot(y[1] + 260, y[3] - 180))[0];
+  for (let i = 0; i < 60 && !mob; i++) {
+    const s = await a.wait('snap', 'mobs');
+    if (s.t === 'mobs') { for (const [id, kind] of s.n) kinds.set(id, kind); continue; }
     const alive = (s.m || []).filter((r) => !(r[5] & 8));
-    if (alive.length) mob = alive.sort((x, y) => Math.hypot(x[1] + 260, x[3] - 180) - Math.hypot(y[1] + 260, y[3] - 180))[0];
+    const rabbits = alive.filter((r) => kinds.get(r[0]) === 'rabbit');
+    if (rabbits.length) mob = near(rabbits);
+    else if (i >= 40 && alive.length) mob = near(alive);
     a.send({ t: 'st', x: -260, y: 0, z: 180, r: 0, a: 0 });
   }
   assert.ok(mob, 'сервер не прислал мобов');
@@ -305,10 +310,12 @@ test('мобы приходят с сервера и их можно убить'
   await at(a, mob[1] + 1, mob[3] + 1);
   a.send({ t: 'atk', id: mob[0], kind: 'm' });
   let mx = mob[1], mz = mob[3];
+  const seen = {}; let lastHp = null;
   for (let i = 0; i < 120; i++) {
     a.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
     const m = await a.wait('ev', 'snap');
-    if (m.t === 'snap') { const r = (m.m || []).find((r) => r[0] === mob[0]); if (r) { mx = r[1]; mz = r[3]; } }
+    if (m.t === 'ev') for (const e of m.e) seen[e.k] = (seen[e.k] || 0) + 1;
+    if (m.t === 'snap') { const r = (m.m || []).find((r) => r[0] === mob[0]); if (r) { mx = r[1]; mz = r[3]; lastHp = r[6]; } }
     if (m.t === 'ev' && m.e.some((e) => e.k === 'kill')) {
       const reward = m.e.find(e => e.k === 'kill');
       assert.equal(reward.ground, false, 'автолут включён для нового персонажа');
@@ -321,7 +328,7 @@ test('мобы приходят с сервера и их можно убить'
       a.ws.close(); await a.closed(); return;
     }
   }
-  throw new Error('моб не умер за отведённое время');
+  throw new Error(`моб не умер за отведённое время: события ${JSON.stringify(seen)}, HP моба ${lastHp}%, вид ${kinds.get(mob[0])}`);
 });
 
 test('занятое имя, неверный пароль, плохой токен, слабые данные', async () => {
@@ -868,7 +875,9 @@ test('соседи того же семейства вступаются за с
   }
   assert.ok(first >= 0, 'в мире нет пары сородичей в радиусе стаи');
   const victimId = first + 1, allyId = second + 1;
-  const a = client(); await a.open();
+  // Свой сервер: в общем мире соседние тесты уводят сородича в погоню, и он не отвечает на крик.
+  const server = await ratedServer({});
+  const a = client(server.port); await a.open();
   const dist = (r, x, z) => Math.hypot(r[1] - x, r[3] - z);
   try {
     a.send({ t: 'register', name: 'ЗовСтаи', pass: 'test-secret', cls: 'mage' });
@@ -917,7 +926,7 @@ test('соседи того же семейства вступаются за с
       return;
     }
     throw new Error(lastMiss != null ? `сородич не пошёл на помощь ни в одной попытке: было ${lastMiss.toFixed(1)}` : 'не удалось поймать пару сородичей в нужной расстановке');
-  } finally { a.ws.close(); await a.closed(); }
+  } finally { a.ws.close(); await a.closed(); await server.stop('server-pack.log'); }
 });
 
 // Рейты проверяются на отдельном сервере: основной остаётся на значениях по умолчанию.

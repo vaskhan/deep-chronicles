@@ -355,10 +355,14 @@ test('городские магазины и NPC доступны от площ�
 });
 
 import {presentationHeightAt} from '../tools/godot/placements.mjs';
+import {HARBOR_PIERS} from '../src/town-layout.js';
 test('порт и храм: поверхность движения совпадает с высотой настила и террасы',()=>{
-  for(const z of [25,50,75])for(let x=110;x<=150;x+=2){
-    assert.ok(Math.abs(heightAt(-430+x*TOWNS[0].scale,400+z*TOWNS[0].scale)+3)<.01);
-    assert.ok(Math.abs(presentationHeightAt(-430+x*TOWNS[0].scale,400+z*TOWNS[0].scale)+3)<.01,'клиентская сетка причала');
+  // Высота настила берётся из общего описания причалов: иначе правка модели
+  // молча расходится с поверхностью, по которой ходит игрок.
+  for(const pier of HARBOR_PIERS)for(let x=110;x<=150;x+=2){
+    const wx=-430+x*TOWNS[0].scale,wz=400+pier.z*TOWNS[0].scale;
+    assert.ok(Math.abs(heightAt(wx,wz)-pier.y)<.01,`настил ${x},${pier.z}`);
+    assert.ok(Math.abs(presentationHeightAt(wx,wz)-pier.y)<.01,'клиентская сетка причала');
   }
   assert.equal(heightAt(-430+66*TOWNS[0].scale,400-76*TOWNS[0].scale),12);
   assert.ok(heightAt(-430+140*TOWNS[0].scale,400+10*TOWNS[0].scale)<-6.5,'вода должна закрывать дно');
