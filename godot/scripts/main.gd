@@ -1,5 +1,6 @@
 extends Node3D
 const WorldScene = preload("res://scenes/world.tscn")
+const Quality = preload("res://scripts/quality.gd")
 const Actor = preload("res://scripts/actor.gd")
 const Hud = preload("res://scripts/hud.gd")
 var world: Node3D
@@ -25,10 +26,12 @@ var joystick = Vector2.ZERO
 var camera_yaw = Tuning.CAMERA_YAW_START
 var camera_pitch = Tuning.CAMERA_PITCH_START
 var camera_distance = Tuning.CAMERA_DISTANCE_START
+var movement_path: Array = []
 var state_timer = 0.0
 var ui_timer = 0.0
 var cast_time = 0.0
 var cooldowns: Dictionary = {}
+var action_ready_at = 0
 var last_pm = ""
 var own_id = 0
 var clock_offset = 0.0
@@ -74,6 +77,8 @@ func _ready():
 		if a == "--resume": resume_on_start = true
 		if a.begins_with("--capture="): capture_path = a.trim_prefix("--capture=")
 		if a.trim_prefix("--panel=") in ["inventory", "character", "settings"] and a.begins_with("--panel="): startup_panel = a.trim_prefix("--panel=")
+	# Пресет качества: мобильный по умолчанию (tuning.gd), ПК — флагом --quality=pc.
+	Quality.apply(get_viewport(), Quality.preset_from_args(OS.get_cmdline_user_args(), Tuning.QUALITY_PRESET))
 	world = WorldScene.instantiate(); add_child(world); world.build()
 	camera = Camera3D.new(); camera.name = "Camera"; camera.fov = Tuning.CAMERA_FOV; camera.far = Tuning.CAMERA_FAR; camera.near = Tuning.CAMERA_NEAR; add_child(camera); camera.current = true
 	camera.position = Vector3(-410, 30, 425); camera.look_at(Vector3(-430, 7, 390))
@@ -83,6 +88,7 @@ func _ready():
 		var actor = Actor.new(); actor.kind = "n"; actor.definition = n
 		add_child(actor); actor.setup("warrior" if n.role == "guard" else "npc", n.name, n)
 		actor.position = GameData.position_at(n.x, n.z)
+		actor.rotation.y = float(n.get("rotation",0))
 		actor.apply_look({"body": n.color, "w": 0xb6c5d1 if n.role == "guard" else null, "mat": "chain" if n.role == "guard" else "cloth", "robe": n.role != "guard", "gear": {}})
 		npcs.append(actor)
 	selection = _ring(Color("ff684a"), 1.2); marker = _ring(Color("c9d5ed"), 0.7)
@@ -121,6 +127,7 @@ func _login(data: Dictionary):
 func _message(m: Dictionary):
 	match m.get("t", ""):
 		"authok":
+			movement_path.clear()
 			var same_character = profile.get("name", "") == m.name
 			auth_ready_at = Time.get_ticks_msec()
 			own_id = int(m.id)
@@ -130,7 +137,8 @@ func _message(m: Dictionary):
 			hero = Actor.new(); hero.kind = "self"; hero.name = "Hero"; add_child(hero)
 			hero.setup(profile.cls, profile.name); hero.position = GameData.position_at(profile.x, profile.z)
 			hero.apply_look(_look_of(profile)); hero.dead = profile.get("dead", false)
-			buffs.clear(); cooldowns.clear(); cast_time = 0; has_destination = false; attacking = false
+			buffs.clear(); cooldowns.clear(); action_ready_at = 0; cast_time = 0; has_destination = false; attacking = false
+			hud.active_effects = []; hud.target_effects = []
 			initial_camera = true
 			hud.login_pass.clear()
 			if not same_character: hud.chat.clear_history()
@@ -138,6 +146,7 @@ func _message(m: Dictionary):
 			hud.enter(profile)
 			if not startup_panel.is_empty(): hud.show_window(startup_panel); startup_panel = ""
 			hud.log_line("Добро пожаловать, %s! Хранитель врат перенесёт вас в зону охоты." % profile.name)
+			screenshot_done = false
 			print("NATIVE_AUTH_OK")
 		"autherr":
 			hud.continue_button.visible = not Network.session.is_empty()
@@ -156,6 +165,10 @@ func _message(m: Dictionary):
 				if mobs.has(id): continue
 				var actor = Actor.new(); actor.entity_id = id; actor.kind = "m"; add_child(actor)
 				var def = GameData.catalog.MOBS[mob_kind]
+				# Элита и чемпион: ранг, готовое имя и увеличенный размер считает сервер (src/elites.js)
+				if row.size() > 4:
+					actor.rank = str(row[2])
+					def = def.duplicate(true); def.name = str(row[3]); def.size = float(row[4])
 				actor.setup(mob_kind, "%s · %s" % [def.name, int(def.lvl)], def); actor.hide(); mobs[id] = actor
 		"look":
 			var id = int(m.id)
@@ -176,6 +189,7 @@ func _message(m: Dictionary):
 			_sync_ground(m.get("g", []))
 			if m.has("me"):
 				profile.hp = m.me.hp; profile.mp = m.me.mp; profile.dead = m.me.dead; hero.dead = m.me.dead
+				hero.effects = m.me.get("fx", [])
 		"pickup_err":
 			pending_pickup = ""; pickup_sent_at = 0; hud.log_line(m.reason)
 		"ev":
@@ -223,22 +237,27 @@ func _event(e: Dictionary):
 	match e.k:
 		"msg": hud.log_line(e.text)
 		"cd": cooldowns[e.id] = Time.get_ticks_msec() + float(e.cd) * 1000
+		"action_cd":
+			action_ready_at = Time.get_ticks_msec() + int(float(e.t) * 1000)
+			cooldowns["_action"] = action_ready_at
+		"skill_start":
+			if is_instance_valid(source):
+				source.begin_attack(float(e.t), float(e.windup))
+				combat_fx.swing(source, GameData.color(GameData.catalog.SKILLS[e.id].color), true)
+			if source == hero:
+				cast_time = float(e.windup); has_destination = false
+				hud.cast_duration = cast_time; hud.cast_name = GameData.catalog.SKILLS[e.id].name
 		"attack_start":
 			if is_instance_valid(source):
-				source.begin_attack(float(e.t))
-				if source.base_model != "mage": combat_fx.swing(source); game_audio.play_at("swing", source.position)
+				source.begin_attack(float(e.t),float(e.get("windup",float(e.t)*.35)))
+				combat_fx.swing(source, Color("ffe3a0"), true)
+
 		"attack_release":
+			if is_instance_valid(source): combat_fx.swing(source); game_audio.play_at("swing", source.position)
 			if is_instance_valid(source): source.release_attack()
-			if is_instance_valid(source) and source.base_model == "mage":
-				var spell_target = mobs.get(int(e.to.get("m", -1))) if e.to.has("m") else (hero if int(e.to.get("p", -1)) == own_id else players.get(int(e.to.get("p", -1))))
-				if is_instance_valid(spell_target): combat_fx.projectile(source, spell_target, Color("9fbdff")); game_audio.play_at("fire", source.position, -5)
+			if source == hero and profile.get("cls", "") == "mage": attacking = false
+
 		"hit", "miss":
-			if is_instance_valid(source) and source.cast_remaining <= 0 and source.action_until <= 0:
-				source.play_action("attack", 0.65)
-				if source.base_model == "mage" and is_instance_valid(victim):
-					combat_fx.projectile(source, victim, Color("9fbdff")); game_audio.play_at("fire", source.position, -5)
-				else:
-					combat_fx.swing(source); game_audio.play_at("swing", source.position)
 			if source == hero and is_instance_valid(victim): hud.log_line("%s: %s" % [victim.display_name, "Промах" if e.k == "miss" else "Урон %s" % int(e.dmg)], "combat")
 			if is_instance_valid(victim) and victim != hero:
 				_float(victim.position, "Промах" if e.k == "miss" else (("КРИТ " if e.get("crit", false) else "") + str(int(e.dmg))), Color("ffdd79") if e.get("crit", false) else Color.WHITE)
@@ -267,7 +286,7 @@ func _event(e: Dictionary):
 		"hurt":
 			hud.log_line("Уклонение" if e.get("dodge", false) else "Получен урон: %s" % int(e.get("dmg", 0)), "combat")
 			_float(hero.position, "Уклонение" if e.get("dodge", false) else "−%s" % int(e.get("dmg", 0)), Color("ff7777"))
-			if not e.get("dodge", false):
+			if not e.get("dodge", false) and not e.has("dot"):
 				combat_fx.burst(hero.position, Color("d59072"), "impact", 0.6); game_audio.play_at("impact", hero.position, -3)
 				hero.receive_hit()
 			if not is_instance_valid(target): set_target(mobs.get(int(e.get("from", -1)), players.get(int(e.get("fromP", -1)))))
@@ -304,19 +323,32 @@ func _event(e: Dictionary):
 			var sk = GameData.catalog.SKILLS[e.id]
 			if is_instance_valid(source):
 				combat_fx.stop_cast(source)
-				if sk.has("cast"): source.release_cast()
-				else: source.play_action("attack", 0.65)
+				if sk.get("school", "") == "p": source.release_attack()
+				else: source.release_cast()
 				if source == hero: cast_time = 0
 				var hit_target = null
 				if e.has("to"):
 					hit_target = mobs.get(int(e.to.get("m", -1))) if e.to.has("m") else (hero if int(e.to.get("p", -1)) == own_id else players.get(int(e.to.get("p", -1))))
 				var color = GameData.color(sk.color)
 				if sk.get("school") == "m" and is_instance_valid(hit_target): combat_fx.projectile(source, hit_target, color)
-				elif e.id == "heal": combat_fx.burst(source.position, color, "heal", 2)
+				elif sk.kind == "heal": combat_fx.burst(source.position, color, "heal", 2)
 				elif e.id == "ice_nova": combat_fx.burst(source.position, color, "frost", float(sk.radius))
 				else:
-					combat_fx.swing(source, color); combat_fx.burst(source.position, color, "buff" if e.id == "battle_cry" else "impact", float(sk.get("radius", 2)))
+					combat_fx.swing(source, color); combat_fx.burst(source.position, color, "buff" if sk.kind == "buff" else "impact", float(sk.get("radius", 2)))
 				game_audio.play_at({"fire_bolt": "fire", "heal": "heal", "ice_nova": "frost", "battle_cry": "buff"}.get(e.id, "swing"), source.position)
+		"fx":
+			# Наложение и спад эффекта во времени. Сила, урон и срок — серверные, клиент рисует ауру.
+			var bearer = mobs.get(int(e.get("m", -1))) if e.has("m") else (hero if int(e.get("p", -1)) == own_id else players.get(int(e.get("p", -1))))
+			if not is_instance_valid(bearer): return
+			var key = "%s:%s" % [bearer.get_instance_id(), str(e.id)]
+			var kind = str(e.get("kind", ""))
+			if bool(e.get("up", false)):
+				combat_fx.aura(bearer, key, GameData.effect_color(kind), float(e.get("dur", 1000)) / 1000.0)
+				game_audio.play_at("buff" if kind in ["buff", "hot", "drain"] else "frost", bearer.position, -6)
+				if bearer == hero: hud.log_line("%s · %s с" % [GameData.effect_title(str(e.id), kind), maxi(1, ceili(float(e.get("dur", 1000)) / 1000.0))], "combat")
+			else:
+				combat_fx.stop_aura(key)
+				if bearer == hero: hud.log_line("%s: действие закончилось" % GameData.effect_title(str(e.id), kind), "combat")
 		"ench": _effect(hero.position, Color("ffc96d") if e.ok else Color("787c89"), 2)
 		"dead":
 			combat_fx.stop_cast(hero); hero.cancel_presentation(); game_audio.play_at("death", hero.position)
@@ -327,10 +359,15 @@ func _event(e: Dictionary):
 		"move": _place(float(e.x), float(e.z)); hud.close_window()
 
 func _place(x: float, z: float):
+	movement_path.clear()
 	if not is_instance_valid(hero): return
 	combat_fx.clear(); hero.cancel_presentation(); cast_time = 0; run_speed = 0
 	hero.position = GameData.position_at(x, z); has_destination = false; attacking = false; pending_skill = ""; talking_to = null; pending_pickup = ""
 	set_target(null); marker.hide(); initial_camera = true
+
+func _send_position():
+	Network.send({"t": "st", "x": hero.position.x, "y": hero.position.y, "z": hero.position.z, "r": hero.rotation.y, "a": (1 if hero.moving else 0) | (2 if hero.attack_time > 0 else 0) | (4 if hero.casting else 0) | (8 if hero.dead else 0), "path": movement_path})
+	movement_path.clear()
 
 func _process(dt):
 	if profile.is_empty() or not is_instance_valid(hero):
@@ -338,13 +375,16 @@ func _process(dt):
 		if not capture_path.is_empty() and not screenshot_done and Network.online and Time.get_ticks_msec() > 8000:
 			screenshot_done = true; _capture()
 		return
+	var frame_dt = dt
 	dt = minf(dt, 0.1)
 	cast_time = maxf(0, cast_time - dt); hero.casting = cast_time > 0; hero.moving = false
+	var before_motion = hero.position
 	if Network.authed and not hero.dead and cast_time <= 0: _move_hero(dt)
+	hero.measure_motion(before_motion,frame_dt)
 	var time = Time.get_unix_time_from_system() * 1000 - clock_offset - 150
 	for actor in mobs.values() + players.values():
 		if Time.get_ticks_msec() - actor.seen > 1500: actor.hide()
-		elif actor.visible: actor.interpolate(time)
+		elif actor.visible: actor.interpolate(time, frame_dt)
 		actor.label.visible = actor.visible and hero.position.distance_to(actor.position) < Tuning.LABEL_RANGE_ACTOR
 	for drop in ground_loot.values(): drop.label.visible = hero.position.distance_to(drop.position) < Tuning.LABEL_RANGE_LOOT
 	for npc in npcs: npc.label.visible = hero.position.distance_to(npc.position) < Tuning.LABEL_RANGE_NPC
@@ -358,15 +398,17 @@ func _process(dt):
 	else: selection.hide(); target_arrow.hide()
 	hero.status = 2 if profile.get("karma", 0) > 0 else (1 if flag_until > Time.get_ticks_msec() else 0)
 	_update_camera(dt); world.set_region(hero.position)
-	game_audio.follow(hero, camera, dt)
+	game_audio.follow(hero, camera, frame_dt)
 	state_timer += dt; ui_timer += dt
-	if state_timer >= 0.1:
+	if state_timer >= 0.1 or movement_path.size() >= 48:
 		state_timer = 0
 		if Network.authed:
-			Network.send({"t": "st", "x": hero.position.x, "y": hero.position.y, "z": hero.position.z, "r": hero.rotation.y, "a": (1 if hero.moving else 0) | (2 if hero.attack_time > 0 else 0) | (4 if hero.casting else 0) | (8 if hero.dead else 0)})
+			_send_position()
 	if ui_timer >= 0.2:
 		ui_timer = 0; stats = GameData.stats(profile, buffs)
 		hud.active_buffs = buffs
+		hud.active_effects = hero.effects
+		hud.target_effects = target.effects if is_instance_valid(target) and not target.dead else []
 		hud.update_values(profile, stats, hero.position, target, cooldowns, cast_time)
 		hud.minimap.update_entities(mobs, players, target)
 		if is_instance_valid(hud.map_control): hud.map_control.update_entities(mobs, players, target)
@@ -391,11 +433,11 @@ func _move_hero(dt):
 		if offset.length() > float(GameData.catalog.UI_RULES.loot.pickupRange) - 0.65:
 			direction = offset.normalized(); distance = minf(distance, offset.length())
 		elif pickup_sent_at == 0:
-			Network.send({"t": "st", "x": hero.position.x, "y": hero.position.y, "z": hero.position.z, "r": hero.rotation.y, "a": 0})
+			_send_position()
 			Network.send({"t": "pickup", "id": pending_pickup}); pickup_sent_at = Time.get_ticks_msec()
 		elif Time.get_ticks_msec() - pickup_sent_at > 2500:
 			pending_pickup = ""; pickup_sent_at = 0; hud.log_line("Сервер не подтвердил подбор. Попробуйте ещё раз.")
-	elif attacking and is_instance_valid(target) and not target.dead:
+	elif (attacking or pending_skill != "") and is_instance_valid(target) and not target.dead:
 		var reach = float(stats.range) + target.radius
 		if pending_skill != "": reach = float(GameData.catalog.SKILLS[pending_skill].get("range", stats.range)) + target.radius
 		var offset = target.position - hero.position; offset.y = 0
@@ -403,7 +445,9 @@ func _move_hero(dt):
 		else:
 			hero.rotation.y = atan2(offset.x, offset.z)
 			if pending_skill != "":
-				Network.send({"t": "skill", "id": pending_skill}); pending_skill = ""
+				if not movement_path.is_empty(): _send_position()
+				var ready_skill = pending_skill; pending_skill = ""
+				use_skill(ready_skill)
 	elif has_destination:
 		var offset = destination - hero.position; offset.y = 0
 		if offset.length() < (3.5 if is_instance_valid(talking_to) else 0.5):
@@ -415,18 +459,50 @@ func _move_hero(dt):
 		run_speed = move_toward(run_speed, float(stats.speed), float(stats.speed) * 6.0 * dt)
 		distance = minf(distance, run_speed * dt)
 		var before = hero.position
-		hero.position = GameData.move(hero.position, direction, distance)
-		hero.rotation.y = lerp_angle(hero.rotation.y, atan2(direction.x, direction.z), minf(1, dt * 15))
+		var heading = atan2(direction.x,direction.z)
+		hero.rotation.y = rotate_toward(hero.rotation.y,heading,dt*12.0)
+		# Start turning before running; a reversal should not translate backwards.
+		distance *= maxf(0,cos(angle_difference(hero.rotation.y,heading)))
+		hero.position = GameData.move(hero.position, direction, distance, movement_path)
+		var actual = hero.position-before; actual.y = 0
+		if actual.length_squared()>.00001:
+			hero.rotation.y = rotate_toward(hero.rotation.y,atan2(actual.x,actual.z),dt*12.0)
 		hero.moving = before.distance_squared_to(hero.position) > 0.00001
 	else: run_speed = 0
 
 func _update_camera(dt):
 	var aim = hero.position + Vector3.UP * 1.4
-	var offset = Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
+	var room: Dictionary = {}
+	for shop in GameData.world.get("townShops",[]):
+		if not shop.get("frontage",false): continue
+		var centre = Vector2(shop.x,shop.z-7*shop.scale)
+		var half = (Vector2(shop.w,shop.d)-Vector2.ONE*2.4)*shop.scale*.5
+		if absf(hero.position.x-centre.x)<half.x and absf(hero.position.z-centre.y)<half.y:
+			room={"centre":centre,"half":half};break
+	var distance = camera_distance if room.is_empty() else minf(camera_distance,Tuning.CAMERA_INDOOR_DISTANCE)
+	var pitch = camera_pitch if room.is_empty() else Tuning.CAMERA_INDOOR_PITCH
+	var offset = Vector3(sin(camera_yaw) * cos(pitch), sin(pitch), cos(camera_yaw) * cos(pitch)) * distance
 	var desired = aim + offset
 	desired.y = maxf(desired.y, GameData.height_at(desired.x, desired.z) + 1.0)
 	if hero.position.x > 2100: desired.y = minf(desired.y, 6.7)
-	camera.position = desired if initial_camera else camera.position.lerp(desired, 1 - exp(-dt * 12))
+	if not room.is_empty():
+		var extent: Vector2 = room.half-Vector2.ONE*Tuning.CAMERA_INDOOR_WALL_MARGIN
+		desired.x=clampf(desired.x,room.centre.x-extent.x,room.centre.x+extent.x)
+		desired.z=clampf(desired.z,room.centre.y-extent.y,room.centre.y+extent.y)
+		desired.y=minf(desired.y,hero.position.y+Tuning.CAMERA_INDOOR_CEILING)
+		var safe=aim
+		var steps=maxi(1,ceili(aim.distance_to(desired)/Tuning.CAMERA_INDOOR_TRACE_STEP))
+		for step in range(1,steps+1):
+			var point=aim.lerp(desired,float(step)/steps)
+			var cell=Vector2i(floori(point.x/24),floori(point.z/24))
+			var blocked=false
+			for obstacle in GameData.grid.get(cell,[]):
+				if Vector2(point.x-obstacle.x,point.z-obstacle.z).length()<float(obstacle.r)+Tuning.CAMERA_INDOOR_TRACE_RADIUS:
+					blocked=true;break
+			if blocked:break
+			safe=point
+		if safe.distance_to(aim)>.1:desired=safe
+	camera.position = desired if initial_camera or not room.is_empty() else camera.position.lerp(desired, 1 - exp(-dt * 12))
 	initial_camera = false; camera.look_at(aim)
 
 func set_target(actor):
@@ -448,18 +524,36 @@ func attack():
 	if not is_instance_valid(target) or target.dead or target.kind == "n": return
 	if target.kind == "p" and not pvp_enabled and not Input.is_key_pressed(KEY_CTRL):
 		hud.log_line("Для PvP удерживайте Ctrl при атаке или включите PvP в окне персонажа."); return
-	attacking = true; has_destination = false; talking_to = null; pending_pickup = ""
+	attacking = true; pending_skill = ""; has_destination = false; talking_to = null; pending_pickup = ""
 	Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind})
 
 func use_skill(id: String):
-	var sk = GameData.skill(profile, id)
-	if sk.kind == "dmg" and is_instance_valid(target):
-		if target.kind == "p" and not pvp_enabled and not Input.is_key_pressed(KEY_CTRL): hud.log_line("Включите PvP в окне персонажа."); return
+	# A skill is a single command, never an implicit normal-attack mode.
+	attacking = false; pending_skill = ""; has_destination = false
+	if is_instance_valid(target) and target.kind in ["m", "p"]:
 		Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind, "hold": true})
+	if not GameData.catalog.SKILLS.has(id) or int(profile.get("skills", {}).get(id, 0)) <= 0:
+		hud.log_line("Умение ещё не изучено."); return
+	if float(cooldowns.get(id, 0)) > Time.get_ticks_msec():
+		hud.log_line("Умение ещё восстанавливается."); return
+	var sk = GameData.skill(profile, id)
+	if sk.kind == "passive":
+		hud.log_line("Пассивное умение действует постоянно."); return
+	var promotion = GameData.promotion_required(profile, int(sk.lvl))
+	if promotion != "":
+		hud.log_line(promotion); return
+	if float(profile.get("mp", 0)) < float(sk.mp):
+		hud.log_line("Недостаточно маны."); return
+	if sk.kind == "dmg":
+		if not is_instance_valid(target) or target.dead or target.kind == "n":
+			hud.log_line("Выберите живую цель."); return
+		if target.kind == "p" and not pvp_enabled and not Input.is_key_pressed(KEY_CTRL):
+			hud.log_line("Включите PvP в окне персонажа."); return
 		var distance = Vector2(target.position.x - hero.position.x, target.position.z - hero.position.z).length()
 		if distance > sk.get("range", stats.range) + target.radius:
-			pending_skill = id; attacking = true; has_destination = false; return
+			pending_skill = id; return
 		hero.rotation.y = atan2(target.position.x - hero.position.x, target.position.z - hero.position.z)
+	if not movement_path.is_empty(): _send_position()
 	Network.send({"t": "skill", "id": id})
 
 func next_target():
@@ -483,6 +577,8 @@ func _talk(npc):
 	else: destination = npc.position; has_destination = true; talking_to = npc
 
 func _open_npc(npc):
+	if npc.definition.role == "merchant":
+		hud.shop_id = npc.definition.get("shop", ""); hud.shop_name = npc.definition.name
 	var kind = {"merchant": "shop", "gatekeeper": "teleport", "priest": "priest"}.get(npc.definition.role, "")
 	if kind != "": hud.show_window(kind)
 	else: hud.log_line("Страж охраняет город от убийц.")
@@ -490,7 +586,7 @@ func _open_npc(npc):
 func _action(kind: String, value):
 	if profile.is_empty(): return
 	match kind:
-		"inventory", "character", "map", "menu", "skills", "settings", "controls", "actions", "equipment", "party": hud.toggle(kind)
+		"inventory", "character", "map", "menu", "skills", "settings", "controls", "actions", "equipment", "party", "profession": hud.toggle(kind)
 		"camera": camera_yaw = hero.rotation.y + PI; camera_pitch = Tuning.CAMERA_PITCH_RESET; camera_distance = Tuning.CAMERA_DISTANCE_RESET
 		"fullscreen": DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 		"attack": attack()
@@ -506,6 +602,8 @@ func _action(kind: String, value):
 		"hotbar": hud.activate_slot(int(value))
 		"skill": use_skill(str(value))
 		"learn": Network.send({"t": "learn", "id": value.id, "rank": value.rank})
+		# Выбор профессии проверяет и сохраняет сервер: клиент только передаёт намерение.
+		"prof": Network.send({"t": "prof", "id": str(value)})
 		"autoloot": Network.send({"t": "autoloot", "enabled": value})
 		"use", "buy": Network.send({"t": kind, "id": value, "n": 1})
 		"equip", "sell": Network.send({"t": kind, "idx": value, "n": 1})
@@ -517,6 +615,10 @@ func _action(kind: String, value):
 		"enchant": Network.send({"t": "ench", "scroll": value.scroll, "ref": value.ref})
 		"teleport": Network.send({"t": "tp", "id": value})
 		"wash": Network.send({"t": "wash"})
+		"party_invite":
+			if is_instance_valid(target) and target.kind == "p": Network.send({"t":"party", "action":"invite", "name":target.display_name})
+			else: hud.show_window("party")
+		"party_leave": Network.send({"t":"party", "action":"leave"})
 		"party_command": Network.send(value)
 		"chat": _chat(str(value))
 
@@ -543,7 +645,7 @@ func _chat(text: String):
 
 func _return_to_login(forget: bool, reconnect = true):
 	if forget: Network.logout()
-	last_pm = ""; buffs.clear(); hud.active_buffs = []; hud.enchant_scroll = ""; hud.selected_item = {}; hud.chat.clear_history()
+	last_pm = ""; buffs.clear(); hud.active_buffs = []; hud.active_effects = []; hud.target_effects = []; hud.enchant_scroll = ""; hud.selected_item = {}; hud.chat.clear_history()
 	pvp_enabled = false; hud.pvp_enabled = false; joystick = Vector2.ZERO
 	hud.login_pass.clear()
 	_clear_entities(); profile = {}; hud.close_window(); hud.game_ui.hide(); hud.login_panel.show()
@@ -590,8 +692,10 @@ func _unhandled_input(event):
 				else: set_target(null); _cancel_attack(); has_destination = false; hud.show_window("menu")
 			KEY_ENTER: hud.chat_input.grab_focus()
 			KEY_V: camera_yaw = hero.rotation.y + PI; camera_pitch = Tuning.CAMERA_PITCH_RESET; camera_distance = Tuning.CAMERA_DISTANCE_RESET
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9: hud.activate_slot(int(event.physical_keycode) - KEY_1)
-			KEY_0: hud.activate_slot(9)
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9: hud.activate_slot(int(event.physical_keycode) - KEY_1 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
+			KEY_0: hud.activate_slot(9 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
+			KEY_MINUS: hud.activate_slot(10 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
+			KEY_EQUAL: hud.activate_slot(11 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
 			KEY_F11: DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 	elif event is InputEventMouseButton:
 		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP: camera_distance = clampf(camera_distance / Tuning.CAMERA_ZOOM_STEP, Tuning.CAMERA_DISTANCE_MIN, Tuning.CAMERA_DISTANCE_MAX)
@@ -701,7 +805,7 @@ func _capture():
 	var report = FileAccess.open(capture_path + ".json", FileAccess.WRITE)
 	if report:
 		var state = {"endpoint": Network.endpoint, "connected": Network.online, "authenticated": Network.authed, "online": Network.online_count, "fps": Engine.get_frames_per_second(), "window": hud.window_kind, "music": game_audio.music.cue, "music_playing": game_audio.music.players.any(func(player): return player.playing)}
-		if is_instance_valid(hero): state.merge({"health": hud.hp_text.text, "animation": hero.last_clip, "model": hero.active_art, "mobs": mobs.size(), "ready": not hud.hp_text.text.is_empty() and not hero.last_clip.is_empty()})
+		if is_instance_valid(hero): state.merge({"health": hud.hp_text.text, "animation": hero.last_clip, "model": hero.active_art, "mobs": mobs.size(), "visible_mobs": mobs.values().filter(func(m): return m.visible and not m.dead).size(), "position": [hero.position.x, hero.position.y, hero.position.z], "ready": not hud.hp_text.text.is_empty() and not hero.last_clip.is_empty()})
 		else: state["ready"] = hud.login_panel.visible and Network.online
 		report.store_string(JSON.stringify(state))
 	print("NATIVE_SCREENSHOT_SAVED")

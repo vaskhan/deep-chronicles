@@ -4,6 +4,7 @@ const MAX_EFFECTS = 40
 var active: Array = []
 var casts: Dictionary = {}
 var telegraphs: Dictionary = {}
+var auras: Dictionary = {}
 var counts: Dictionary = {}
 var glow: GradientTexture2D
 
@@ -44,6 +45,7 @@ func _spawn(kind: String, pos: Vector3, duration: float) -> Dictionary:
 func _dispose(fx: Dictionary):
 	if fx.has("owner_id") and casts.get(fx.owner_id) == fx: casts.erase(fx.owner_id)
 	if fx.has("owner_id") and telegraphs.get(fx.owner_id) == fx: telegraphs.erase(fx.owner_id)
+	if fx.has("aura_key") and auras.get(fx.aura_key) == fx: auras.erase(fx.aura_key)
 	if is_instance_valid(fx.node): fx.node.queue_free()
 
 func stop_cast(actor):
@@ -82,6 +84,23 @@ func telegraph(actor, attack: Dictionary, aimed_at_me: bool):
 	fx.warning.billboard = BaseMaterial3D.BILLBOARD_ENABLED; fx.warning.modulate = Color("ffb77d")
 	fx.warning.position.y = actor.label.position.y + 0.3; fx.node.add_child(fx.warning)
 
+## Аура эффекта во времени: живёт, пока эффект активен. Урон, лечение и срок считает сервер,
+## клиент только рисует. key — «объект:эффект», по нему аура и снимается при спаде.
+func aura(actor, key: String, color: Color, duration: float):
+	stop_aura(key)
+	if not is_instance_valid(actor): return
+	var fx = _spawn("aura", actor.global_position, clampf(duration, 0.35, 60.0))
+	fx.actor = weakref(actor); fx.aura_key = key; auras[key] = fx
+	fx.ring = _ring(fx.node, color, 0.7); fx.ring.position.y = 0.12
+	fx.parts = []
+	for i in 6:
+		var mesh = PrismMesh.new(); mesh.size = Vector3(0.07, 0.24, 0.07)
+		fx.parts.append(_mesh(fx.node, mesh, color.lightened(0.15)))
+
+func stop_aura(key: String):
+	if not auras.has(key): return
+	var fx = auras[key]; active.erase(fx); _dispose(fx)
+
 func begin_cast(actor, color: Color, duration: float):
 	if not is_instance_valid(actor): return
 	stop_cast(actor)
@@ -100,9 +119,14 @@ func begin_cast(actor, color: Color, duration: float):
 	for i in 5: fx.orbs.append(_orb(fx.node, color, 0.055 + i * 0.009))
 	fx.focus = _orb(fx.node, color.lightened(0.6), 0.13)
 
-func swing(actor, color = Color("ffe3a0")):
+func swing(actor, color = Color("ffe3a0"), restart = false):
 	if not is_instance_valid(actor) or not is_instance_valid(actor.weapon_node): return
-	var fx = _spawn("swing", actor.global_position, clampf(actor.action_until, 0.25, 0.8))
+	# Start tracking during the windup; release events reuse the same trail.
+	for existing in active.duplicate():
+		if existing.kind == "swing" and existing.actor.get_ref() == actor:
+			if not restart: return
+			active.erase(existing); _dispose(existing)
+	var fx = _spawn("swing", actor.global_position, maxf(actor.action_until + .15, .3))
 	fx.actor = weakref(actor); fx.points = []
 	fx.trail = _mesh(fx.node, ImmediateMesh.new(), color)
 
@@ -150,6 +174,15 @@ func _process(dt):
 			"swing":
 				var actor = fx.actor.get_ref()
 				if is_instance_valid(actor.weapon_node):
+					var cutting = true
+					if actor.animator and actor.animator.current_animation.begins_with("attack"):
+						var phase = actor.animator.current_animation_position / actor.animator.current_animation_length
+						cutting = phase >= .22 and phase <= .35
+					elif actor.animator: cutting = false
+					if not cutting:
+						fx.points.clear(); fx.trail.mesh.clear_surfaces()
+						if u >= 1: active.erase(fx); _dispose(fx)
+						continue
 					var weapon = actor.weapon_node
 					fx.points.append([fx.node.to_local(weapon.to_global(Vector3(0, 0, 0.2))), fx.node.to_local(weapon.to_global(Vector3(0, 0, 1.2)))])
 					if fx.points.size() > 5: fx.points.pop_front()
@@ -159,6 +192,13 @@ func _process(dt):
 						for i in range(1, fx.points.size()):
 							for v in [fx.points[i - 1][0], fx.points[i - 1][1], fx.points[i][1], fx.points[i - 1][0], fx.points[i][1], fx.points[i][0]]: mesh.surface_add_vertex(v)
 						mesh.surface_end()
+			"aura":
+				fx.ring.rotation.y = fx.age * 2.0
+				fx.ring.scale = Vector3.ONE * (0.92 + sin(fx.age * 4.0) * 0.07)
+				for i in fx.parts.size():
+					var a = fx.age * 2.6 + i * TAU / fx.parts.size()
+					fx.parts[i].position = Vector3(cos(a) * 0.78, 0.35 + sin(fx.age * 4.0 + i) * 0.28, sin(a) * 0.78)
+					fx.parts[i].rotation.y = -a
 			"projectile":
 				var victim = fx.target.get_ref()
 				if is_instance_valid(victim): fx.end = victim.global_position + Vector3.UP
@@ -175,7 +215,9 @@ func _process(dt):
 						part.position = Vector3(cos(a) * 0.9, 0.3 + u * 2.8, sin(a) * 0.9)
 					else: part.position = direction * u * fx.radius + Vector3.UP * (1 if fx.kind in ["impact", "critical"] else 0.15)
 					part.rotation = Vector3(u * 2, i, u)
-		if fx.kind not in ["cast", "telegraph"]:
+		if fx.kind == "aura":
+			for mesh in fx.node.find_children("*", "MeshInstance3D", true, false): mesh.material_override.albedo_color.a = clampf((1.0 - u) * 4.0, 0.0, 1.0)
+		elif fx.kind not in ["cast", "telegraph"]:
 			for mesh in fx.node.find_children("*", "MeshInstance3D", true, false): mesh.material_override.albedo_color.a = 1.0 - u
 		if u >= 1:
 			active.erase(fx); _dispose(fx)
@@ -183,4 +225,4 @@ func _process(dt):
 
 func clear():
 	for fx in active: _dispose(fx)
-	active.clear(); casts.clear(); telegraphs.clear()
+	active.clear(); casts.clear(); telegraphs.clear(); auras.clear()

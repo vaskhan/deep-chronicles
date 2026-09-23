@@ -32,7 +32,7 @@ if (!['ws:', 'wss:'].includes(parsed.protocol)) throw new Error('Адрес се
 const local = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
 if (local && !(await ready())) {
   const log = fs.openSync(path.join(runtime, 'server.log'), 'a');
-  const env = { ...process.env, PORT: parsed.port || '8790', DB: path.join(runtime, 'world.db') };
+  const env = { ...process.env, PORT: parsed.port || '8790', DB: path.join(runtime, 'world.db'), HOST: parsed.hostname === '[::1]' ? '::1' : '127.0.0.1' };
   delete env.DEV_CMD;
   const server = spawn(process.execPath, ['--no-warnings', 'server/server.js'], { cwd: root, detached: true, stdio: ['ignore', log, log], env });
   server.unref(); fs.closeSync(log);

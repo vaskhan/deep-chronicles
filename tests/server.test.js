@@ -30,8 +30,8 @@ after(async () => {
 });
 
 // клиент: ждёт сообщения нужного типа
-function client() {
-  const ws = new WebSocket(`ws://localhost:${PORT}`), inbox = [], waiters = [];
+function client(port = PORT, options = {}) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, options), inbox = [], waiters = [];
   ws.on('message', (d) => { const m = JSON.parse(d); const w = waiters.findIndex((x) => x.types.includes(m.t)); if (w >= 0) waiters.splice(w, 1)[0].res(m); else inbox.push(m); });
   return {
     ws, send: (m) => ws.send(JSON.stringify(m)),
@@ -51,11 +51,56 @@ async function untilEv(c, re, what = String(re)) {
 }
 // дождаться профиля, удовлетворяющего условию (сервер шлёт его сам при каждом изменении)
 async function untilP(c, cond, what = 'условие профиля') {
-  for (let i = 0; i < 40; i++) { const m = await c.wait('you', 'snap'); if (m.t === 'you' && cond(m.p)) return m.p; }
+  for (let i = 0; i < 40; i++) { const m = await c.wait('you'); if (cond(m.p)) return m.p; }
   throw new Error('не дождались: ' + what);
 }
 // встать в точку и дать серверу её принять
 const at = async (c, x, z) => { c.send({ t: 'dev', x, z }); await pause(250); c.send({ t: 'st', x, y: 0, z, r: 0, a: 0 }); await pause(150); };
+
+// убить ближайшего моба возле точки и вернуть событие награды
+async function huntAt(c, cx, cz, helper = null) {
+  let mob = null;
+  for (let i = 0; i < 40 && !mob; i++) {
+    const s = await c.wait('snap');
+    const alive = (s.m || []).filter(r => !(r[5] & 8) && Math.hypot(r[1] - cx, r[3] - cz) < 40);
+    if (alive.length) mob = alive.sort((x, y) => Math.hypot(x[1] - cx, x[3] - cz) - Math.hypot(y[1] - cx, y[3] - cz))[0];
+    c.send({ t: 'st', x: cx, y: 0, z: cz, r: 0, a: 0 });
+  }
+  assert.ok(mob, 'сервер не прислал мобов');
+  await at(c, mob[1] + 1, mob[3] + 1);
+  if (helper) await at(helper, mob[1] + 2, mob[3] + 2);
+  c.send({ t: 'atk', id: mob[0], kind: 'm' });
+  // цель уходит на прогулке и в погоне — держимся рядом с её текущим положением
+  let mx = mob[1], mz = mob[3];
+  const killDeadline = Date.now() + 45000;
+  while (Date.now() < killDeadline) {
+    c.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
+    const m = await c.wait('ev', 'snap');
+    if (m.t === 'snap') { const r = (m.m || []).find(r => r[0] === mob[0]); if (r) { mx = r[1]; mz = r[3]; } }
+    const reward = m.t === 'ev' && m.e.find(e => e.k === 'kill');
+    if (reward) return reward;
+  }
+  throw new Error('моб не умер за отведённое время');
+}
+// отдельный сервер со своими рейтами: основной остаётся на значениях по умолчанию
+async function ratedServer(env) {
+  const probe = net.createServer();
+  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port;
+  await new Promise(resolve => probe.close(resolve));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realms-rates-'));
+  const proc = spawn('node', ['--no-warnings', 'server/server.js'], { env: { ...process.env, PORT: String(port), DB: path.join(dir, 'rates.db'), DEV_CMD: '1', AUTH_TRIES: '1000', ...env }, stdio: 'pipe' });
+  const log = { text: '' };
+  for (const stream of [proc.stdout, proc.stderr]) stream.on('data', chunk => { log.text += chunk; });
+  await new Promise(resolve => proc.stdout.once('data', resolve));
+  return { port, log, async stop(name) {
+    proc.kill();
+    await new Promise(resolve => proc.exitCode !== null ? resolve() : proc.once('exit', resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.writeFileSync(`.native-run/${name}`, log.text);
+    assert.doesNotMatch(log.text, /(?:^|\n)(?:Error:|TypeError:|ReferenceError:|FATAL)|UnhandledPromiseRejection|SQLITE_[A-Z]+/);
+  } };
+}
 
 test('heartbeat работает до входа и не создаёт аккаунт', async () => {
   const a = client(); await a.open();
@@ -179,7 +224,7 @@ test('покупка: без монет и вне досягаемости то�
   let p = await untilP(a, (x) => x.coins === 50);
   assert.ok(!p.inv.some((e) => e.id === 'sword_crystal'), 'купил вдали от торговца');
   // рядом с торговцем, но денег не хватает
-  await at(a, -442, 410);
+  await at(a, -450.5, 407);
   a.send({ t: 'buy', id: 'sword_crystal', n: 1 });
   await untilEv(a, /Недостаточно монет/);
   // и настоящая покупка
@@ -243,7 +288,9 @@ test('мобы приходят с сервера и их можно убить'
   const a = client(); await a.open();
   a.send({ t: 'register', name: 'Охотник', pass: 'secret1', cls: 'warrior' });
   await a.wait('authok');
-  a.send({ t: 'dev', lvl: 20, hp: 99999, x: -260, z: 180 });
+  // уровень выбран внутри окна ±5 к здешним мобам (кролик 1, волк 3, кабан 8):
+  // иначе штраф за разницу уровней срезал бы монеты до нуля
+  a.send({ t: 'dev', lvl: 6, hp: 99999, x: -260, z: 180 });
   await pause(400);
   // ждём снапшот с мобами
   let mob = null;
@@ -254,12 +301,14 @@ test('мобы приходят с сервера и их можно убить'
     a.send({ t: 'st', x: -260, y: 0, z: 180, r: 0, a: 0 });
   }
   assert.ok(mob, 'сервер не прислал мобов');
-  // подходим вплотную и бьём
+  // подходим вплотную и бьём; цель может уйти — держимся рядом, как настоящий клиент
   await at(a, mob[1] + 1, mob[3] + 1);
   a.send({ t: 'atk', id: mob[0], kind: 'm' });
-  for (let i = 0; i < 80; i++) {
-    a.send({ t: 'st', x: mob[1] + 1, y: 0, z: mob[3] + 1, r: 0, a: 0 });
+  let mx = mob[1], mz = mob[3];
+  for (let i = 0; i < 120; i++) {
+    a.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
     const m = await a.wait('ev', 'snap');
+    if (m.t === 'snap') { const r = (m.m || []).find((r) => r[0] === mob[0]); if (r) { mx = r[1]; mz = r[3]; } }
     if (m.t === 'ev' && m.e.some((e) => e.k === 'kill')) {
       const reward = m.e.find(e => e.k === 'kill');
       assert.equal(reward.ground, false, 'автолут включён для нового персонажа');
@@ -413,11 +462,59 @@ test('SP/обучение/автолут по WS: класс, уровень, д
   } finally {a.ws.close();await a.closed();}
 });
 
+test('профессия по WS: рано, чужой класс, повтор, успешный выбор и сохранение после перезахода', async () => {
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'Новобранец', pass: 'prof-test', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    assert.equal(auth.p.prof, null);
+    assert.equal((await a.wait('hi')).features.professions, 1);
+    // до 20 уровня профессия недоступна
+    a.send({ t: 'prof', id: 'knight' }); await untilEv(a, /уровня/);
+    a.send({ t: 'dev', lvl: 20, sp: 100000 }); await untilP(a, p => p.lvl === 20 && p.sp === 100000);
+    // слишком частые попытки сервер отбивает и объясняет
+    a.send({ t: 'prof', id: 'knight' }); await untilEv(a, /Слишком часто/);
+    await pause(1100);
+    // чужой класс и выдуманный id отклоняются
+    a.send({ t: 'prof', id: 'sorcerer' }); await untilEv(a, /недоступна вашему классу/);
+    await pause(1100);
+    a.send({ t: 'prof', id: 'нет-такой' }); await untilEv(a, /недоступна вашему классу/);
+    await pause(1100);
+    // умение профессии нельзя выучить до выбора
+    a.send({ t: 'learn', id: 'shield_bash', rank: 1 }); await untilEv(a, /профессии/);
+    a.send({ t: 'prof', id: 'knight' });
+    const chosen = await untilP(a, p => p.prof === 'knight');
+    assert.equal(chosen.prof, 'knight');
+    // повторный выбор не перезаписывает профессию
+    await pause(1100);
+    a.send({ t: 'prof', id: 'berserker' }); await untilEv(a, /уже выбрана/);
+    // умение профессии учится за SP по общим правилам
+    a.send({ t: 'learn', id: 'shield_bash', rank: 1 });
+    const learned = await untilP(a, p => p.skills.shield_bash === 1);
+    const { skillRanks } = await import('../src/progression.js');
+    assert.equal(learned.sp, 100000 - skillRanks('shield_bash')[0].sp);
+    assert.equal(learned.prof, 'knight');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(DB, { readOnly: true });
+    const saved = JSON.parse(db.prepare('SELECT save FROM accounts WHERE key = ?').get('новобранец').save); db.close();
+    assert.equal(saved.prof, 'knight');
+    a.ws.close(); await a.closed(); await pause(150);
+    const b = client(); await b.open();
+    try {
+      b.send({ t: 'auth', token: auth.token });
+      const ok = await b.wait('authok');
+      assert.equal(ok.p.prof, 'knight');
+      assert.equal(ok.p.skills.shield_bash, 1);
+      assert.equal(ok.p.sp, learned.sp);
+    } finally { b.ws.close(); await b.closed(); }
+  } finally { a.ws.close(); await a.closed(); }
+});
+
 test('изготовление по WS: списание материалов, повтор заказа и сохранение', async () => {
   const a=client();await a.open();
   try {
     a.send({t:'register',name:'Кузнец',pass:'craft-test',cls:'mage'});await a.wait('authok');
-    a.send({t:'dev',lvl:8,coins:1000,item:'pelt',n:40,x:-442,z:410});await untilP(a,p=>p.inv.some(e=>e.id==='pelt'));
+    a.send({t:'dev',lvl:8,coins:1000,item:'pelt',n:40,x:-450.5,z:407});await untilP(a,p=>p.inv.some(e=>e.id==='pelt'));
     a.send({t:'dev',item:'bone',n:40});await untilP(a,p=>p.inv.some(e=>e.id==='bone'));
     const order={t:'craft',id:'staff_oak',request:'native-order-0001'};a.send(order);a.send(order);
     const p=await untilP(a,p=>p.inv.some(e=>e.id==='staff_oak'));
@@ -427,6 +524,111 @@ test('изготовление по WS: списание материалов, �
     const saved=JSON.parse(db.prepare('SELECT save FROM accounts WHERE key = ?').get('кузнец').save);db.close();
     assert.equal(saved.coins,700);assert.deepEqual(saved.craftReceipts,['native-order-0001']);
   } finally {a.ws.close();await a.closed();}
+});
+
+test('отклоненный телепорт и respawn живого не разрешают произвольное перемещение', async () => {
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'БезРывка', pass: 'secret1', cls: 'warrior' });
+    const { p } = await a.wait('authok');
+    for (const command of [{ t: 'respawn' }, { t: 'tp', id: 'missing' }]) {
+      a.send(command);
+      a.send({ t: 'st', x: p.x + 500, z: p.z, y: 0, r: 0, a: 0 });
+      const reply = await a.wait('fix', 'snap');
+      assert.equal(reply.t === 'fix' ? reply.x : reply.me.x, p.x);
+      if (reply.t !== 'fix') assert.equal((await a.wait('fix')).x, p.x);
+    }
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('вход вторым устройством получает последнее состояние через пароль и токен', async () => {
+  const a = client(), b = client(), c = client(); await Promise.all([a.open(), b.open(), c.open()]);
+  try {
+    a.send({ t: 'register', name: 'ПереносСессии', pass: 'secret1', cls: 'warrior' });
+    const first = await a.wait('authok');
+    a.send({ t: 'unequip', slot: 'weapon' });
+    const before = await untilP(a, p => !p.equip.weapon);
+    b.send({ t: 'auth', token: first.token });
+    const second = await b.wait('authok');
+    assert.deepEqual(second.p.inv, before.inv); assert.equal(second.p.equip.weapon, null);
+    const idx = second.p.inv.findIndex(e => e.id === 'sword_novice');
+    b.send({ t: 'equip', idx });
+    const equipped = await untilP(b, p => p.equip.weapon === 'sword_novice');
+    c.send({ t: 'login', name: 'ПереносСессии', pass: 'secret1' });
+    const third = await c.wait('authok');
+    assert.equal(third.p.equip.weapon, 'sword_novice'); assert.deepEqual(third.p.inv, equipped.inv);
+  } finally { for (const x of [a,b,c]) x.ws.close(); await Promise.all([a.closed(),b.closed(),c.closed()]); }
+});
+
+test('законный телепорт принимает новую позицию, отклоняет старую и не отключает проверку скорости', async () => {
+  const { buildProps, TELEPORTS } = await import('../src/world-core.js');
+  const gate = buildProps().npcs.find(n => n.role === 'gatekeeper');
+  const destination = TELEPORTS.find(t => Math.hypot(t.x - gate.x, t.z - gate.z) > 100);
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'ЗаконныйПеренос', pass: 'secret1', cls: 'warrior' }); await a.wait('authok');
+    await at(a, gate.x, gate.z);
+    a.send({ t: 'dev', coins: 100000 }); await untilP(a, p => p.coins === 100000);
+    a.send({ t: 'tp', id: destination.id });
+    const teleported = await untilP(a, p => p.x === destination.x && p.z === destination.z);
+    assert.equal(teleported.coins, 100000 - destination.cost);
+    a.send({ t: 'st', x: gate.x, z: gate.z, y: 0, r: 0, a: 0 });
+    const staleFix = await a.wait('fix');
+    assert.equal(staleFix.x, destination.x); assert.equal(staleFix.z, destination.z);
+    a.send({ t: 'st', x: destination.x, z: destination.z, y: 0, r: 0, a: 0 });
+    // Move one metre from the destination: a normal movement must remain valid.
+    a.send({ t: 'st', x: destination.x + 1, z: destination.z, y: 0, r: 0, a: 1 });
+    let moved;
+    for (let i = 0; i < 30; i++) { const m = await a.wait('snap', 'fix'); assert.notEqual(m.t, 'fix'); if (m.me.x === destination.x + 1) { moved = m; break; } }
+    assert.ok(moved, 'нормальное движение после телепорта не принято');
+    a.send({ t: 'st', x: destination.x + 500, z: destination.z, y: 0, r: 0, a: 1 });
+    assert.equal((await a.wait('fix')).x, destination.x + 1);
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('смерть переживает вход; мертвый не перемещается, после respawn можно двигаться', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const spawns = buildProps().spawns, index = spawns.findIndex(s => s.mob === 'orc'), mob = spawns[index];
+  const a = client(), b = client(); await Promise.all([a.open(), b.open()]);
+  try {
+    a.send({ t: 'register', name: 'СмертьСохранена', pass: 'secret1', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    await at(a, mob.x, mob.z);
+    a.send({ t: 'dev', hp: 1 });
+    a.send({ t: 'atk', id: index + 1, kind: 'm' });
+    await untilEv(a, /"k":"dead"/);
+    b.send({ t: 'auth', token: auth.token });
+    const dead = await b.wait('authok'); assert.equal(dead.p.dead, true); assert.equal(dead.p.hp, 0);
+    b.send({ t: 'st', x: dead.p.x + 1, z: dead.p.z, y: 0, r: 0, a: 0 });
+    const fixed = await b.wait('fix'); assert.equal(fixed.x, dead.p.x); assert.equal(fixed.z, dead.p.z);
+    b.send({ t: 'respawn' });
+    const alive = await untilP(b, p => !p.dead && p.hp > 0);
+    b.send({ t: 'st', x: alive.x + 1, z: alive.z, y: 0, r: 0, a: 1 });
+    let moved;
+    for (let i = 0; i < 30; i++) { const m = await b.wait('snap', 'fix'); assert.notEqual(m.t, 'fix'); if (m.me.x === alive.x + 1) { moved = m; break; } }
+    assert.ok(moved);
+  } finally { a.ws.close(); b.ws.close(); await Promise.all([a.closed(), b.closed()]); }
+});
+
+test('сервер отвергает срезание фонтана, но принимает путь вокруг края', async () => {
+  const c=client(), other=client(); await Promise.all([c.open(),other.open()]);
+  try {
+    c.send({t:'register',name:'ПутьФонтан',pass:'secret1',cls:'war'}); await c.wait('authok');
+    await at(c,-435.1,400);
+    c.send({t:'st',x:-430,z:405.1,r:0,a:1});
+    const correction=await c.wait('fix'); assert.equal(correction.x,-435.1);
+    const path=Array.from({length:32},(_,i)=>{const t=Math.PI-(i+1)*Math.PI/64;return{x:-430+5.1*Math.cos(t),z:400+5.1*Math.sin(t)};});
+    // Send the arc at the restored running speed, not as an 8 m burst.
+    for(let i=0;i<path.length;i+=8){
+      await pause(350);
+      const section=path.slice(i,i+8);
+      c.send({t:'st',...section.at(-1),path:section,r:0,a:1});
+    }
+    await pause(150);
+    other.send({t:'login',name:'ПутьФонтан',pass:'secret1'});
+    const auth=await other.wait('authok');
+    assert.ok(Math.abs(auth.p.x+430)<.001); assert.ok(Math.abs(auth.p.z-405.1)<.001);
+  } finally { c.ws.close(); other.ws.close(); await Promise.all([c.closed(),other.closed()]); }
 });
 
 test('оба клиента видят серверный замах моба; уход из сектора предотвращает урон', async () => {
@@ -502,9 +704,11 @@ test('пати делит реальные XP/SP, защищает группо�
     let state; do {state=await a.wait('party');} while(state.mode!=='pickup');
     a.send({t:'chat',ch:'party',text:'group-private-marker'});
     assert.equal((await b.wait('chat')).text,'group-private-marker');
-    await at(a,-285,387);await at(b,-285,388);await at(outsider,-285,389);
+    const {HUNTING_CAMPS}=await import('../src/world-core.js');
+    const camp=HUNTING_CAMPS.find(c=>c.id==='east_rabbits');
+    await at(a,camp.x,camp.z);await at(b,camp.x,camp.z+1);await at(outsider,camp.x,camp.z+2);
     let mob;
-    for(let i=0;i<40&&!mob;i++) {const s=await a.wait('snap');mob=s.m.filter(r=>!(r[5]&8)&&Math.hypot(r[1]+285,r[3]-387)<25).sort((x,y)=>Math.hypot(x[1]+285,x[3]-387)-Math.hypot(y[1]+285,y[3]-387))[0];}
+    for(let i=0;i<40&&!mob;i++) {const s=await a.wait('snap');mob=s.m.filter(r=>!(r[5]&8)&&Math.hypot(r[1]-camp.x,r[3]-camp.z)<25).sort((x,y)=>Math.hypot(x[1]-camp.x,x[3]-camp.z)-Math.hypot(y[1]-camp.x,y[3]-camp.z))[0];}
     assert.ok(mob);await at(a,mob[1]+1,mob[3]+1);await at(b,mob[1]+2,mob[3]+2);
     a.send({t:'atk',kind:'m',id:mob[0]});
     const killed=(await untilEv(a,/"k":"kill"/)).find(e=>e.k==='kill');
@@ -512,7 +716,8 @@ test('пати делит реальные XP/SP, защищает группо�
     const {MOBS}=await import('../src/data.js'); const {spForKill}=await import('../src/progression.js');
     assert.equal(killed.xp+shared.xp,MOBS[killed.mob].xp);assert.equal(killed.sp+shared.sp,spForKill(MOBS[killed.mob].xp));
     const pa=await untilP(a,p=>p.kills===1),pb=await untilP(b,p=>p.kills===1);assert.equal(pa.coins,150);assert.equal(pb.coins,150,'pickup policy suppresses autoloot');
-    let drops=[];for(let i=0;i<40&&!drops.length;i++)drops=(await b.wait('snap')).g.filter(d=>d.available&&d.item==='coins');
+    let drops=[];const dropDeadline=Date.now()+5000;
+    while(!drops.length && Date.now()<dropDeadline) drops=(await b.wait('snap')).g.filter(d=>d.available&&d.item==='coins');
     const drop=drops[0];assert.ok(drop);await at(outsider,drop.x,drop.z);outsider.send({t:'pickup',id:drop.id});assert.match((await outsider.wait('pickup_err')).reason,/принадлежит/);
     await at(b,drop.x,drop.z);b.send({t:'pickup',id:drop.id});const rewarded=await untilP(b,p=>p.coins>150);assert.equal(rewarded.coins,150+drop.n);
     a.send({t:'pickup',id:drop.id});assert.ok((await a.wait('pickup_err')).reason);
@@ -521,4 +726,714 @@ test('пати делит реальные XP/SP, защищает группо�
     do {state=await a.wait('party');} while(state.members.length);assert.equal(state.id,null);
     assert.equal(bb.p.cls,'mage');
   } finally { for(const c of [a,b,outsider])c.ws.close();await Promise.all([a.closed(),b.closed(),outsider.closed()]); }
+});
+
+test('эффект во времени тикает без новых команд, ослабляет цель и спадает сам', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const spawns = buildProps().spawns;
+  // Голем не агрессивен и достаточно живуч, чтобы пережить всё кровотечение целиком.
+  const index = spawns.findIndex((s) => s.mob === 'golem');
+  const mobId = index + 1, spawn = spawns[index];
+  const a = client(); await a.open();
+  const events = [];
+  a.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'ev') events.push(...m.e); });
+  try {
+    a.send({ t: 'register', name: 'МагПечати', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    a.send({ t: 'dev', lvl: 30, sp: 100000, hp: 99999, x: spawn.x + 9, z: spawn.z });
+    await pause(300);
+    a.send({ t: 'learn', id: 'curse', rank: 1 });
+    await untilP(a, (p) => p.skills.curse === 1, 'изучена Печать немощи');
+    await at(a, spawn.x + 9, spawn.z);
+    a.send({ t: 'atk', id: mobId, kind: 'm', hold: true });
+    a.send({ t: 'skill', id: 'curse' });
+    // наложение: и урон со временем, и ослабление атаки — два отдельных эффекта на одной цели
+    const applied = [];
+    for (let i = 0; i < 80 && applied.length < 2; i++) {
+      await pause(100);
+      for (const e of events) if (e.k === 'fx' && e.up && e.m === mobId && !applied.includes(e.kind)) applied.push(e.kind);
+    }
+    assert.deepEqual(applied.sort(), ['debuff', 'dot'], 'печать наложила урон со временем и ослабление');
+    assert.ok(events.filter((e) => e.k === 'fx' && e.up && e.m === mobId && e.kind === 'dot').length === 1, 'эффект не задвоился');
+    const applyEvent = events.find((e) => e.k === 'fx' && e.up && e.kind === 'dot');
+    assert.ok(applyEvent.dur > 5000, 'клиенту пришёл реальный срок действия');
+    // цель видна в снапшоте со своими эффектами
+    let row = null;
+    for (let i = 0; i < 40 && !row; i++) { const s = await a.wait('snap'); row = (s.m || []).find((r) => r[0] === mobId && r.length > 8); }
+    assert.ok(row, 'снапшот моба несёт список эффектов');
+    assert.deepEqual(row[8].map((e) => e[1]).sort(), ['debuff', 'dot']);
+    assert.ok(row[8].every((e) => e[2] > 0), 'у каждого эффекта есть остаток срока');
+    // тики идут сами: новых команд нет, а урон продолжает приходить
+    const before = events.filter((e) => e.k === 'hit' && e.m === mobId && e.dot).length;
+    await pause(3500);
+    const ticks = events.filter((e) => e.k === 'hit' && e.m === mobId && e.dot);
+    assert.ok(ticks.length > before, `урон со временем не тикал: ${ticks.length}`);
+    assert.ok(ticks.every((e) => e.dmg > 0));
+    // спад приходит сам, без единой команды
+    for (let i = 0; i < 100 && !events.some((e) => e.k === 'fx' && !e.up && e.m === mobId); i++) await pause(150);
+    const ended = events.filter((e) => e.k === 'fx' && !e.up && e.m === mobId);
+    assert.equal(ended.length, 2, 'оба эффекта спали сами');
+    // в очереди ещё лежат снимки, снятые до спада, — ждём первый снимок уже без эффектов
+    let after = null;
+    for (let i = 0; i < 120 && after !== 8; i++) { const s = await a.wait('snap'); const r = (s.m || []).find((x) => x[0] === mobId); if (r) after = r.length; }
+    assert.equal(after, 8, `снапшот вернулся к прежней длине строки, получено ${after}`);
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('лечение со временем и вампиризм работают на самом игроке', async () => {
+  const a = client(); await a.open();
+  const events = [];
+  a.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'ev') events.push(...m.e); });
+  try {
+    a.send({ t: 'register', name: 'ЖрецГлубин', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    a.send({ t: 'dev', lvl: 20, sp: 100000, hp: 40, x: -430, z: 388 });
+    await pause(300);
+    a.send({ t: 'learn', id: 'heal', rank: 1 });
+    await untilP(a, (p) => p.skills.heal === 1, 'изучено Исцеление');
+    a.send({ t: 'dev', hp: 40 });
+    await pause(200);
+    a.send({ t: 'skill', id: 'heal' });
+    for (let i = 0; i < 60 && !events.some((e) => e.k === 'fx' && e.up && e.kind === 'hot'); i++) await pause(100);
+    const hot = events.find((e) => e.k === 'fx' && e.up && e.kind === 'hot');
+    assert.ok(hot, 'исцеление оставило лечение со временем');
+    assert.ok(String(hot.id).startsWith('heal'), hot.id);
+    let mine = null;
+    for (let i = 0; i < 40 && !mine; i++) { const s = await a.wait('snap'); if (s.me && s.me.fx) mine = s.me.fx; }
+    assert.ok(mine.some((e) => e[1] === 'hot' && e[2] > 0), 'снапшот игрока несёт свои эффекты с таймером');
+    for (let i = 0; i < 60 && !events.some((e) => e.k === 'heal' && e.hot); i++) await pause(100);
+    assert.ok(events.some((e) => e.k === 'heal' && e.hot && e.amount > 0), 'лечение со временем реально вернуло здоровье');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('элитный моб сильнее и даёт больше награды, чем обычный того же вида', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const { rankedDef, ELITE } = await import('../src/elites.js');
+  const { MOBS } = await import('../src/data.js');
+  const spawns = buildProps().spawns;
+  const defs = spawns.map((sp, i) => rankedDef(MOBS[sp.mob], sp, i + 1));
+  const eliteIndex = defs.findIndex((d, i) => d.rank === 'elite' && spawns[i].mob === 'rabbit');
+  assert.ok(eliteIndex >= 0, 'в мире нет элитного кролика для сравнения');
+  const plainIndex = spawns.findIndex((sp, i) => sp.mob === 'rabbit' && !defs[i].rank && !sp.camp);
+  const a = client(); await a.open();
+  const seen = new Map();
+  a.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'mobs') for (const row of m.n) seen.set(row[0], row); });
+  const killAt = async (index) => {
+    const id = index + 1, spawn = spawns[index];
+    await at(a, spawn.x + 1, spawn.z + 1);
+    a.send({ t: 'atk', id, kind: 'm' });
+    let mx = spawn.x, mz = spawn.z;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      a.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
+      const m = await a.wait('ev', 'snap');
+      if (m.t === 'snap') { const row = m.m?.find(r => r[0] === id); if (row) { mx = row[1]; mz = row[3]; } }
+      if (m.t === 'ev') { const kill = m.e.find((e) => e.k === 'kill'); if (kill) return kill; }
+    }
+    throw new Error('моб не умер за отведённое время');
+  };
+  try {
+    a.send({ t: 'register', name: 'ОхотникНаЭлиту', pass: 'test-secret', cls: 'warrior' });
+    await a.wait('authok');
+    a.send({ t: 'dev', hp: 99999 });
+    await pause(200);
+    const plain = await killAt(plainIndex);
+    const elite = await killAt(eliteIndex);
+    assert.equal(elite.xp, plain.xp * ELITE.reward, `опыт элиты ${elite.xp} против обычного ${plain.xp}`);
+    assert.ok(elite.coins >= MOBS.rabbit.coins[0] * ELITE.reward, `монеты элиты ${elite.coins}`);
+    assert.ok(elite.coins <= MOBS.rabbit.coins[1] * ELITE.reward);
+    // клиент получает ранг, готовое имя и увеличенный размер, а не вычисляет их сам
+    const row = seen.get(eliteIndex + 1);
+    assert.ok(row && row.length === 5, 'элита пришла расширенной строкой в mobs');
+    assert.equal(row[2], 'elite');
+    assert.ok(String(row[3]).includes('элита'), row[3]);
+    assert.ok(row[4] > MOBS.rabbit.size, 'размер элиты больше обычного');
+    assert.equal(seen.get(plainIndex + 1).length, 2, 'обычный моб прежней строкой');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('соседи того же семейства вступаются за сородича', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const { SOCIAL_R } = await import('../src/pack.js');
+  const { MOBS } = await import('../src/data.js');
+  const spawns = buildProps().spawns;
+  const kin = (m) => MOBS[m].fam || m;
+  // пара сородичей, чьи точки спавна стоят ближе радиуса крика
+  let first = -1, second = -1;
+  for (let i = 0; i < spawns.length && first < 0; i++) for (let j = i + 1; j < spawns.length; j++) {
+    const x = spawns[i], y = spawns[j];
+    if (x.camp || y.camp || !MOBS[x.mob].social || !MOBS[y.mob].social) continue;
+    if (kin(x.mob) !== kin(y.mob) || Math.hypot(x.x - y.x, x.z - y.z) > SOCIAL_R) continue;
+    first = i; second = j; break;
+  }
+  assert.ok(first >= 0, 'в мире нет пары сородичей в радиусе стаи');
+  const victimId = first + 1, allyId = second + 1;
+  const a = client(); await a.open();
+  const dist = (r, x, z) => Math.hypot(r[1] - x, r[3] - z);
+  try {
+    a.send({ t: 'register', name: 'ЗовСтаи', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    // Пауки агрессивны сами: встаём вне их радиуса агрессии (14), но в пределах огненной стрелы.
+    const AWAY = 24;
+    let lastMiss = null;
+    // мобы бродят случайно, а соседние тесты могли их увести: несколько попыток расстановки
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const ax = spawns[first].x - spawns[second].x, az = spawns[first].z - spawns[second].z;
+      const len = Math.hypot(ax, az) || 1;
+      a.send({ t: 'dev', hp: 99999, x: spawns[first].x + (ax / len) * AWAY, z: spawns[first].z + (az / len) * AWAY });
+      await pause(400);
+      let victim = null, ally = null, x = 0, z = 0;
+      // мобы бродят вокруг своих точек — ждём мгновения, когда расстановка нужная
+      for (let i = 0; i < 50 && !(victim && ally); i++) {
+        const s = await a.wait('snap');
+        x = s.me.x; z = s.me.z;
+        const v = (s.m || []).find((r) => r[0] === victimId && !(r[5] & 8));
+        const k = (s.m || []).find((r) => r[0] === allyId && !(r[5] & 8));
+        if (!v || !k) continue;
+        // жертва в пределах огненной стрелы и вне своей агрессии, сородич — вне своей, но в радиусе крика
+        if (dist(v, x, z) > 27 || dist(v, x, z) < 15 || dist(k, x, z) < 16) continue;
+        if (Math.hypot(k[1] - v[1], k[3] - v[3]) > SOCIAL_R) continue;
+        victim = v; ally = k;
+      }
+      if (!victim || !ally) continue;
+      const startDistance = dist(ally, x, z);
+      const hits = [];
+      const listener = (raw) => { const m = JSON.parse(raw); if (m.t === 'ev') for (const e of m.e) if (e.k === 'hit' && e.m === victimId) hits.push(e); };
+      a.ws.on('message', listener);
+      a.send({ t: 'atk', id: victimId, kind: 'm', hold: true });
+      a.send({ t: 'skill', id: 'fire_bolt' });
+      let closed = false;
+      for (let i = 0; i < 70 && !closed; i++) {
+        const s = await a.wait('snap');
+        a.send({ t: 'st', x, y: 0, z, r: 0, a: 0 });
+        const now = (s.m || []).find((r) => r[0] === allyId);
+        if (now && startDistance - dist(now, x, z) > 8) closed = true;
+      }
+      a.ws.off('message', listener);
+      if (!hits.length) continue; // выстрел не дошёл — пробуем снова из новой расстановки
+      // Сородич, уже занятый погоней или возвратом домой (src/pack.js), на крик не отвечает:
+      // в полном наборе его мог увести соседний тест. Такая попытка не считается.
+      if (!closed) { lastMiss = startDistance; continue; }
+      return;
+    }
+    throw new Error(lastMiss != null ? `сородич не пошёл на помощь ни в одной попытке: было ${lastMiss.toFixed(1)}` : 'не удалось поймать пару сородичей в нужной расстановке');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+// Рейты проверяются на отдельном сервере: основной остаётся на значениях по умолчанию.
+test('рейты сервера: RATE_XP=3 утраивает опыт за того же моба, дележ в группе сходится без потери единиц', async () => {
+  const { MOBS } = await import('../src/data.js');
+  const { xpForKill } = await import('../src/sim.js');
+  const { levelFactor } = await import('../src/rates.js');
+  const { spForKill } = await import('../src/progression.js');
+  const server = await ratedServer({ RATE_XP: '3', RATE_SP: '3', RATE_COINS: '2' });
+  const solo = client(server.port), lead = client(server.port), mate = client(server.port);
+  try {
+    await Promise.all([solo.open(), lead.open(), mate.open()]);
+    const hi = await solo.wait('hi');
+    assert.equal(hi.features.rates, 1, 'сервер объявляет поддержку рейтов');
+    assert.equal(hi.rates.xp, 3); assert.equal(hi.rates.sp, 3); assert.equal(hi.rates.coins, 2);
+    assert.equal(hi.rates.dropChance, 1, 'ненастроенные коэффициенты остаются единицей');
+    assert.equal(hi.rates.levelGap5, 0.75, 'кривая разницы уровней приходит клиенту');
+
+    solo.send({ t: 'register', name: 'РейтОдиночка', pass: 'secret1', cls: 'warrior' });
+    await solo.wait('authok');
+    solo.send({ t: 'dev', lvl: 6, hp: 99999, x: -260, z: 180 }); await pause(400);
+    const reward = await huntAt(solo, -260, 180);
+    const def = MOBS[reward.mob];
+    assert.equal(reward.xp, Math.max(1, Math.round(xpForKill(def, 6) * 3)), 'опыт втрое больше обычного');
+    assert.equal(reward.sp, Math.max(1, Math.round(spForKill(xpForKill(def, 6)) * 3)), 'SP втрое больше обычного');
+    const near = levelFactor(def.lvl, 6);
+    assert.ok(reward.coins >= Math.round(def.coins[0] * near * 2) && reward.coins <= Math.round(def.coins[1] * near * 2), `монеты с рейтом: ${reward.coins}`);
+
+    lead.send({ t: 'register', name: 'РейтЛидер', pass: 'secret1', cls: 'warrior' });
+    mate.send({ t: 'register', name: 'РейтТоварищ', pass: 'secret1', cls: 'mage' });
+    const [leadAuth] = await Promise.all([lead.wait('authok'), mate.wait('authok')]);
+    lead.send({ t: 'dev', lvl: 6, hp: 99999, x: -260, z: 180 });
+    mate.send({ t: 'dev', lvl: 6, hp: 99999, x: -260, z: 180 }); await pause(400);
+    lead.send({ t: 'party', action: 'invite', name: 'РейтТоварищ' }); await mate.wait('party_invite');
+    mate.send({ t: 'party', action: 'accept', from: leadAuth.id });
+    assert.equal((await lead.wait('party')).members.length, 2);
+    const leaderShare = await huntAt(lead, -260, 180, mate);
+    const mateShare = (await untilEv(mate, /"k":"kill"/)).find(e => e.k === 'kill');
+    const total = Math.max(1, Math.round(xpForKill(MOBS[leaderShare.mob], 6) * 3));
+    assert.equal(leaderShare.xp + mateShare.xp, total, 'сумма долей равна награде с рейтом');
+    assert.equal(leaderShare.sp + mateShare.sp, Math.max(1, Math.round(spForKill(xpForKill(MOBS[leaderShare.mob], 6)) * 3)), 'SP делятся без потери единиц');
+    assert.ok([leaderShare.xp, mateShare.xp, leaderShare.sp, mateShare.sp].every(Number.isInteger), 'доли целые');
+    assert.match(server.log.text, /\[rates\] Рейты сервера: опыт ×3/, 'итоговые рейты записаны в журнал');
+  } finally {
+    for (const c of [solo, lead, mate]) c.ws.close();
+    await Promise.all([solo.closed(), lead.closed(), mate.closed()]);
+    await server.stop('server-rates.log');
+  }
+});
+
+// Ступени разницы уровней: с десятого уровня разницы награды нет вовсе — это проверяется вживую.
+test('разница уровней: слабый моб высокому уровню не даёт ни опыта, ни монет, ни дропа', async () => {
+  const { MOBS } = await import('../src/data.js');
+  const { HUNTING_CAMPS } = await import('../src/world-core.js');
+  // Координаты берём из общих данных: расстановка лагерей менялась вместе с городами.
+  const camp = HUNTING_CAMPS.find((c) => MOBS[c.mob].lvl <= 3);
+  assert.ok(camp, 'нет стартового лагеря для проверки');
+  const server = await ratedServer({ RATE_DROP_CHANCE: '100', RATE_LEVEL_GAP_9: '0.5' });
+  const high = client(server.port), even = client(server.port);
+  const bagSize = (p) => p.inv.reduce((n, e) => n + e.n, 0);
+  try {
+    await Promise.all([high.open(), even.open()]);
+    const hi = await high.wait('hi');
+    assert.equal(hi.rates.levelGap9, 0.5, 'сервер задал свою ступень девятого уровня');
+    assert.equal(hi.rates.levelGap4, 0.9, 'остальные ступени остались по умолчанию');
+
+    even.send({ t: 'register', name: 'РовняОхотник', pass: 'secret1', cls: 'warrior' });
+    const evenAuth = await even.wait('authok');
+    const evenBefore = bagSize(evenAuth.p);
+    even.send({ t: 'dev', lvl: 3, hp: 99999, x: camp.x, z: camp.z }); await pause(400);
+    const fair = await huntAt(even, camp.x, camp.z);
+    assert.ok(MOBS[fair.mob].lvl <= 5, 'в стартовом лагере мобы не выше пятого уровня');
+    assert.equal(fair.xp, MOBS[fair.mob].xp, 'разница до трёх уровней даёт полный опыт');
+    assert.ok(fair.coins >= MOBS[fair.mob].coins[0] && fair.coins <= MOBS[fair.mob].coins[1], `монеты без штрафа: ${fair.coins}`);
+    const evenAfter = await untilP(even, p => p.kills === 1);
+    assert.ok(bagSize(evenAfter) > evenBefore, 'без штрафа вещи с моба падают');
+    assert.ok(evenAfter.coins > 150, 'без штрафа монеты зачислены');
+
+    high.send({ t: 'register', name: 'ВысокийОхотник', pass: 'secret1', cls: 'warrior' });
+    const highAuth = await high.wait('authok');
+    const highBefore = bagSize(highAuth.p);
+    high.send({ t: 'dev', lvl: 40, hp: 99999, x: camp.x, z: camp.z }); await pause(400);
+    const punished = await huntAt(high, camp.x, camp.z);
+    assert.equal(punished.xp, 0, 'с десяти уровней разницы опыта нет');
+    assert.equal(punished.sp, 0, 'SP тоже нет');
+    assert.equal(punished.coins, 0, 'монеты срезаны тем же правилом');
+    assert.ok(punished.coins < MOBS[punished.mob].coins[0], 'монет меньше любого обычного броска');
+    const highAfter = await untilP(high, p => p.kills === 1);
+    assert.equal(bagSize(highAfter), highBefore, 'дроп срезан: вещей не прибавилось');
+    assert.equal(highAfter.coins, 150, 'кошелёк не изменился');
+    assert.equal(highAfter.sp, 0, 'SP в профиле не выросли');
+  } finally {
+    for (const c of [high, even]) c.ws.close();
+    await Promise.all([high.closed(), even.closed()]);
+    await server.stop('server-level-gap.log');
+  }
+});
+
+// Громовое ущелье (src/gorge.js): перенос у Хранителя врат, настоящий бой со стайным мобом зоны,
+// награда по ступеням разницы уровней (src/rates.js::levelFactor) — полная и урезанная.
+test('Громовое ущелье: телепорт у Хранителя врат, моб зоны убивается, награда по ступеням разницы уровней', async () => {
+  const { buildProps, TELEPORTS } = await import('../src/world-core.js');
+  const { MOBS } = await import('../src/data.js');
+  const { rankedDef } = await import('../src/elites.js');
+  const { levelFactor, DEFAULT_RATES } = await import('../src/rates.js');
+  const { spawns, npcs } = buildProps();
+  const gate = npcs.find(n => n.role === 'gatekeeper'), tp = TELEPORTS.find(t => t.id === 'gorge');
+  // обычные (без ранга) скальные пауки первой стаи: ранг утроил бы награду
+  const plain = spawns.map((sp, i) => ({ ...sp, id: i + 1 })).filter(sp => sp.mob === 'cliff_spider' && !rankedDef(MOBS.cliff_spider, sp, sp.id).rank);
+  assert.ok(plain.length >= 2, 'в ущелье есть обычные скальные пауки');
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'Горец', pass: 'secret1', cls: 'warrior' }); await a.wait('authok');
+    await at(a, gate.x, gate.z);
+    a.send({ t: 'dev', coins: 5000 }); await untilP(a, p => p.coins === 5000, 'монеты на перенос');
+    a.send({ t: 'tp', id: 'gorge' });
+    const arrived = await untilP(a, p => p.x === tp.x && p.z === tp.z, 'перенос в ущелье');
+    assert.equal(arrived.coins, 5000 - tp.cost);
+    a.send({ t: 'dev', lvl: 26, hp: 99999, item: 'sword_dragon' });
+    const p = await untilP(a, p => p.lvl === 26 && p.inv.some(e => e.id === 'sword_dragon'), 'уровень 26 и меч в сумке');
+    a.send({ t: 'equip', idx: p.inv.findIndex(e => e.id === 'sword_dragon') });
+    await untilP(a, p => p.equip.weapon === 'sword_dragon', 'меч надет');
+    // убить конкретного моба по id и вернуть событие награды
+    const kill = async (target) => {
+      await at(a, target.x + 1, target.z + 1);
+      a.send({ t: 'atk', id: target.id, kind: 'm' });
+      let mx = target.x, mz = target.z;
+      for (let i = 0; i < 1500; i++) {
+        a.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
+        // профиль в бою приходит часто (здоровье, опыт) — разбираем его здесь, чтобы не копился в очереди
+        const m = await a.wait('ev', 'snap', 'you');
+        if (m.t === 'snap') { const r = (m.m || []).find(r => r[0] === target.id); if (r) { mx = r[1]; mz = r[3]; } a.send({ t: 'dev', hp: 99999 }); }
+        const reward = m.t === 'ev' && m.e.find(e => e.k === 'kill' && e.mob === 'cliff_spider');
+        if (reward) return reward;
+      }
+      throw new Error('моб ущелья не умер за отведённое время');
+    };
+    const def = MOBS.cliff_spider;
+    const full = await kill(plain[0]);
+    assert.equal(levelFactor(def.lvl, 26, DEFAULT_RATES), 1);
+    assert.equal(full.xp, def.xp, 'разница в один уровень — полная награда');
+    assert.ok(full.coins >= def.coins[0] && full.coins <= def.coins[1], `монеты ${full.coins} в пределах вида`);
+    // разница шесть уровней: ступень 4–6, награда урезана тем же множителем, что в src/rates.js
+    a.send({ t: 'dev', lvl: 31 }); await untilP(a, p => p.lvl === 31, 'уровень 31');
+    const cut = await kill(plain[1]);
+    const factor = levelFactor(def.lvl, 31, DEFAULT_RATES);
+    assert.ok(factor > 0 && factor < 1);
+    assert.equal(cut.xp, Math.round(def.xp * factor), 'опыт режется ступенью разницы уровней');
+    assert.ok(cut.coins <= Math.round(def.coins[1] * factor) + 1, 'монеты режутся той же ступенью');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+// ===== надёжность сервера =====
+const faultCount = () => (serverOutput.match(/SERVER_FAULT /g) || []).length;
+// сколько снапшотов пришло за окно и наибольший разрыв между ними
+async function snapRate(c, ms) {
+  const stamps = [], listener = (raw) => { if (String(raw).startsWith('{"t":"snap"')) stamps.push(Date.now()); };
+  c.ws.on('message', listener);
+  await pause(ms);
+  c.ws.off('message', listener);
+  let gap = 0; for (let i = 1; i < stamps.length; i++) gap = Math.max(gap, stamps[i] - stamps[i - 1]);
+  return { n: stamps.length, gap };
+}
+
+test('сбой команды и тика одного игрока не останавливает мир для второго; профиль откатывается', async () => {
+  const a = client(), b = client(); await Promise.all([a.open(), b.open()]);
+  try {
+    a.send({ t: 'register', name: 'СбойА', pass: 'test-secret', cls: 'warrior' });
+    b.send({ t: 'register', name: 'СбойБ', pass: 'test-secret', cls: 'warrior' });
+    const start = (await a.wait('authok')).p; await b.wait('authok');
+    const before = faultCount();
+    // команда меняет профиль и падает: изменение откатывается, игрок получает отказ
+    a.send({ t: 'dev', coins: 777777, fault: 'cmd' });
+    await untilEv(a, /ошибки сервера/, 'отказ после сбоя команды');
+    a.send({ t: 'dev', fault: 'tick' });
+    const rate = await snapRate(b, 1500);
+    assert.ok(rate.n >= 11, `второй клиент получил мало снапшотов: ${rate.n}`);
+    assert.ok(rate.gap < 400, `разрыв снапшотов у второго клиента ${rate.gap} мс`);
+    // первый клиент тоже жив и продолжает получать мир
+    assert.equal(a.ws.readyState, WebSocket.OPEN);
+    assert.ok(await a.wait('snap'));
+    a.send({ t: 'dev', xp: 1 });
+    const p = await untilP(a, (x) => x.xp >= 1, 'профиль после сбоев');
+    assert.equal(p.coins, start.coins, 'монеты из упавшей команды не должны остаться');
+    await pause(100);
+    assert.ok(faultCount() >= before + 2, 'сбои должны попасть в журнал');
+    assert.match(serverOutput, /SERVER_FAULT cmd:dev player=\d+ Error: проверочный сбой команды/);
+    assert.match(serverOutput, /SERVER_FAULT tick:player player=\d+ Error: проверочный сбой тика игрока/);
+  } finally { a.ws.close(); b.ws.close(); await Promise.all([a.closed(), b.closed()]); }
+});
+
+test('искажённые аргументы всех команд не вызывают исключений на сервере', async () => {
+  // отдельный сервер без лимитов команд: иначе сотни пакетов разом закрыли бы соединение как поток
+  const srv2 = await ratedServer({ NO_LIMITS: '1' });
+  const a = client(srv2.port); await a.open();
+  try {
+    const before = 0;
+    // до входа: вход по токену и паролю с мусором вместо строк
+    for (const v of [null, 0, [], {}, { toString: 1 }, 'constructor', 'x'.repeat(300)]) {
+      a.send({ t: 'auth', token: v }); a.send({ t: 'login', name: v, pass: v });
+    }
+    a.send({ t: 'register', name: 'Фаззер', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    const junk = [null, undefined, 0, -1, 1e308, NaN, '', 'constructor', '__proto__', 'toString', 'hasOwnProperty', [], [1, 2], {}, { slot: 'weapon' }, { bag: -5 }, { slot: '__proto__' }, { toString: 1 }, { valueOf: 'x', toJSON: 2 }, true, 'x'.repeat(300)];
+    const kinds = ['party', 'logout', 'st', 'atk', 'autoloot', 'learn', 'prof', 'skill', 'pickup', 'use', 'equip', 'unequip', 'craft', 'buy', 'sell', 'ench', 'tp', 'respawn', 'wash', 'pm', 'chat'];
+    for (const t of kinds) for (const v of junk) {
+      a.send({ t, id: v, idx: v, n: v, slot: v, scroll: v, ref: v, rank: v, request: v, enabled: v, kind: v, hold: v, x: v, z: v, path: v, to: v, text: v, ch: v, cmd: v, name: v, mode: v, token: v });
+    }
+    await pause(1500);
+    a.send({ t: 'ping' }); await a.wait('pong');
+    assert.equal(a.ws.readyState, WebSocket.OPEN);
+    const faults = srv2.log.text.split('\n').filter((line) => line.includes('SERVER_FAULT')).slice(before).map((line) => line.slice(0, 240));
+    assert.deepEqual(faults, [], 'сервер упал на искажённых аргументах');
+  } finally { a.ws.close(); await a.closed(); await srv2.stop('server-fuzz.log'); }
+});
+
+test('поток команд одного клиента: второй получает снапшоты вовремя, отказы ограничены, поток отключается', async () => {
+  const a = client(), b = client(); await Promise.all([a.open(), b.open()]);
+  try {
+    a.send({ t: 'register', name: 'ПотокА', pass: 'test-secret', cls: 'warrior' });
+    b.send({ t: 'register', name: 'ПотокБ', pass: 'test-secret', cls: 'warrior' });
+    await a.wait('authok'); await b.wait('authok');
+    let refusals = 0;
+    a.ws.on('message', (raw) => { const t = JSON.parse(raw).t; if (t === 'pickup_err' || t === 'chatwait' || t === 'pmerr') refusals++; });
+    const closed = new Promise((r) => a.ws.once('close', (code) => r(code)));
+    const watch = snapRate(b, 2500);
+    // тысячи законных по форме мелких команд вперемешку с мусором
+    const kinds = [{ t: 'pickup', id: 'нет-такой' }, { t: 'chat', ch: 'all', text: 'флуд' }, { t: 'pm', to: 'никто', text: 'эй' }, { t: 'use', id: 'potion_hp' },
+      { t: 'atk', id: 1, kind: 'm', hold: true }, { t: 'skill', id: 'power_strike' }, { t: 'unequip', slot: 'legs' }, { t: 'sell', idx: 99 }, { t: 'st', x: 0, z: 0 }];
+    for (let i = 0; i < 6000 && a.ws.readyState === WebSocket.OPEN; i++) {
+      if (i % 10 === 9) a.ws.send('{не json'); else a.send(kinds[i % kinds.length]);
+      if (i % 500 === 499) await pause(20);
+    }
+    const rate = await watch;
+    assert.ok(rate.n >= 20, `второй клиент получил мало снапшотов: ${rate.n}`);
+    assert.ok(rate.gap < 400, `разрыв снапшотов у второго клиента ${rate.gap} мс`);
+    assert.equal(await closed, 1008, 'поток команд должен закрыть соединение');
+    assert.ok(refusals <= 20, `отказов слишком много: ${refusals}`);
+    assert.match(serverOutput, /FLOOD player=\d+ dropped=\d+/);
+    // второй клиент продолжает играть
+    b.send({ t: 'ping' }); await b.wait('pong');
+  } finally { a.ws.close(); b.ws.close(); await Promise.all([a.closed(), b.closed()]); }
+});
+
+test('медленный клиент, не читающий сокет, отключается по потолку буфера; остальные играют', async () => {
+  const srv2 = await ratedServer({ OUT_MAX_BYTES: '65536' });
+  const slow = client(srv2.port), fast = client(srv2.port);
+  await Promise.all([slow.open(), fast.open()]);
+  try {
+    slow.send({ t: 'register', name: 'Медленный', pass: 'test-secret', cls: 'warrior' });
+    fast.send({ t: 'register', name: 'Быстрый', pass: 'test-secret', cls: 'warrior' });
+    const id = (await slow.wait('authok')).id; await fast.wait('authok');
+    // перестаём читать сокет, но продолжаем провоцировать профиль и снапшоты
+    slow.ws._socket.pause();
+    let left = false;
+    fast.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'leave' && m.id === id) left = true; });
+    // наземная добыча рядом раздувает каждый снапшот: буфер ядра заполняется за секунды
+    for (let i = 0; i < 400 && !left; i++) {
+      for (let k = 0; k < 5; k++) slow.send({ t: 'dev', drop: 'potion_hp' });
+      slow.send({ t: 'dev', xp: 1 });
+      await pause(100);
+    }
+    assert.ok(left, 'сервер не отключил клиента, который не читает сокет');
+    assert.match(srv2.log.text, /SLOW_CLIENT player=\d+ buffered=\d+/);
+    fast.send({ t: 'ping' }); await fast.wait('pong');
+  } finally {
+    slow.ws.terminate(); fast.ws.close();
+    await srv2.stop('server-slow-client.log');
+  }
+});
+
+test('heartbeat: клиент без pong отключается, отвечающий остаётся; тихое соединение без входа закрывается', async () => {
+  const srv2 = await ratedServer({ HEARTBEAT_MS: '300', ANON_IDLE_MS: '700' });
+  const mute = client(srv2.port, { autoPong: false }), live = client(srv2.port), anon = client(srv2.port);
+  await Promise.all([mute.open(), live.open(), anon.open()]);
+  try {
+    mute.send({ t: 'register', name: 'Немой', pass: 'test-secret', cls: 'warrior' });
+    live.send({ t: 'register', name: 'Живой', pass: 'test-secret', cls: 'warrior' });
+    await mute.wait('authok'); await live.wait('authok');
+    const anonClosed = new Promise((r) => anon.ws.once('close', (code) => r(code)));
+    const started = Date.now();
+    await mute.closed();
+    assert.ok(Date.now() - started < 2000, 'клиент без pong должен отключиться за два цикла');
+    assert.equal(await anonClosed, 4000, 'соединение без входа и без пакетов закрывается по таймауту');
+    // отвечающий на ping клиент остаётся, даже если сам ничего не шлёт
+    await pause(1200);
+    assert.equal(live.ws.readyState, WebSocket.OPEN);
+    assert.match(srv2.log.text, /DEAD_CLIENT player=\d+/);
+  } finally {
+    live.ws.close(); await live.closed();
+    await srv2.stop('server-heartbeat.log');
+  }
+});
+
+test('лимит соединений без входа на адрес; X-Forwarded-For не обходит его без доверенного прокси', async () => {
+  const srv2 = await ratedServer({ ANON_PER_IP: '2', TRUST_PROXY: '0' });
+  const opened = [];
+  const connect = (ip) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${srv2.port}`, { headers: { 'x-forwarded-for': ip } });
+    opened.push(ws);
+    return new Promise((r) => { ws.once('message', () => r('hi')); ws.once('close', (code) => r(code)); ws.once('error', () => {}); });
+  };
+  try {
+    assert.equal(await connect('10.0.0.1'), 'hi');
+    assert.equal(await connect('10.0.0.2'), 'hi');
+    // подложный заголовок не делает соединение «другим адресом»
+    assert.equal(await connect('10.0.0.3'), 1013);
+    assert.match(srv2.log.text, /ANON_LIMIT ip=/);
+    // по умолчанию сервер слушает только локальный интерфейс
+    assert.match(serverOutput, /realms-ws 127\.0\.0\.1:\d+/);
+  } finally {
+    for (const ws of opened) ws.terminate();
+    await srv2.stop('server-anon-limit.log');
+  }
+});
+
+test('полная сумка и сбой записи: подбор и покупка отказывают явно, добыча остаётся на земле, монеты целы', async () => {
+  const { buildProps } = await import('../src/world-core.js');
+  const { BAG_SLOTS } = await import('../src/data.js');
+  const shop = buildProps().npcs.find((n) => n.role === 'merchant' && !n.shop);
+  const a = client(); await a.open();
+  try {
+    a.send({ t: 'register', name: 'Кладовщик', pass: 'test-secret', cls: 'warrior' });
+    const start = (await a.wait('authok')).p;
+    const snapWith = async (pred) => { for (let i = 0; i < 100; i++) { const m = await a.wait('snap'); if (pred(m.g || [])) return m.g; } throw Error('нет наземной добычи'); };
+    // 1) сбой записи: подбор отказывает, добыча возвращается на землю; покупка не списывает монеты
+    a.send({ t: 'dev', x: -448, z: 418, drop: 'pelt', failStore: true });
+    const pelt = (await snapWith((g) => g.some((d) => d.item === 'pelt' && d.ownerName === 'Кладовщик'))).find((d) => d.item === 'pelt' && d.ownerName === 'Кладовщик');
+    a.send({ t: 'dev', x: pelt.x, z: pelt.z }); await untilP(a, (p) => Math.abs(p.x - pelt.x) < 0.1);
+    a.send({ t: 'pickup', id: pelt.id });
+    assert.match((await a.wait('pickup_err')).reason, /Не удалось сохранить подбор/);
+    await snapWith((g) => g.some((d) => d.id === pelt.id));
+    a.send({ t: 'dev', x: shop.x + 2, z: shop.z + 2 }); await pause(300);
+    a.send({ t: 'buy', id: 'potion_mp', n: 1 });
+    await untilEv(a, /Не удалось сохранить покупку/, 'отказ покупки при сбое записи');
+    // 2) запись снова работает, сумка забита до предела: подбор отказывает с понятной причиной
+    a.send({ t: 'dev', failStore: false, item: 'sword_long', n: BAG_SLOTS - start.inv.length });
+    const full = await untilP(a, (p) => p.inv.length >= BAG_SLOTS, 'полная сумка');
+    assert.equal(full.coins, start.coins, 'монеты после отказов не изменились');
+    assert.ok(!full.inv.some((e) => e.id === 'potion_mp' || e.id === 'pelt'));
+    a.send({ t: 'dev', x: pelt.x, z: pelt.z }); await untilP(a, (p) => Math.abs(p.x - pelt.x) < 0.1);
+    a.send({ t: 'pickup', id: pelt.id });
+    assert.match((await a.wait('pickup_err')).reason, new RegExp(`Сумка полна \\(${BAG_SLOTS}/${BAG_SLOTS}\\)`));
+    await snapWith((g) => g.some((d) => d.id === pelt.id));
+    // 3) место освободилось — та же добыча поднимается и сохраняется
+    a.send({ t: 'dev', x: shop.x + 2, z: shop.z + 2 }); await pause(300);
+    a.send({ t: 'sell', idx: full.inv.length - 1, n: 1 });
+    await untilP(a, (p) => p.inv.length < BAG_SLOTS, 'продажа освободила ячейку');
+    a.send({ t: 'dev', x: pelt.x, z: pelt.z }); await untilP(a, (p) => Math.abs(p.x - pelt.x) < 0.1);
+    a.send({ t: 'pickup', id: pelt.id });
+    await untilP(a, (p) => p.inv.some((e) => e.id === 'pelt'), 'подбор после освобождения места');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('SIGTERM записывает несохранённый прогресс перед выходом', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realms-term-')), db = path.join(dir, 'term.db');
+  const boot = async () => {
+    const probe = net.createServer(); await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+    const port = probe.address().port; await new Promise((r) => probe.close(r));
+    const proc = spawn('node', ['--no-warnings', 'server/server.js'], { env: { ...process.env, PORT: String(port), DB: db, DEV_CMD: '1', AUTH_TRIES: '1000', SAVE_EVERY_MS: '600000' }, stdio: 'pipe' });
+    let text = ''; for (const s of [proc.stdout, proc.stderr]) s.on('data', (c) => { text += c; });
+    await new Promise((r) => proc.stdout.once('data', r));
+    return { port, proc, log: () => text };
+  };
+  let s1 = await boot(), s2 = null;
+  try {
+    const a = client(s1.port); await a.open();
+    a.send({ t: 'register', name: 'Терминатор', pass: 'test-secret', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    // опыт и монеты меняются только в памяти: периодическая запись отложена на 10 минут
+    a.send({ t: 'dev', xp: 50, coins: 4321 });
+    await untilP(a, (p) => p.coins === 4321 && p.xp >= 50);
+    s1.proc.kill('SIGTERM');
+    const code = await new Promise((r) => (s1.proc.exitCode !== null ? r(s1.proc.exitCode) : s1.proc.once('exit', r)));
+    assert.equal(code, 0);
+    s2 = await boot();
+    const b = client(s2.port); await b.open();
+    b.send({ t: 'auth', token: auth.token });
+    const ok = await b.wait('authok');
+    assert.equal(ok.p.coins, 4321); assert.ok(ok.p.xp >= 50);
+    b.ws.close(); await b.closed();
+    assert.doesNotMatch(s1.log() + s2.log(), /SERVER_FAULT|SAVE_FAIL/);
+  } finally {
+    for (const s of [s1, s2]) if (s && s.proc.exitCode === null) { s.proc.kill(); await new Promise((r) => s.proc.once('exit', r)); }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('physical skill has a wind-up and cannot overlap the next ordinary swing', async () => {
+  const a = client(); await a.open(); await a.wait('hi');
+  const events = [];
+  a.ws.on('message', raw => {
+    const m = JSON.parse(raw);
+    if (m.t === 'ev') for (const e of m.e) events.push({ ...e, receivedAt: Date.now() });
+  });
+  try {
+    a.send({ t: 'register', name: 'PacingCheck', pass: 'test-password', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    await at(a, -620, 400);
+    let mob;
+    const deadline = Date.now() + 4000;
+    while (!mob && Date.now() < deadline) {
+      const snap = await a.wait('snap');
+      mob = snap.m?.find(r => !(r[5] & 8) && Math.hypot(r[1] + 620, r[3] - 400) < 22);
+    }
+    assert.ok(mob);
+    await at(a, mob[1] + .8, mob[3] + .8);
+    a.send({ t: 'atk', id: mob[0], kind: 'm', hold: true });
+    a.send({ t: 'skill', id: 'power_strike' });
+    a.send({ t: 'atk', id: mob[0], kind: 'm' });
+    await pause(2900);
+    const own = events.filter(e => e.by == null || e.by === auth.id);
+    const start = own.find(e => e.k === 'skill_start');
+    const impact = own.find(e => e.k === 'cast_fx' && e.id === 'power_strike');
+    const nextSwing = own.find(e => e.k === 'attack_start');
+    assert.ok(start && impact && nextSwing, 'wind-up, impact and next attack must all arrive');
+    assert.ok(impact.receivedAt - start.receivedAt >= start.windup * 1000 - 150, 'no instant skill damage');
+    assert.ok(nextSwing.receivedAt - start.receivedAt >= start.t * 1000 - 150, 'autoattack waits for skill recovery');
+    assert.ok(own.filter(e => e.k === 'attack_start').length <= 1, 'no overlapping autoattacks');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('mage staff attack is melee and single-shot; spells enforce their individual ranges', async () => {
+  const mage = client(), target = client(); await Promise.all([mage.open(), target.open()]);
+  const events = [];
+  mage.ws.on('message', raw => { const m = JSON.parse(raw); if (m.t === 'ev') events.push(...m.e); });
+  try {
+    mage.send({ t: 'register', name: 'SpellRange', pass: 'range-test', cls: 'mage' }); await mage.wait('authok');
+    target.send({ t: 'register', name: 'RangeTarget', pass: 'range-test', cls: 'warrior' }); const auth = await target.wait('authok');
+    await at(mage, -240, 185); await at(target, -230, 185);
+    mage.send({ t: 'atk', id: auth.id, kind: 'p' }); await pause(1200);
+    assert.ok(!events.some(e => e.k === 'attack_start'), 'staff cannot hit at spell range');
+    await at(target, -239, 185); await pause(4000);
+    assert.equal(events.filter(e => e.k === 'attack_release' && e.by == null).length, 1, 'one manual command makes one physical staff hit');
+    mage.send({ t: 'dev', lvl: 14, sp: 5000, mp: 999 }); await pause(200);
+    mage.send({ t: 'learn', id: 'curse', rank: 1 }); await untilP(mage, p => p.skills.curse === 1);
+    await at(target, -216.5, 185);
+    mage.send({ t: 'atk', id: auth.id, kind: 'p', hold: true });
+    mage.send({ t: 'skill', id: 'curse' }); await untilEv(mage, /Цель слишком далеко/);
+    mage.send({ t: 'skill', id: 'fire_bolt' });
+    const ev = await untilEv(mage, /"k":"cast"/);
+    assert.ok(ev.some(e => e.k === 'cast' && e.id === 'fire_bolt'), '24m fire spell reaches where 20m curse cannot');
+  } finally { mage.ws.close(); target.ws.close(); await Promise.all([mage.closed(), target.closed()]); }
+});
+
+test('warrior and mage skills never enable autoattack, including cooldown and mana rejection', async () => {
+  for (const cls of ['warrior','mage']) {
+    const a=client(); await a.open(); await a.wait('hi');
+    const events=[];
+    a.ws.on('message',raw=>{ const m=JSON.parse(raw); if(m.t==='ev') events.push(...m.e); });
+    try {
+      a.send({t:'register',name:`Manual_${cls}`,pass:'test-password',cls}); const auth=await a.wait('authok');
+      await at(a,-620,400);
+      const snap=await a.wait('snap');
+      const mob=snap.m.find(r=>!(r[5]&8)&&Math.hypot(r[1]+620,r[3]-400)<22);
+      assert.ok(mob); await at(a,mob[1]+.8,mob[3]+.8);
+      a.send({t:'atk',id:mob[0],kind:'m',hold:true});
+      const skill=cls==='warrior'?'power_strike':'fire_bolt';
+      a.send({t:'skill',id:skill});
+      await untilEv(a,new RegExp(`"k":"cast_fx","id":"${skill}"`));
+      a.send({t:'skill',id:skill}); // Skill cooldown: no fallback attack.
+      await pause(2200);
+      if (cls==='warrior') await pause(2300);
+      a.send({t:'dev',mp:0}); await pause(150);
+      a.send({t:'skill',id:skill});
+      await untilEv(a,/Недостаточно маны/);
+      await pause(1000);
+      const own=events.filter(e=>e.by==null||e.by===auth.id);
+      assert.equal(own.filter(e=>e.k==='cast_fx'&&e.id===skill).length,1,cls+' casts once');
+      assert.equal(own.filter(e=>e.k==='attack_start'||e.k==='attack_release').length,0,cls+' requires explicit F for a normal attack');
+    } finally {a.ws.close();await a.closed();}
+  }
+});
+
+
+test('PvP magic waits for its cast and uses reduced player damage', async () => {
+  const mage=client(), warrior=client();
+  await Promise.all([mage.open(),warrior.open()]);
+  const events=[];
+  mage.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.t==='ev')for(const e of m.e)events.push({...e,receivedAt:Date.now()});});
+  try {
+    mage.send({t:'register',name:'CastPvpMage',pass:'cast-pvp-test',cls:'mage'});
+    await mage.wait('authok');
+    warrior.send({t:'register',name:'CastPvpWarrior',pass:'cast-pvp-test',cls:'warrior'});
+    const target=await warrior.wait('authok');
+    await at(mage,-620,400);await at(warrior,-616,400);
+    mage.send({t:'atk',id:target.id,kind:'p',hold:true});
+    mage.send({t:'skill',id:'fire_bolt'});
+    await untilEv(mage,/"k":"cast"/);
+    const start=events.find(e=>e.k==='cast'&&e.id==='fire_bolt');
+    assert.ok(start && start.t>=1.4, 'a novice spell has a visible windup');
+    await pause(400);
+    assert.ok(!events.some(e=>e.k==='hit'&&e.p===target.id),'no damage during early cast');
+    await untilEv(mage,/"k":"hit"/);
+    const hit=events.find(e=>e.k==='hit'&&e.p===target.id);
+    assert.ok(hit, 'spell must damage selected player');
+    assert.ok(hit.receivedAt-start.receivedAt>=start.t*1000-150,'damage follows server windup');
+    assert.ok(hit.dmg>=20 && hit.dmg<=50, `PvP damage including critical: ${hit.dmg}`);
+  } finally {mage.ws.close();warrior.ws.close();await Promise.all([mage.closed(),warrior.closed()]);}
+});
+
+
+test('level 60 progression enforces both promotions and rejects casting learned passives', async () => {
+  const a=client();await a.open();
+  try {
+    a.send({t:'register',name:'PromotionSteps',pass:'promotion-test',cls:'warrior'});await a.wait('authok');
+    a.send({t:'dev',lvl:60,sp:1000000});await untilP(a,p=>p.lvl===60);
+    a.send({t:'learn',id:'weapon_mastery',rank:1});await untilP(a,p=>p.skills.weapon_mastery===1);
+    a.send({t:'skill',id:'weapon_mastery'});await untilEv(a,/Пассивное/);
+    for(let rank=2;rank<=4;rank++){await pause(250);a.send({t:'learn',id:'power_strike',rank});await untilP(a,p=>p.skills.power_strike===rank);}
+    await pause(250);a.send({t:'learn',id:'power_strike',rank:5});await untilEv(a,/Сначала выберите профессию/);
+    a.send({t:'prof',id:'knight'});await untilP(a,p=>p.prof==='knight');
+    for(let rank=5;rank<=9;rank++){await pause(250);a.send({t:'learn',id:'power_strike',rank});await untilP(a,p=>p.skills.power_strike===rank);}
+    await pause(250);a.send({t:'learn',id:'power_strike',rank:10});await untilEv(a,/вторую профессию/);
+    a.send({t:'prof',id:'paladin'});await untilP(a,p=>p.prof2==='paladin');
+    await pause(250);a.send({t:'learn',id:'power_strike',rank:10});await untilP(a,p=>p.skills.power_strike===10);
+    await pause(250);a.send({t:'learn',id:'sacred_guard',rank:1});await untilP(a,p=>p.skills.sacred_guard===1);
+  } finally {a.ws.close();await a.closed();}
 });

@@ -21,6 +21,7 @@ var opened_at = 0
 var reconnect_count = 0
 var last_disconnect: Dictionary = {}
 var heartbeat_supported = false
+var rates: Dictionary = {}  # действующие коэффициенты сервера: только для показа, клиент по ним ничего не считает
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -96,7 +97,9 @@ func _drain(current: WebSocketPeer) -> bool:
 		var data = JSON.parse_string(current.get_packet().get_string_from_utf8())
 		if not data is Dictionary: continue
 		last_packet_at = Time.get_ticks_msec()
-		if data.get("t") == "hi": heartbeat_supported = int(data.get("features", {}).get("heartbeat", 0)) >= 1
+		if data.get("t") == "hi":
+			heartbeat_supported = int(data.get("features", {}).get("heartbeat", 0)) >= 1
+			rates = data.get("rates", {}) if data.get("rates") is Dictionary else {}
 		if data.get("t") == "authok":
 			authed = true
 			_record("authenticated")

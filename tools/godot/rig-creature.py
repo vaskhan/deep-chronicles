@@ -95,7 +95,13 @@ for clip,seconds in [('idle',3),('walk',1.1),('run',.65),('windup',.7),('attack'
    if kind=='scorpion':arm.pose.bones['tail'].rotation_euler.x=pulse*1.0
   elif clip=='hit':
    pulse=math.sin(t*math.pi);head.rotation_euler.z=pulse*.15;body.rotation_euler.x=-pulse*.09
-  else:root.rotation_euler.y=min(1,t*1.8)*math.pi/2;root.location.z=-min(1,t*1.8)*.12
+  else:
+   fall=min(1,t*1.5);fall=fall*fall*(3-2*fall)
+   # Root local Y points upward: rotating it only spins the animal in place.
+   # Roll around local Z, keeping the flank above the ground.
+   angle=fall*math.pi/2;root.rotation_euler.z=angle
+   root.location.y=math.sin(angle)*W*.5
+   for name in legs:arm.pose.bones[name+'_lower'].rotation_euler.x=fall*.45
   if 'tail'in arm.pose.bones:arm.pose.bones['tail'].rotation_euler.z=math.sin(phase)*.2
   for p in arm.pose.bones:
    p.keyframe_insert('rotation_euler',frame=f);p.keyframe_insert('location',frame=f);p.keyframe_insert('scale',frame=f)

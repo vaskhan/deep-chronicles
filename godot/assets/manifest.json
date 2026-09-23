@@ -145,6 +145,70 @@
         "hit": "hit",
         "death": "death"
       }
+    },
+    "cliff_spider": {
+      "path": "res://assets/gorge-mobs/cliff_spider.glb",
+      "height": 1.85,
+      "family": "spider",
+      "clips": {
+        "idle": "idle",
+        "walk": "walk",
+        "run": "run",
+        "windup": "windup",
+        "attack": "attack",
+        "cast": "cast",
+        "hit": "hit",
+        "death": "death"
+      }
+    },
+    "grotto_weaver": {
+      "base": "spider",
+      "height": 2.15,
+      "tint": "83719e"
+    },
+    "fang_warrior": {
+      "path": "res://assets/gorge-mobs/fang_warrior.glb",
+      "height": 3.3,
+      "rig": "canonical",
+      "family": "orc"
+    },
+    "fang_shaman": {
+      "path": "res://assets/gorge-mobs/fang_shaman.glb",
+      "height": 3.0,
+      "rig": "canonical",
+      "family": "orc"
+    },
+    "river_drowned": {
+      "base": "ghoul",
+      "height": 2.9,
+      "tint": "95cbc2"
+    },
+    "pool_drowned": {
+      "base": "ghoul",
+      "height": 3.1,
+      "tint": "74a6c2"
+    },
+    "stone_guard": {
+      "path": "res://assets/gorge-mobs/stone_guard.glb",
+      "height": 4.6,
+      "rig": "canonical",
+      "family": "golem"
+    },
+    "outpost_guard": {
+      "path": "res://assets/gorge-mobs/outpost_guard.glb",
+      "height": 2.9,
+      "rig": "canonical",
+      "family": "skeleton"
+    },
+    "summit_wraith": {
+      "base": "wraith",
+      "height": 3.2,
+      "tint": "cdefff"
+    },
+    "outpost_warlock": {
+      "base": "lich",
+      "height": 3.1,
+      "tint": "92a8e6"
     }
   },
   "props": {
@@ -199,6 +263,12 @@
     "dead_tree": {
       "path": "res://assets/props/dead_tree.glb",
       "triangles": 2200
+    }
+  },
+  "environment": {
+    "gorge": {
+      "manifest": "res://assets/gorge/manifest.json",
+      "scene_script": "res://scripts/gorge_art.gd"
     }
   }
 }

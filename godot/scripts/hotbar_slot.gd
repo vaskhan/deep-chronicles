@@ -10,9 +10,9 @@ func _get_drag_data(_position):
 	return {"hotbar_slot": index}
 
 func _can_drop_data(_position, data):
-	return not locked and data is Dictionary and (data.has("hotbar_slot") or data.has("skill_id"))
+	return not locked and data is Dictionary and (data.has("hotbar_slot") or data.has("skill_id") or (data.get("source") == "inventory" and GameData.catalog.ITEMS.get(data.get("id", ""), {}).get("use", "") in ["hp", "mp", "escape"]))
 
 func _drop_data(_position, data):
 	if not _can_drop_data(_position, data): return
 	if data.has("hotbar_slot"): swap_requested.emit(int(data.hotbar_slot), index)
-	else: binding_requested.emit(index, str(data.skill_id))
+	else: binding_requested.emit(index, str(data.get("skill_id", data.get("id", ""))))

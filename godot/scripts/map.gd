@@ -1,6 +1,7 @@
 extends Control
 var player_position = Vector3.ZERO
 var compact = false
+var city_focus = false
 const Settings = preload("res://scripts/interface_settings.gd")
 var zoom = 2.0
 signal zoom_changed(value: float)
@@ -16,6 +17,10 @@ func _ready():
 	mouse_filter = Control.MOUSE_FILTER_STOP; mouse_force_pass_scroll_events = false; clip_contents = true
 	if compact: zoom = clampf(float(Settings.read_value("map", "zoom", 2.0)), 0.5, 8.0)
 	if not terrain_map: _bake_terrain()
+	if not compact:
+		city_focus = GameData.zone_at(player_position).get("town", false)
+		var mode = Button.new(); mode.text = "Город / Мир"; mode.position = Vector2(12, 8); add_child(mode)
+		mode.pressed.connect(func(): city_focus = not city_focus; queue_redraw())
 
 func _bake_terrain():
 	var image = Image.create(400,400,false,Image.FORMAT_RGB8)
@@ -28,6 +33,7 @@ func _bake_terrain():
 			match zone.id:
 				"forest": color = Color("344e39")
 				"waste": color = Color("aa9365")
+				"gorge": color = Color("7d8a86")
 				"harbor", "ford": color = Color("929073")
 			var slope = GameData.height_at(p.x-3,p.z-3)-GameData.height_at(p.x+3,p.z+3)
 			color *= clampf(.94+slope*.035,.6,1.18)
@@ -55,6 +61,12 @@ func update_entities(mobs: Dictionary, players: Dictionary, target):
 func _draw():
 	origin = Vector2(player_position.x,player_position.z)-size*zoom*0.5 if compact else Vector2(-800,-800)
 	extent = size*zoom if compact else Vector2(1600,1600)
+	if not compact and city_focus and player_position.x < 2100:
+		var closest = GameData.world.towns[0]
+		for town in GameData.world.towns:
+			if Vector2(town.x-player_position.x,town.z-player_position.z).length() < Vector2(closest.x-player_position.x,closest.z-player_position.z).length(): closest = town
+		extent = size / minf(size.x,size.y) * (closest.r * 2 + 40)
+		origin = Vector2(closest.x,closest.z) - extent * .5
 	if not compact and player_position.x > 2100:
 		var d = GameData.world.dungeon
 		origin = Vector2(d.x0 - d.cell, d.z0 - d.cell); extent = Vector2.ONE * d.cell * (d.n + 2)
@@ -63,24 +75,58 @@ func _draw():
 		var source = Rect2((origin+Vector2(800,800))*.25,extent*.25)
 		draw_texture_rect_region(terrain_map,Rect2(Vector2.ZERO,size),source)
 	var font = ThemeDB.fallback_font
+	for road in GameData.world.get("townRoads", []):
+		if road.has("points"):
+			var line = PackedVector2Array()
+			for v in road.points: line.append(point(v[0],v[1]))
+			draw_polyline(line,Color("b5aa87"),maxf(1,road.width*size.x/extent.x),true)
+			continue
+		var p = point(road.x,road.z); var width = Vector2(road.w,road.d)/extent*size
+		draw_rect(Rect2(p-width*.5,width),Color("b5aa87"))
+	for shop in GameData.world.get("townShops", []):
+		var p = point(shop.x,shop.z-3*shop.scale); var width = Vector2(10,18)*shop.scale/extent*size
+		draw_rect(Rect2(p-width*.5,width),Color("715549"))
+	for house in GameData.world.get("townHouses", []):
+		var corners = PackedVector2Array()
+		for offset in [Vector2(-1,-1),Vector2(1,-1),Vector2(1,1),Vector2(-1,1)]:
+			var v = (offset*Vector2(house.w,house.d)*.5*house.scale).rotated(-house.rotation)
+			corners.append(point(house.x+v.x,house.z+v.y))
+		draw_colored_polygon(corners,Color("ad785d"))
+	for hall in GameData.world.get("townCivic", []):
+		var p = point(hall.x,hall.z); var width = Vector2(hall.w,hall.d)*hall.scale/extent*size
+		draw_rect(Rect2(p-width*.5,width),Color("88644c"))
+		if not compact and city_focus and Rect2(Vector2.ZERO,size).has_point(p): draw_string(font,p+Vector2(5,-8),hall.name,HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("fff0bb"))
 	for r in GameData.world.get("modelPlacements", []):
 		if r[0] in ["oak","pine","bush","rock_a","rock_b","dead_tree"]: continue
 		var p=point(r[1],r[3]);var sz=Vector2(r[5],r[7])/extent*size
 		draw_rect(Rect2(p-sz*.5,sz),Color("463e32"));draw_rect(Rect2(p-sz*.4,sz*.8),Color("c5b085"))
 	for t in GameData.world.towns:
 		var p=point(t.x,t.z);var scale_map=size.x/extent.x
-		draw_arc(p,t.r*scale_map,0,TAU,48,Color("d8cba6"),2,true)
-		if not compact: draw_string(font,p+Vector2(10,-10),t.name,HORIZONTAL_ALIGNMENT_LEFT,-1,16,Color("fff0bb"))
+		if t.id == "harbor":
+			for outline in GameData.world.get("townOutlines", []):
+				var line = PackedVector2Array()
+				for v in outline.points: line.append(point(v[0],v[1]))
+				line.append(line[0]); draw_polyline(line,Color("d8cba6"),2,true)
+		else: draw_arc(p,t.r*scale_map,0,TAU,48,Color("d8cba6"),2,true)
+		if not compact:
+			if city_focus:
+				if Rect2(Vector2.ZERO,size).has_point(p): draw_string(font,Vector2(160,27),t.name,HORIZONTAL_ALIGNMENT_LEFT,-1,18,Color("fff0bb"))
+			else: draw_string(font,p+Vector2(10,-10),t.name,HORIZONTAL_ALIGNMENT_LEFT,-1,16,Color("fff0bb"))
 	if player_position.x>2100:
 		for row in GameData.world.shapes:
 			if row[9]!="dbrick":continue
 			var p=point(row[2],row[4]);var sz=Vector2(row[6],row[8])/extent*size
 			draw_rect(Rect2(p-sz*.5,sz),Color("827087"))
 	for n in GameData.world.npcs:
-		if compact and n.role!="guard":draw_circle(point(n.x,n.z),3,Color("e9c471"))
+		if n.role == "guard": continue
+		var p = point(n.x,n.z)
+		var color = {"merchant":Color("e9c471"),"gatekeeper":Color("85dfea"),"priest":Color("e1c9f7")}.get(n.role,Color.WHITE)
+		draw_circle(p,4,color)
+		if not compact and city_focus and Rect2(Vector2.ZERO,size).has_point(p):
+			draw_string(font,p+Vector2(7,-6),n.name,HORIZONTAL_ALIGNMENT_LEFT,-1,13,color)
 	for t in GameData.world.teleports:
 		draw_circle(point(t.x,t.z),2 if compact else 3,Color("98d9e6"))
-	if not compact and player_position.x < 2100:
+	if not compact and not city_focus and player_position.x < 2100:
 		for z in GameData.world.zones:
 			var p=point(z.x,z.z)
 			draw_string(font,p+Vector2(-50,0),z.name,HORIZONTAL_ALIGNMENT_LEFT,-1,15,Color("f6ebcd"))
@@ -90,6 +136,7 @@ func _draw():
 			var p = point(camp.x, camp.z)
 			draw_circle(p, 3, Color("ca9970"))
 			draw_string(font, p + Vector2(6, -3), camp.name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("e4ccb0"))
+	if player_position.x < 2100: _draw_gorge(font)
 	var crypt=point(150,250);draw_circle(crypt,4,Color("c899f4"))
 	if not compact:draw_string(font,crypt+Vector2(10,4),"Катакомбы",HORIZONTAL_ALIGNMENT_LEFT,-1,14)
 	for pos in mob_markers:
@@ -106,11 +153,34 @@ func _draw():
 	if compact:draw_string(font,Vector2(size.x*.5-4,14),"С",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("eee0b9"))
 	elif player_position.x>2100:draw_string(font,Vector2(20,35),"Вы в катакомбах",HORIZONTAL_ALIGNMENT_LEFT,-1,22,Color("bf92ff"))
 
+## Громовое ущелье: река, водопад и ярусы. На полной карте — подписи всех ярусов,
+## на миникарте — подпись яруса, если он в кадре.
+func _draw_gorge(font: Font):
+	var info: Dictionary = GameData.world.get("gorge", {})
+	if info.is_empty(): return
+	var line = PackedVector2Array()
+	for row in info.river: line.append(point(row[0], row[1]))
+	draw_polyline(line, Color("5aa7c4"), maxf(1.5, 7.0 * size.x / extent.x), true)
+	var falls = point(info.falls.x, info.falls.z)
+	draw_circle(falls, 4 if compact else 5, Color("dff6ff"))
+	draw_arc(falls, 6 if compact else 8, 0, TAU, 16, Color("5aa7c4"), 1.5, true)
+	for tier in info.tiers:
+		var p = point(tier.x, tier.z)
+		if not Rect2(Vector2(-40, -20), size + Vector2(80, 40)).has_point(p): continue
+		var title = "%s · %s–%s" % [tier.name, int(tier.lv[0]), int(tier.lv[1])]
+		if compact: draw_string(font, p + Vector2(-44, 0), title, HORIZONTAL_ALIGNMENT_LEFT, 150, 10, Color("f1e6c8"))
+		elif not city_focus: draw_string(font, p + Vector2(8, 4), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8e2cf"))
+	if not compact and not city_focus: draw_string(font, falls + Vector2(9, -6), "Водопад", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("dff6ff"))
+
 func change_zoom(factor: float):
 	zoom = clampf(zoom * factor, 0.5, 8.0)
 	Settings.write_value("map", "zoom", zoom); zoom_changed.emit(zoom); queue_redraw()
 
 func _gui_input(event):
+	if event is InputEventMouseMotion:
+		tooltip_text = ""
+		for npc in GameData.world.npcs:
+			if npc.role != "guard" and point(npc.x,npc.z).distance_to(event.position) < 10: tooltip_text = npc.name; break
 	if not compact: return
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP: change_zoom(0.8); accept_event()

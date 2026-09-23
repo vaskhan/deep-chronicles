@@ -1,5 +1,7 @@
 // Расчёт характеристик персонажа: класс, уровень, атрибуты, экипировка, заточка, комплекты, вес. Без DOM — проверяется юнит-тестами.
-import { CLASSES, ITEMS, SETS, SLOTS } from './data.js';
+import { skillsOf, effectiveSkill, promotionError } from './progression.js';
+import { MOVE_SCALE } from './movement.js';
+import { CLASSES, ITEMS, PROFESSIONS, SETS, SLOTS } from './data.js';
 
 export const MAX_ENCH = 16;
 export const SAFE_ENCH = 3;
@@ -29,6 +31,7 @@ export function weightOf(P) {
   return Math.round(w * 10) / 10;
 }
 
+// buffs — список активных эффектов цели (src/effects.js); имя аргумента сохранено ради совместимости.
 export function calcStats(P, buffs = [], now = 0) {
   const c = CLASSES[P.cls], L = P.lvl - 1, A = c.attr, B = c.base, G = c.grow;
   const m = (v, ref) => 1 + (v - ref) * 0.01;
@@ -37,9 +40,9 @@ export function calcStats(P, buffs = [], now = 0) {
     maxHp: (B.hp + G.hp * L) * m(A.con, 30), maxMp: (B.mp + G.mp * L) * m(A.men, 30),
     patk: (B.patk + G.patk * L) * m(A.str, 30), matk: (B.matk + G.matk * L) * m(A.int, 30),
     pdef: B.pdef + G.pdef * L, mdef: (B.mdef + G.mdef * L) * m(A.men, 30),
-    aspd: B.aspd * m(A.dex, 30), speed: B.speed * (1 + (A.dex - 30) * 0.004), crit: B.crit + (A.dex - 30) * 0.002,
-    cast: m(A.wit, 20), acc: Math.sqrt(A.dex) * 6 + P.lvl, eva: Math.sqrt(A.dex) * 6 + P.lvl,
-    range: c.range,
+    aspd: (B.aspd + (G.aspd || 0) * L) * m(A.dex, 30), speed: B.speed * (1 + (A.dex - 30) * 0.004), crit: B.crit + (A.dex - 30) * 0.002,
+    cast: (1 + (G.cast || 0) * L) * m(A.wit, 20), acc: Math.sqrt(A.dex) * 6 + P.lvl, eva: Math.sqrt(A.dex) * 6 + P.lvl,
+    range: c.range, critPower: B.critPower || 1.75,
   };
   // экипировка
   for (const [sl, id] of Object.entries(P.equip)) {
@@ -56,12 +59,29 @@ export function calcStats(P, buffs = [], now = 0) {
     s.maxHp += b.hp || 0; s.maxMp += b.mp || 0; s.patk += b.patk || 0; s.matk += b.matk || 0;
     s.pdef += b.pdef || 0; s.mdef += b.mdef || 0; s.speed += b.speed || 0; s.crit += b.crit || 0; s.cast += b.cast || 0;
   }
+  // профессия: множители к уже собранным характеристикам (зеркало — godot/scripts/data.gd::stats)
+  const prof = P.prof && Object.hasOwn(PROFESSIONS, P.prof) ? PROFESSIONS[P.prof] : null;
+  if (prof) for (const [key, mul] of Object.entries(prof.bonus)) s[key] *= mul;
+  const second = P.prof2 && PROFESSIONS[P.prof2]?.parent === P.prof ? PROFESSIONS[P.prof2] : null;
+  if (second) for (const [key,mul] of Object.entries(second.bonus)) s[key] *= mul;
+  // Learned passives are permanent, class-owned, and never cast from the hotbar.
+  for (const id of skillsOf(P)) {
+    if (!P.skills?.[id]) continue;
+    const sk = effectiveSkill(P,id);
+    if (sk?.kind !== 'passive' || P.lvl < sk.lvl || (sk.needShield && !P.equip.shield)) continue;
+    if (promotionError(P,sk.lvl)) continue;
+    if (Object.hasOwn(s,sk.stat)) s[sk.stat] *= sk.mul;
+  }
   // вес: перегруз больше 70% — медленнее бег и восстановление
   s.load = weightOf(P); s.cap = Math.round(40 + A.con * 1.2);
   s.regen = 1;
   if (s.load > s.cap * 0.7) { s.speed *= 0.6; s.regen = 0.5; }
-  for (const b of buffs) if (b.until > now) s[b.stat] *= b.mul;
+  // Усиления и ослабления во времени (src/effects.js): множители применяются только
+  // к тем эффектам, у которых есть характеристика. Урон/лечение со временем и вампиризм
+  // характеристик не меняют и пропускаются.
+  for (const b of buffs) if (b.until > now && b.stat) s[b.stat] *= b.mul;
   s.maxHp = Math.round(s.maxHp); s.maxMp = Math.round(s.maxMp);
+  s.speed *= MOVE_SCALE;
   return s;
 }
 

@@ -22,32 +22,36 @@ export function artPlacements(shapes, towns, crypt) {
   for (let i = 0; i < shapes.length; i++) {
     if (omitted.has(i)) continue;
     const r = shapes[i], next = shapes[i+1], kind = r[9];
+    const town=towns.find(t=>Math.hypot(r[2]-t.x,r[4]-t.z)<t.r+20), scale=town?.scale || 1;
     if (kind === 'house') {
-      add(next[9] === 'roof_red' ? 'house_a' : 'house_b', r, r[3]-r[7]/2, r[6], r[7]+next[7], r[8]);
+      // Жилые дома строятся собственным модульным набором в town_architecture.gd.
       omitted.add(i); omitted.add(i+1);
     } else if (kind === 'bark' && next?.[9] === 'leaves') {
       const pine = next[0] === 'cone';
       add(pine ? 'pine' : 'oak', r, r[3]-r[7]/2, next[6]*(pine?1:2), pine?r[7]/2+next[7]:r[7]+next[7]*1.5, next[8]*(pine?1:2));
       omitted.add(i); omitted.add(i+1);
     } else if (kind === 'brick' && r[0] === 'cyl' && next?.[0] === 'cone') {
-      add('tower', r, r[3]-r[7]/2, 6.5, 16.5); omitted.add(i); omitted.add(i+1);
-    } else if (kind === 'brick' && r[0] === 'box' && r[6] === 16 && r[7] === 14) {
-      add('temple', r, r[3]-7, 16, 24, 14); omitted.add(i); omitted.add(i+1);
+      add('tower', r, r[3]-r[7]/2, 6.5*scale, 16.5, 6.5*scale); omitted.add(i); omitted.add(i+1);
+    } else if (kind === 'brick' && r[0] === 'box' && Math.abs(r[6]-16*scale)<1e-6 && r[7] === 14) {
+      add('temple', r, r[3]-7, 18*scale, 32, 15*scale); omitted.add(i); omitted.add(i+1);
     } else if (kind === 'brick' && r[2] === crypt.x && r[4] === crypt.z && r[7] === 10) {
       add('crypt', r, r[3]-5, 14, 18, 14); omitted.add(i); omitted.add(i+1); omitted.add(i+2);
-    } else if (kind === 'stone' && r[0] === 'cyl' && r[6] === 8) {
-      add('fountain', r, r[3]-1, 8, 5); omitted.add(i); omitted.add(i+1); omitted.add(i+2);
-    } else if (kind === 'stone' && r[6] === 6 && r[7] === 0.6) {
-      add('portal', r, r[3]-.3, 6, 1.5); omitted.add(i);
+    } else if (kind === 'stone' && r[0] === 'cyl' && Math.abs(r[6]-8*scale)<1e-6) {
+      add('fountain', r, r[3]-1, 8*scale, 5, 8*scale); omitted.add(i); omitted.add(i+1); omitted.add(i+2);
+    } else if (kind === 'stone' && Math.abs(r[6]-6*scale)<1e-6 && r[7] === 0.6) {
+      add('portal', r, r[3]-.3, 6*scale, 1.5, 6*scale); omitted.add(i);
     } else if (kind === 'sandstone' && r[0] === 'ico') {
       add('rock_b', r, r[3]-r[7]*.6, r[6]*2, r[7]*2, r[8]*2); omitted.add(i);
+    } else if (kind === 'granite' && r[0] === 'ico') {
+      // Громовое ущелье: валуны у подошвы стен и в русле — серый мшистый камень (песчаник rock_b тут чужой).
+      add('rock_a', r, r[3]-r[7]*.6, r[6]*2, r[7]*2, r[8]*2); omitted.add(i);
     }
   }
   // Low planting beds around the square stay clear of all four radial roads.
   for (const town of towns) for (let i=0;i<20;i++) {
     const a = Math.PI*2*(i+.5)/20;
     if (Math.abs(Math.sin(a*2))<.4) continue;
-    models.push(['bush',town.x+Math.cos(a)*28,heightAt(town.x,town.z),town.z+Math.sin(a)*28,a,2.4,1.35,2.4]);
+    models.push(['bush',town.x+Math.cos(a)*28*town.scale,heightAt(town.x,town.z),town.z+Math.sin(a)*28*town.scale,a,2.4,1.35,2.4]);
   }
   return { shapes: shapes.filter((_, i) => !omitted.has(i)), modelPlacements: models.map(groundPlacement) };
 }

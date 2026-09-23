@@ -51,6 +51,7 @@ try {
   await step('rules', process.execPath, ['--test', 'tests/unit.test.js', 'tests/progression.test.js', 'tests/party.test.js']);
   await step('server', process.execPath, ['--no-warnings', '--test', 'tests/server.test.js']);
   await step('client-server', process.execPath, ['tools/godot/test.mjs', ...(args.includes('--headless') ? ['--headless'] : []), ...(args.includes('--touch') ? ['--touch'] : [])]);
+  await step('mob-models', process.execPath, ['tools/godot/gorge-mobs.mjs', '--headless']);
   if (release) await step('touch-client-server', process.execPath, ['tools/godot/test.mjs', '--touch', ...(args.includes('--headless') ? ['--headless'] : [])]);
   for (const file of ['godot/generated/catalog.json', 'godot/generated/world.json', 'godot/generated/heights.bin']) report.outputs[file] = digest(file);
   await step('weapons', godotBinary(), [...(args.includes('--headless') ? ['--headless'] : []), '--path', 'godot', '--script', 'res://tests/weapons.gd', '--', '--test-mode', `--output=${directory}/weapons.png`]);

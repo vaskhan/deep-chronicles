@@ -1,0 +1,58 @@
+{
+  "checked": "2026-09-23",
+  "quaternius": {
+    "author": "Quaternius",
+    "pack": "Ultimate Monsters",
+    "page": "https://quaternius.com/packs/ultimatemonsters.html",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "license_file": "art/licenses/quaternius-ultimate-monsters.txt",
+    "license_download": "https://drive.usercontent.google.com/download?id=16GqsDGESyEOfRbc4dS7EqAwkIUSIW4_y&export=download",
+    "note": "License.txt kept verbatim, including author header Ultimate Platformer Pack; pack page independently states CC0.",
+    "files": {
+      "Orc.gltf": {
+        "url": "https://drive.usercontent.google.com/download?id=17675H4Owu5FeHUk_7Goyc9TKI5YK3cEM&export=download",
+        "sha256": "e61a37f8d9b2eee28928bdfad2c55e0798cc0a212e925cc5dcc66b243526c1a3"
+      },
+      "Tribal.gltf": {
+        "url": "https://drive.usercontent.google.com/download?id=1hWEwACHKMfDzYbqG2Cum3KP6semUY_Ap&export=download",
+        "sha256": "ffe686b0f0e7a2fb968ea9829358f059df903d2a60c9a94bd3516b1c3d42b7c4"
+      }
+    }
+  },
+  "stone_guard": {
+    "source": "godot/assets/gorge/moss_boulder.glb",
+    "page": "https://polyhaven.com/a/rock_moss_set_01",
+    "author_manifest": "godot/assets/gorge/manifest.json",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "sha256": "9fa0ee39a40e0c4fe551254bb17403f84160671ea996c50a3b9df0c4741839d8"
+  },
+  "additions": {
+    "author": "Project contributors",
+    "license": "CC0-1.0",
+    "scope": "Fang skin/leather/fur textures, braids and bone ornaments; staff; guardian assembly; outpost shield and armour; spider body assembly, legs and animations; all authored in prepare-gorge-mobs.py and mob-style.py. These additions are CC0-1.0; tool code retains project license."
+  },
+  "license_text": "art/licenses/CC0-1.0.txt",
+  "kaykit": {
+    "author": "Kay Lousberg",
+    "pack": "KayKit Character Pack Skeletons 1.0",
+    "page": "https://kaylousberg.itch.io/kaykit-skeletons",
+    "repository": "https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0",
+    "commit": "15b62b9bad122f72926c10fb14d622c73819fa54",
+    "license": "CC0-1.0",
+    "license_file": "art/licenses/kaykit-skeletons.txt",
+    "license_url": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/LICENSE.txt",
+    "files": {
+      "Skeleton_Warrior.glb": {
+        "url": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/addons/kaykit_character_pack_skeletons/Characters/gltf/Skeleton_Warrior.glb",
+        "sha256": "178b6fda810b814c250d8a2010c24dfd9b458b9006dd323353e620b7ff118bbe"
+      }
+    }
+  },
+  "cliff_spider": {
+    "source": "godot/assets/gorge/moss_boulder.glb",
+    "license": "CC0-1.0",
+    "details": "Poly Haven Rock Moss Set 01 shell; authored articulated legs, mandibles and eight animation clips. No external creature mesh."
+  }
+}

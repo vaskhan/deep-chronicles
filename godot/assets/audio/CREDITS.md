@@ -1,6 +1,6 @@
 # Audio credits
 
-All included recordings are CC0-1.0. Source URLs and SHA-256 hashes are pinned in manifest.json.
+Recordings are CC0-1.0 except the waterfall listed below (CC-BY-3.0). Source URLs and SHA-256 hashes are pinned in manifest.json.
 
 - **Kenney** — [kenney-impact](https://kenney.nl/assets/impact-sounds); [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
 - **Kenney** — [kenney-rpg](https://kenney.nl/assets/rpg-audio); [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
@@ -14,3 +14,5 @@ All included recordings are CC0-1.0. Source URLs and SHA-256 hashes are pinned i
 Town Theme: cynicmusic.com / pixelsphere.org. Wind loop: SketchMan3, derived from JaggedStone’s Loopable Dungeon Ambience.
 
 WAV conversion: mono PCM16, DC removal, peak −6 dB. OGG/MP3 unchanged. Mixer gain/crossfades are applied at runtime.
+
+- **kurt — Stream sounds / waterfall1.ogg**: https://opengameart.org/content/stream-sounds — [CC-BY-3.0](https://creativecommons.org/licenses/by/3.0/). Original recording unchanged; loop and gain applied at runtime.

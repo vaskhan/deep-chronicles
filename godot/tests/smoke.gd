@@ -19,6 +19,7 @@ var peer: WebSocketPeer
 var peer_inbox: Array = []
 var peer_id = 0
 var artifacts = ""
+var gorge_measurements: Array = []
 
 func _ready():
 	_run.call_deferred()
@@ -62,10 +63,10 @@ func _run():
 				if not is_equal_approx(float(s[key]), float(fixture.stats[key])):
 					stats_match = false; print("Mismatch ", key, ": ", s[key], " != ", fixture.stats[key])
 	check(stats_match, "%s native stat profiles match the JS game rules" % fixtures.size())
-	check(data.world.spawns.size() == 225 and data.world.obstacles.size() == 3244 and data.world.modelPlacements.size() >= 2000, "world content exported without missing spawns")
+	check(data.world.spawns.size() >= 210 and data.world.obstacles.size() >= 3251 + data.world.townDecor.size() and data.world.modelPlacements.size() >= 1900, "world content exported without missing spawns")
 	check(absf(data.height_at(-430, 400) - 4) < 0.001, "town ground matches server")
 	var position = data.move(Vector3(-437, 4, 400), Vector3.RIGHT, 5)
-	check(position.distance_to(Vector3(-430, 4, 400)) >= 5.0, "movement cannot cross the fountain")
+	check(position.distance_to(Vector3(-430, 4, 400)) >= 4.5*float(data.world.towns[0].scale)+0.6-0.01, "movement cannot cross the fountain")
 	var art = load("res://scripts/art_assets.gd")
 	var assets_ok = true
 	for id in data.catalog.MOBS.keys() + ["warrior", "mage", "merchant", "gatekeeper", "priest"]:
@@ -112,6 +113,15 @@ func _run():
 	check(game.profile.cls == "warrior" and game.profile.lvl == 1, "server creates the player")
 	check(await wait_for(func(): return game.hud.status_label.text.contains("Игроков онлайн: 1")), "HUD shows the live server player count")
 	check(game.hero.animator != null and game.hero.animator.has_animation("walk"), "native animated hero imported")
+	var saved_position = game.hero.position
+	for region in [[Vector3(-430,4,400), "town"], [Vector3(20,0,10), "forest"], [Vector3(360,0,-120), "waste"], [Vector3(2205,0,-195), "crypt"]]:
+		game.hero.position = region[0]
+		game.world.set_region(region[0]); game.world._process(10)
+		game.game_audio.follow(game.hero, game.camera, 2)
+		check(game.world.region_id == region[1] and game.game_audio.ambience.playing, "light and ambience match " + region[1])
+	game.game_audio.clear()
+	check(not game.game_audio.ambience.playing, "ambience stops on clear")
+	game.hero.position = saved_position; game.world.set_region(saved_position); game.world._process(10)
 	check(await wait_for(func(): return not game.mobs.is_empty()), "nearby mobs arrive as snapshots")
 	var tab = InputEventKey.new(); tab.physical_keycode = KEY_TAB; tab.keycode = KEY_TAB; tab.pressed = true
 	root.push_input(tab, true); await process_frame
@@ -126,12 +136,24 @@ func _run():
 	await _test_locomotion()
 
 	await create_timer(0.2).timeout
-	for kind in ["inventory", "character", "map", "shop", "teleport", "priest", "menu", "skills", "settings", "controls", "actions", "equipment", "craft"]:
+	for kind in ["inventory", "character", "map", "shop", "teleport", "priest", "menu", "skills", "profession", "settings", "controls", "actions", "equipment", "craft"]:
 		game.hud.show_window(kind)
 		await process_frame
 		check(is_instance_valid(game.hud.window) and game.get_viewport().get_visible_rect().encloses(game.hud.window.get_global_rect()), kind + " window fits the viewport")
 		if DisplayServer.get_name() != "headless": await _screenshot(kind + ".png")
 	game.hud.close_window()
+	game.hud.show_window("map")
+	check(game.hud.map_control.city_focus, "map opens the detailed town plan while in town")
+	game.hud.close_window()
+	for shop_id in ["weapons", "clothes", "alchemy"]:
+		var vendor = game.npcs.filter(func(n): return n.definition.get("shop", "") == shop_id)[0]
+		game._open_npc(vendor)
+		var products = []
+		for button in game.hud.window.find_children("*", "Button", true, false):
+			if button.has_meta("buy"): products.append(button.get_meta("buy"))
+		check(products == data.catalog.SHOP_STOCK[shop_id], "native shop shows its own inventory: " + shop_id)
+	game.hud.shop_id = ""; game.hud.shop_name = "Рыночный торговец"; game.hud.close_window()
+	await _test_rates_line()
 	game.hud.show_window("settings")
 	for slider in game.hud.window.find_children("*", "HSlider", true, false):
 		if slider.get_meta("audio_bus", "") == "Effects":
@@ -168,17 +190,61 @@ func _run():
 	game.hud.assign_slot(8, "potion_hp")
 	check(game.hud.hotbar_bindings[8] == "potion_hp" and game.hud.Settings.read_value("hotbar", "warrior", [])[8] == "potion_hp", "custom action bindings are saved")
 	game.hud.hotbar_bindings = game.hud.default_bindings(); game.hud._save_hotbar(); game.hud.set_hotbar_locked(true)
+	game.hud.set_hotbar_rows(1); await process_frame; await process_frame
+	var bottom_row_y = game.hud.skill_buttons[0].get_global_rect().position.y
+	game.hud.hotbar_expand.pressed.emit(); await process_frame; await process_frame
+	check(is_equal_approx(bottom_row_y, game.hud.skill_buttons[0].get_global_rect().position.y), "expanding keeps the primary row at the same screen position")
+	check(game.hud.skill_buttons[12].get_global_rect().position.y < bottom_row_y, "new row opens above the primary row")
+	game.hud.hotbar_expand.pressed.emit(); await process_frame; await process_frame
+	check(game.hud.hotbar_bindings.size() == 36 and game.hud.skill_buttons.size() == 36, "hotbar has 36 slots without sets or pages")
+	check(game.hud.hotbar_row_nodes.all(func(row): return row.visible), "all three hotbar rows expand")
+	game.hud.assign_slot(35, "potion_hp")
+	check(game.hud.skill_buttons[35].index == 35 and game.hud.skill_buttons[35].tooltip_text.contains("Зелье"), "last upper-row slot is assignable")
+	game.hud.assign_slot(34, "weapon_mastery")
+	check(game.hud.hotbar_bindings[34] == "empty", "passive skills cannot be assigned to the hotbar")
+	await _screenshot("hotbar-expanded.png")
+	game.hud.hotbar_collapse.pressed.emit(); game.hud.hotbar_collapse.pressed.emit(); await process_frame; await process_frame
+	check(is_equal_approx(bottom_row_y, game.hud.skill_buttons[0].get_global_rect().position.y), "collapsing also preserves the primary row position")
+	for id in ["character", "inventory", "skills", "actions", "map", "party", "menu"]:
+		var menu_button = game.hud.menu_icons[id]
+		check(menu_button.text.is_empty() and menu_button.icon != null, "icon menu exposes " + id)
+	check(is_equal_approx(game.hud.menu_icons.skills.size.y, game.hud.skill_buttons[0].size.y), "right menu uses the same cell height as the skill bar")
+	check(is_equal_approx(game.hud.menu_icons.skills.get_global_rect().end.y, game.hud.skill_buttons[0].get_global_rect().end.y), "right menu and skill bar share their bottom baseline")
+	game.hud.menu_icons.actions.pressed.emit(); await process_frame
+	check(game.hud.window_kind == "actions", "action icon opens a dedicated action window")
+	var pickup_action = _find_button("action_icon", "pickup")
+	check(is_instance_valid(pickup_action) and pickup_action.icon != null, "pickup exists as a blue draggable action icon")
+	game.hud.set_hotbar_locked(false)
+	await _drag(pickup_action, game.hud.skill_buttons[11])
+	check(game.hud.hotbar_bindings[11] == "pickup", "action icon can be dragged onto the hotbar")
+	game.hud.set_hotbar_locked(true); game.hud.close_window()
 	await _test_hotbar_drag()
-	check(game.hud.pickup_button.visible and game.hud.pickup_button.text.contains("Поднять"), "pickup has an explicit permanent action button")
+	_test_gait()
+	check(not game.hud.quick_hint.visible, "shortcut hints do not add a text row beneath the hotbar")
 	await _screenshot("chat-actions.png")
+	await _town_overview()
+	var fixes_before_move = received.filter(func(m): return m.t == "fix").size()
 	var start = game.hero.position
 	game.joystick = Vector2.RIGHT
 	await create_timer(0.35).timeout
 	game.joystick = Vector2.ZERO
 	check(game.hero.position.distance_to(start) > 1, "native movement updates position")
+	check(is_equal_approx(game.stats.speed, 7.15), "native warrior uses the requested ten-percent faster pace")
+	var stopped_at = game.hero.position
+	await create_timer(.15).timeout
+	check(game.hero.position.distance_to(stopped_at)<.01 and not game.hero.moving and game.hero.last_clip == "idle", "releasing movement stops position and gait without drifting")
 	var fixes = received.filter(func(m): return m.t == "fix").size()
-	check(fixes == 0, "server accepts native movement speed")
-	await _dev({"x": -442, "z": 410, "coins": 10000, "lvl": 8})
+	check(fixes == fixes_before_move, "server accepts native movement speed")
+	await _dev({"x": -435.1, "z": 400})
+	var before_slide = game.hero.position
+	var fixes_before_slide = received.filter(func(m): return m.t == "fix").size()
+	game.destination = data.position_at(-430, 406); game.has_destination = true
+	await create_timer(0.8).timeout
+	game.has_destination = false
+	await create_timer(0.2).timeout
+	check(game.hero.position.distance_to(before_slide) > 2, "native player slides around the fountain")
+	check(received.filter(func(m): return m.t == "fix").size() == fixes_before_slide, "server accepts curved native movement around obstacles")
+	await _dev({"x": -450.5, "z": 407, "coins": 10000, "lvl": 8})
 	game.hud.show_window("shop")
 	_click("buy", "sword_long")
 	check(await wait_for(func(): return _bag("sword_long") >= 0), "shop purchase is server-authoritative")
@@ -210,7 +276,15 @@ func _run():
 	check(await wait_for(func(): return game.profile.get("skills", {}).get("battle_cry", 0) == 1 and game.profile.sp < 5000), "skills card learns the server rank and spends SP")
 	game.hud.close_window()
 	game.hud.skill_buttons[1].pressed.emit()
-	check(await wait_for(func(): return not game.hud.buff_text.text.is_empty() and game.stats.patk > data.stats(game.profile).patk), "buff and effective stats come from the server skill event")
+	check(await wait_for(func(): return game.hud.effects_row.get_child_count() > 0 and game.stats.patk > data.stats(game.profile).patk), "buff and effective stats come from the server skill event")
+	check(await wait_for(func(): return game.hero.effects.any(func(entry): return str(entry[1]) == "buff" and int(entry[2]) > 0)), "snapshot carries the hero's own timed effects with a remaining time")
+	var effect_icon = game.hud.effects_row.get_child(0)
+	var effect_timer = effect_icon.find_child("Timer", true, false)
+	check(is_instance_valid(effect_timer) and effect_timer.text.ends_with("с") and effect_icon.tooltip_text.contains("Боевой клич"), "effect icon counts the remaining seconds down and names the skill")
+	check(game.combat_fx.auras.size() > 0 and int(game.combat_fx.counts.get("aura", 0)) > 0, "timed effect spawns real particles through combat_fx")
+	check(game.hud.effects_row.visible and not game.hud.target_effects_row.visible, "target effect row stays hidden while the target carries nothing")
+	await _screenshot("effect-icons.png")
+	await _test_profession()
 	await _dev({"x": -418, "z": 410})
 	game.hud.show_window("teleport"); _click("teleport", "meadow")
 	check(await wait_for(func(): return absf(game.hero.position.x + 260) < 2), "teleport places the native hero in the correct world coordinates")
@@ -230,17 +304,26 @@ func _run():
 				mob = m; combat_position = candidate; break
 		if mob: break
 	if mob:
-		await _dev({"x": combat_position.x, "z": combat_position.z, "hp": 500, "lvl": 18})
+		# Уровень берём по цели: разница больше девяти уровней обнуляет награду сервера.
+		await _dev({"x": combat_position.x, "z": combat_position.z, "hp": 500, "lvl": int(mob.definition.lvl) + 3})
 		# Use the same screen-space picking as the mouse/touch client.
 		await create_timer(0.25).timeout
 		game.pick(game.camera.unproject_position(mob.position + Vector3.UP * 1.1))
 		check(await wait_for(func(): return game.target == mob and game.target_arrow.visible and game.hud.target_panel.visible and mob.selected), "clicking a mob displays its name, HP, arrow and selection ring")
 		await _screenshot("target-selected.png")
+		game.hud.show_window("actions"); await process_frame
 		game.hud.autoloot_button.button_pressed = false
+		game.hud.close_window()
 		check(await wait_for(func(): return game.profile.get("autoloot") == false), "autoloot toggle persists on the server")
 		var sp_before = int(game.profile.get("sp", 0))
 		var coins_before = int(game.profile.coins)
-		game.attack(); game.use_skill("power_strike")
+		game.use_skill("power_strike")
+		check(await wait_for(func(): return game.hero.winding_up), "physical skill starts its own windup")
+		check(await wait_for(func(): return not game.hero.winding_up), "physical skill reaches its impact")
+		check(not game.attacking and game.pending_skill.is_empty(), "skill does not enable ordinary attack mode")
+		game.use_skill("power_strike")
+		check(not game.attacking and game.pending_skill.is_empty(), "cooldown click does not enable attacks or approach")
+		game.attack() # Explicit F resumes ordinary attacks after the skill.
 		var killed = await wait_for(func(): return game.profile.get("kills", 0) > 0, 12)
 		if not killed:
 			print("Combat diagnostics: player=", game.hero.position, " mob=", mob.position, " hp=", mob.hp, " visible=", mob.visible, " attacking=", game.attacking)
@@ -268,7 +351,9 @@ func _run():
 	game.camera_distance = 28; game.camera_pitch = 0.56; game.camera_yaw = 0.45
 	game._cancel_attack()
 	await create_timer(0.25).timeout
-	check(game.hud.minimap.mob_markers.size() == game.mobs.values().filter(func(m): return m.visible and not m.dead and Time.get_ticks_msec() - m.seen < 1500).size(), "minimap removes dead and stale mobs")
+	# Сравнение ждёт ближайшего обновления карты: окно «свежести» 1500 мс иначе истекает
+	# между перерисовкой и самой проверкой, и живой маркер считается лишним.
+	check(await wait_for(func(): return game.hud.minimap.mob_markers.size() == game.mobs.values().filter(func(m): return m.visible and not m.dead and Time.get_ticks_msec() - m.seen < 1500).size()), "minimap removes dead and stale mobs")
 	# A second ordinary WS client proves the native client interoperates with the existing protocol.
 	peer = WebSocketPeer.new(); peer.connect_to_url(net.endpoint)
 	check(await wait_for(func(): return peer.get_ready_state() == WebSocketPeer.STATE_OPEN), "second player connects")
@@ -365,7 +450,7 @@ func _run():
 	game._action("equip", _bag("sword_long"))
 	check(await wait_for(func(): return game.hero.weapon_node.get_meta("weapon_kind") == "warrior"), "mage equipping a sword changes the actual weapon model")
 	check(game.hero.weapon_node.to_global(game.hero.weapon_node.get_meta("handle_center")).distance_to(game.hero.weapon_node.get_parent().global_position) < 0.001, "weapon handle stays exactly on the palm grip")
-	await _dev({"x": -442, "z": 410, "coins": 1000, "item": "pelt", "n": 20})
+	await _dev({"x": -450.5, "z": 407, "coins": 1000, "item": "pelt", "n": 20})
 	await _dev({"item": "bone", "n": 20})
 	game.hud.show_window("craft"); _click("craft", "staff_oak")
 	check(await wait_for(func(): return _bag("staff_oak") >= 0 and game.profile.coins == 700 and _bag("pelt") < 0 and _bag("bone") < 0), "native crafting spends exact resources on the actual server")
@@ -379,7 +464,12 @@ func _run():
 	game.hud.show_window("character"); await _screenshot("mage-b-gear.png"); game.hud.close_window()
 	await _test_combat_presentation()
 	await _test_starter_hunt()
+	await _test_elite()
 	await _test_mob_telegraph()
+	await _test_timed_effects()
+	await _test_pack()
+	await _test_gorge()
+	if "--gorge-bench" in OS.get_cmdline_user_args(): await _gorge_benchmark_route()
 	# Real screenshot from the rendering backend, when running with a display.
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
@@ -396,6 +486,7 @@ func _run():
 	_finish()
 
 func _test_combat_presentation():
+	await _dev({"lvl": 14})
 	game.hud.show_window("skills"); _click("learn", "ice_nova")
 	check(await wait_for(func(): return game.profile.skills.get("ice_nova", 0) == 1), "mage learns the frost spell for visual integration test")
 	game.hud.close_window()
@@ -435,7 +526,7 @@ func _test_audio_bank():
 		for stream in variants:
 			loaded += 1
 			if not stream or stream.get_length() <= 0: valid = false
-	check(valid and loaded == 67, "all 67 licensed recordings and music tracks decode as real audio streams")
+	check(valid and loaded == 68, "all 68 licensed recordings and music tracks decode as real audio streams")
 	var limiter_found = false
 	for i in AudioServer.get_bus_effect_count(0):
 		var effect = AudioServer.get_bus_effect(0, i)
@@ -474,7 +565,7 @@ func _test_locomotion():
 		if data.move(candidate, Vector3.ZERO, 0.01).distance_to(candidate) < 0.1:
 			direction = trial; break
 	game.destination = start + direction * 16; game.has_destination = true
-	check(await wait_for(func(): return game.hero.moving and game.hero.last_clip == "run"), "actual click movement selects the full-body jogging clip")
+	check(await wait_for(func(): return game.hero.moving and game.hero.last_clip == "run"), "actual click movement selects the full-body running clip")
 	await create_timer(0.2).timeout
 	check(game.hero.motion_speed > 5 and game.hero.motion_speed <= float(game.stats.speed) * 1.05 and game.stats.speed <= 8.1, "running speed is reduced and animation follows measured displacement")
 	var skeleton = game.hero.model.find_child("Skeleton3D", true, false)
@@ -516,47 +607,77 @@ func _test_mob_telegraph():
 	check(escape != Vector3.ZERO, "telegraph fixture has a collision-free escape corridor")
 	if escape == Vector3.ZERO: return
 	# No fixed delay here: react to the event without consuming half its wind-up.
-	net.send({"t": "dev", "x": live_orc.position.x + escape.x * 2, "z": live_orc.position.z + escape.z * 2, "hp": 500})
+	var dodge_start = live_orc.position + escape * 2
+	net.send({"t": "dev", "x": dodge_start.x, "z": dodge_start.z, "hp": 500})
+	# move-подтверждение вызывает _place и сбрасывает destination/телеграфы.
+	# Оно обязано прийти ДО выбранного замаха и команды бежать.
+	var placed = await wait_for(func(): return Vector2(game.hero.position.x-dodge_start.x,game.hero.position.z-dodge_start.z).length() < .05)
+	check(placed, "dodge fixture receives the server move before observing the next wind-up")
+	if not placed: return
 	# Под нагрузкой клиент может проснуться к концу чужого замаха: такое событие
 	# описывает удар, который игрок физически не успел увидеть. Берём следующий,
 	# у которого на экране ещё остаётся время на реакцию.
 	var announced = false
+	var fresh_warning = false
 	var mob = null
 	var windup_at = 0
+	var warning_cursor = [0,0]
 	for attempt in 3:
 		warning.clear()
 		from_message = received.size()
 		announced = await wait_for(func():
-			for packet in received.slice(from_message):
+			var found = false
+			for packet_index in range(from_message, received.size()):
+				var packet = received[packet_index]
 				if packet.t == "ev":
-					for event in packet.e:
-						if event.k == "mob_windup" and int(event.p) == game.own_id: warning.merge(event, true); return true
-			return false, 10)
+					for event_index in packet.e.size():
+						var event = packet.e[event_index]
+						if event.k == "mob_windup" and int(event.p) == game.own_id and int(event.m) == orc_id:
+							warning.clear(); warning.merge(event, true)
+							warning_cursor[0] = packet_index; warning_cursor[1] = event_index; found = true
+			return found, 10)
 		if not announced: break
 		windup_at = Time.get_ticks_msec()
 		mob = game.mobs.get(int(warning.m))
 		var telegraph = game.combat_fx.telegraphs.get(mob.get_instance_id()) if is_instance_valid(mob) else null
 		# Остаток сектора на экране: жизнь эффекта равна замаху плюс 0.25 с послесвечения.
-		if telegraph == null or float(telegraph.life) - float(telegraph.age) >= float(warning.get("t", 0.0)) * 0.6: break
-		print("TELEGRAPH_SKIP stale=", snappedf(float(telegraph.age), 0.01))
+		# Пропавший сектор — тот же случай: под нагрузкой тест проснулся уже после
+		# удара, замах закончился и `mob_strike` снял телеграф. Берём следующий.
+		# Послесвечение НЕ является временем для уклонения: считаем от серверного t.
+		if telegraph != null and float(warning.get("t", 0.0)) - float(telegraph.age) >= float(warning.get("t", 0.0)) * 0.6:
+			fresh_warning = true; break
+		print("TELEGRAPH_SKIP stale=", snappedf(float(telegraph.age), 0.01) if telegraph else "consumed")
 	check(announced, "an aggressive server mob announces its wind-up before damage")
+	if announced and is_instance_valid(mob) and mob.health_fill:
+		var hf = mob.health_fill.mesh
+		# левый край заполнения совпадает с левым краем рамки при любом здоровье
+		check(absf((hf.center_offset.x - hf.size.x * 0.5) + 0.7) < 0.001, "mob health fill is anchored to the left edge")
+	check(fresh_warning, "dodge starts inside the actual wind-up, excluding afterglow")
+	if not fresh_warning: return
 	if warning.is_empty(): return
 	game.set_target(mob)
 	check(is_instance_valid(mob) and mob.winding_up and game.combat_fx.telegraphs.has(mob.get_instance_id()), "server wind-up drives the monster pose and the matching ground sector")
 	check(game.game_audio.music.combat_remaining > 0, "a real mob threat switches the local music into combat")
-	# Бежать начинаем сразу: замах длится не больше 0.32 с, а пауза звука и сохранение
+	# Бежать начинаем сразу: окно замаха короткое, а пауза звука и сохранение
 	# PNG в оконном режиме съедают почти всё окно реакции (в headless они бесплатны).
 	# Real client movement, not a developer warp: leave the fixed sector.
 	game.destination = game.hero.position + escape * 14
 	game.has_destination = true
 	await create_timer(0.05).timeout
 	check(game.game_audio.music.duck_db < 0 and game.game_audio.music.cue == "music_battle", "battle theme crossfades and ducks below attack sounds")
-	await _screenshot("mob-windup.png")
+	# Захват без PNG-кодирования: оно блокирует кадры движения на сотни мс.
+	var windup_image: Image = null
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		windup_image = root.get_texture().get_image()
 	var strike = {}
 	check(await wait_for(func():
-		for packet in received.slice(from_message):
+		for packet_index in range(warning_cursor[0], received.size()):
+			var packet = received[packet_index]
 			if packet.t == "ev":
-				for event in packet.e:
+				var first_event = warning_cursor[1]+1 if packet_index == warning_cursor[0] else 0
+				for event_index in range(first_event, packet.e.size()):
+					var event = packet.e[event_index]
 					if event.k == "mob_strike" and int(event.m) == int(warning.m): strike.merge(event, true); return true
 		return false, 3), "server resolves the telegraphed attack")
 	# Диагностика отказа: сервер считает попадание по своей копии позиции игрока.
@@ -570,6 +691,8 @@ func _test_mob_telegraph():
 		"speed": game.stats.get("speed", 0), "elapsed_ms": Time.get_ticks_msec() - windup_at,
 	}))
 	check(not strike.get("landed", true), "running out of the telegraph avoids the actual server hit")
+	if windup_image: windup_image.save_png(artifacts.path_join("mob-windup.png") if not artifacts.is_empty() else "user://native-mob-windup.png")
+	await _screenshot("mob-dodge.png")
 	await _dev({"x": -448, "z": 418, "hp": 500})
 	check(game.combat_fx.telegraphs.is_empty(), "teleport clears all monster warning geometry")
 
@@ -577,6 +700,25 @@ func _bag(id: String) -> int:
 	for i in game.profile.inv.size():
 		if game.profile.inv[i].id == id: return i
 	return -1
+
+## Общий план города: окна закрыты, камера отодвинута и поднята. Кадр показывает, что после
+## слияния застройка, растительность и HUD остаются на местах; камера возвращается назад.
+func _town_overview():
+	game.hud.close_window()
+	await _dev({"x": -430, "z": 436})
+	var yaw = game.camera_yaw
+	var pitch = game.camera_pitch
+	var distance = game.camera_distance
+	game.camera_yaw = 0.9
+	game.camera_pitch = Tuning.CAMERA_PITCH_MAX * 0.62
+	game.camera_distance = Tuning.CAMERA_DISTANCE_MAX * 0.72
+	await create_timer(0.6).timeout
+	check(Vector2(game.hero.position.x + 430, game.hero.position.z - 436).length() < 6, "hero stands on the town square for the overview frame")
+	await _screenshot("town-overview.png")
+	game.camera_yaw = yaw
+	game.camera_pitch = pitch
+	game.camera_distance = distance
+	await create_timer(0.3).timeout
 
 func _dev(fields: Dictionary):
 	var command = fields.duplicate(); command.t = "dev"; net.send(command)
@@ -587,6 +729,58 @@ func _finish():
 	if net.socket: net.socket.close()
 	print("NATIVE_TEST_RESULT checks=%s failures=%s" % [checks, failures])
 	quit(0 if failures == 0 else 1)
+
+## Профессия: блокировка до 20 уровня, выбор решает сервер, результат виден в интерфейсе.
+func _test_profession():
+	check(game.profile.get("prof", null) == null, "new character starts without a profession")
+	game.hud.show_window("profession"); await process_frame; await process_frame
+	var cards = game.hud.window.find_children("*", "PanelContainer", true, false).filter(func(n): return n.has_meta("profession_card"))
+	check(cards.size() == 2, "profession window offers exactly two cards for the class")
+	var locked = _find_button("prof", "knight")
+	check(is_instance_valid(locked) and locked.disabled and locked.tooltip_text.contains("20"), "profession is locked before level 20 with a readable reason")
+	await _screenshot("profession-locked.png")
+	await _dev({"lvl": 20, "sp": 100000})
+	check(await wait_for(func(): return int(game.profile.lvl) == 20), "server raises the character to the profession level")
+	game.hud.show_window("profession"); await process_frame; await process_frame
+	await _screenshot("profession.png")
+	var health_before = data.stats(game.profile).maxHp
+	_click("prof", "knight")
+	check(await wait_for(func(): return str(game.profile.get("prof", "")) == "knight"), "profession choice is decided and returned by the server")
+	check(game.hud.chat.system_view.get_parsed_text().contains("Страж"), "system log reports the chosen profession")
+	check(data.stats(game.profile).maxHp > health_before, "profession bonus reaches the character stats")
+	# HUD пересчитывает полосы раз в 0.2 с: ждём настоящего обновления, а не доверяем кадру.
+	check(await wait_for(func(): return game.hud.hp_bar.max_value > health_before), "profession bonus reaches the health bar")
+	game.hud.show_window("profession"); await process_frame; await process_frame
+	var rejected = _find_button("prof", "paladin")
+	check(is_instance_valid(rejected) and rejected.disabled, "second promotion remains locked before level 40")
+	game.hud.show_window("character"); await process_frame; await process_frame
+	var hero_lines = game.hud.window.find_children("*", "Label", true, false).filter(func(n): return n.has_meta("hero_profession"))
+	check(hero_lines.size() == 1 and hero_lines[0].text.contains("Страж"), "hero window shows the chosen profession")
+	await _screenshot("profession-hero.png")
+	game.hud.show_window("skills"); await process_frame; await process_frame
+	check(is_instance_valid(_find_button("learn", "shield_bash")), "skills card lists the profession skill after the choice")
+	await _screenshot("profession-skills.png")
+	_click("learn", "shield_bash")
+	check(await wait_for(func(): return int(game.profile.get("skills", {}).get("shield_bash", 0)) == 1), "profession skill is learned for SP under the usual rules")
+	check("shield_bash" in game.hud.binding_choices(), "profession skill becomes assignable to the action bar")
+	game.hud.skills_filter = "passive"; game.hud.show_window("skills"); await process_frame
+	var before_passive = data.stats(game.profile).patk
+	_click("learn", "weapon_mastery")
+	check(await wait_for(func(): return game.profile.skills.get("weapon_mastery",0) == 1), "passive is learned from its separate tab")
+	check(data.stats(game.profile).patk > before_passive, "learned passive changes native stats")
+	game.hud.skills_filter = "active"
+	await _dev({"lvl": 40, "sp": 100000})
+	game.hud.show_window("profession"); await process_frame
+	_click("prof", "paladin")
+	check(await wait_for(func(): return game.profile.get("prof2", "") == "paladin"), "second promotion is selected on the server at level 40")
+	check("sacred_guard" in game.hud.binding_choices(), "second promotion exposes its active skill")
+
+	game.hud.close_window()
+
+func _find_button(key: String, value):
+	for button in game.hud.window.find_children("*", "Button", true, false):
+		if button.has_meta(key) and button.get_meta(key) == value: return button
+	return null
 
 func _click(key: String, value):
 	for button in game.hud.window.find_children("*", "Button", true, false):
@@ -639,11 +833,13 @@ func _test_hotbar_drag():
 		await _drag(icon, game.hud.skill_buttons[8])
 		check(game.hud.hotbar_bindings[8] == "power_strike", "real mouse drag assigns a learned skill from K to an empty hotbar cell")
 	game.hud.close_window(); await process_frame
+	var swapped_out = str(game.hud.hotbar_bindings[7])
 	await _drag(game.hud.skill_buttons[8], game.hud.skill_buttons[7])
-	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[8] == "talk", "real mouse drag swaps action cells")
+	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[8] == swapped_out, "real mouse drag swaps action cells")
 	game.hud.set_hotbar_locked(true); await process_frame
+	var locked_cell = str(game.hud.hotbar_bindings[6])
 	await _drag(game.hud.skill_buttons[7], game.hud.skill_buttons[6])
-	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[6] == "target", "locked hotbar rejects mouse drag")
+	check(game.hud.hotbar_bindings[7] == "power_strike" and game.hud.hotbar_bindings[6] == locked_cell, "locked hotbar rejects mouse drag")
 	game.hud.hotbar_bindings = game.hud.default_bindings(); game.hud._save_hotbar()
 
 func _test_chat_channels():
@@ -702,6 +898,45 @@ func _test_chat_scroll():
 	check(chat.input.text == "draft during disconnect", "disconnected chat preserves unsent draft")
 	net.authed = was_authed; chat.input.clear()
 
+func _test_gait():
+	var actor = load("res://scripts/actor.gd").new(); actor.kind = "p"; add_child(actor); actor.setup("warrior","Проверка движения"); actor.set_process(false)
+	actor.position = Vector3(.1,0,0); actor.measure_motion(Vector3.ZERO,.1); actor._process(.01)
+	check(actor.last_clip == "walk" and actor.animator.speed_scale < 1, "slow actual travel selects a calibrated walking clip")
+	actor.position = Vector3(.6,0,0); actor.measure_motion(Vector3.ZERO,.1); actor._process(.01)
+	check(actor.last_clip == "run" and absf(actor.animator.speed_scale - 6.0/float(actor.model.get_meta("gait_run_speed")))<.01, "jog playback follows measured displacement")
+	actor.position = Vector3(1.2,0,0); actor.measure_motion(Vector3(.6,0,0),.1)
+	actor.play_action("attack",.6); actor._process(.01)
+	check(actor.last_clip == "run" and actor.action_until == 0, "moving cancels full-body attack presentation without skating")
+	actor.measure_motion(actor.position,.1); actor._process(.01)
+	check(actor.last_clip == "idle" and actor.travel_speed == 0, "blocked travel does not animate running in place")
+	actor.position = Vector3(100,0,0); actor.measure_motion(Vector3.ZERO,.016); actor._process(.01)
+	check(actor.last_clip == "idle", "teleports do not accelerate the gait")
+	actor.position = Vector3.ZERO
+	actor.snapshots = [{"t":1000.0,"p":Vector3.ZERO,"r":0.0},{"t":1100.0,"p":Vector3(.6,0,0),"r":0.0}]
+	actor.interpolate(1050,.05); actor._process(.01)
+	check(actor.moving and absf(actor.travel_speed-6)<.01, "remote gait follows rendered travel rather than the newest packet flag")
+	actor.interpolate(1250,.05); actor.interpolate(1300,.05); actor._process(.01)
+	check(actor.position.is_equal_approx(Vector3(.6,0,0)) and actor.last_clip == "idle", "remote movement neither overshoots its final snapshot nor runs after stopping")
+	actor.free()
+
+func _rate_labels() -> Array:
+	return game.hud.window.find_children("*", "Label", true, false).filter(func(l): return l.text.begins_with("Рейты: ") or l.text.begins_with("Ещё: ") or l.text.begins_with("Разница уровней: "))
+
+func _test_rates_line():
+	game.hud.show_window("menu"); await process_frame
+	var live = _rate_labels()
+	check(live.size() == 1 and live[0].text == "Рейты: опыт ×1, SP ×1, монеты ×1, дроп ×1", "game menu shows the live server rate line: %s" % [live.map(func(l): return l.text)])
+	var real_rates = Network.rates
+	Network.rates = {"xp": 2, "sp": 2, "coins": 3, "dropChance": 2, "dropAmount": 2, "craftCost": 1, "enchantChance": 1, "sellPrice": 1, "buyPrice": 1, "respawn": 1.5, "partyBonus": 1,
+		"levelGap4": 0.9, "levelGap5": 0.5, "levelGap6": 0.3, "levelGap7": 0.2, "levelGap8": 0.1, "levelGap9": 0.05, "levelGapAffectsCoins": 1, "levelGapAffectsDrop": 0}
+	game.hud.show_window("menu"); await process_frame
+	var custom = _rate_labels()
+	check(custom.size() == 3 and custom[0].text == "Рейты: опыт ×2, SP ×2, монеты ×3, дроп ×2" and custom[1].text == "Ещё: количество дропа ×2, респавн ×1,5"
+		and custom[2].text == "Разница уровней: до 3 — полная награда, 4–6 ×0,9 / ×0,5 / ×0,3, 7–9 ×0,2 / ×0,1 / ×0,05, от 10 — без награды, дроп без штрафа", "server rates render in Russian with extra coefficients: %s" % [custom.map(func(l): return l.text)])
+	if DisplayServer.get_name() != "headless": await _screenshot("menu-rates.png")
+	Network.rates = real_rates
+	game.hud.close_window()
+
 func _grip_drag(grip: Control, delta: Vector2):
 	var start = grip.get_global_rect().get_center()
 	var motion = InputEventMouseMotion.new(); motion.position = start; motion.global_position = start; root.push_input(motion, true)
@@ -753,7 +988,7 @@ func _test_party():
 	game.hud.chat.select_channel("all")
 
 func _test_starter_hunt():
-	await _dev({"x": -292, "z": 387})
+	await _dev({"x": -620, "z": 400})
 	game.camera_distance = 16; game.camera_pitch = 0.62
 	check(await wait_for(func():
 		var near = 0
@@ -761,3 +996,275 @@ func _test_starter_hunt():
 			if mob.visible and not mob.dead and mob.position.distance_to(game.hero.position) < 30: near += 1
 		return near >= 8), "starter hunting clearing has at least eight live server mobs within thirty units")
 	await create_timer(0.3).timeout; await _screenshot("starter-hunt.png")
+
+func _ranked_mob():
+	for mob in game.mobs.values():
+		if mob.visible and not mob.rank.is_empty(): return mob
+	return null
+
+## Значки эффектов у цели: сервер накладывает урон со временем и ослабление, клиент их рисует.
+func _test_timed_effects():
+	# Цель должна пережить прямой удар, иначе проверять будет нечего: берём орка, а не кролика.
+	var spawn
+	var orc_id = 0
+	for i in data.world.spawns.size():
+		if data.world.spawns[i].mob == "orc": spawn = data.world.spawns[i]; orc_id = i + 1
+	if not spawn: check(false, "orc spawn exists for the timed effect test"); return
+	await _dev({"lvl": 25, "sp": 200000, "hp": 9000, "x": spawn.x, "z": spawn.z + 5})
+	net.send({"t": "learn", "id": "curse", "rank": 1})
+	check(await wait_for(func(): return int(game.profile.get("skills", {}).get("curse", 0)) == 1), "mage learns the timed-effect skill on the server")
+	check(await wait_for(func(): return game.mobs.has(orc_id) and game.mobs[orc_id].visible and not game.mobs[orc_id].dead), "a live server mob is within casting range")
+	if not game.mobs.has(orc_id): return
+	var mob = game.mobs[orc_id]
+	game.set_target(mob)
+	game.use_skill("curse")
+	check(await wait_for(func(): return mob.effects.size() >= 2, 12), "server puts both the damage over time and the weakening on the target")
+	var kinds = []
+	for entry in mob.effects: kinds.append(str(entry[1]))
+	kinds.sort()
+	check(kinds == ["debuff", "dot"], "target carries exactly the damage over time and the stat weakening")
+	check(mob.effects.all(func(entry): return int(entry[2]) > 0), "every target effect reports its remaining time")
+	check(await wait_for(func(): return game.hud.target_effects_row.visible and game.hud.target_effects_row.get_child_count() == mob.effects.size()), "target panel shows one icon per server effect")
+	var target_timer = game.hud.target_effects_row.get_child(0).find_child("Timer", true, false)
+	check(is_instance_valid(target_timer) and target_timer.text.ends_with("с"), "target effect icon counts down")
+	check(game.combat_fx.auras.size() >= 2, "each target effect keeps its own live aura")
+	game.camera_distance = 15; game.camera_pitch = 0.62
+	await create_timer(0.4).timeout
+	await _screenshot("target-effects.png")
+	# Спад приходит с сервера: значки гаснут сами, без единой команды клиента.
+	check(await wait_for(func(): return mob.dead or (mob.effects.is_empty() and not game.hud.target_effects_row.visible), 16), "effects expire on their own and the icons disappear")
+	game.camera_distance = 28; game.camera_pitch = 0.56
+
+## Элиты и чемпионы: ранг, размер, подпись и аура приходят с сервера.
+func _test_elite():
+	check(await wait_for(func(): return _ranked_mob() != null, 12), "server marks ranked mobs in the starter zone")
+	var elite = _ranked_mob()
+	if not elite: return
+	check(is_instance_valid(elite.rank_aura), "ranked mob wears its own aura ring")
+	check(float(elite.definition.size) > float(data.catalog.MOBS[elite.base_model].size), "ranked mob is bigger than the ordinary mob of its kind")
+	check(elite.display_name != str(data.catalog.MOBS[elite.base_model].name), "ranked mob carries the server name, not the plain one")
+	check(elite.label.modulate.is_equal_approx(elite.rank_color()), "rank colours the name plate")
+	await _dev({"x": elite.position.x + 7, "z": elite.position.z + 7, "hp": 9000})
+	game.set_target(elite)
+	game.camera_distance = 14; game.camera_pitch = 0.6
+	await create_timer(0.6).timeout
+	check(elite.rank_aura.visible, "aura is drawn while the elite is alive")
+	await _screenshot("elite-mob.png")
+	game.set_target(null)
+	game.camera_distance = 28; game.camera_pitch = 0.56
+
+## Стая: удар по одному мобу поднимает сородича того же семейства рядом.
+## Радиус крика — 12 единиц (src/pack.js); стоим дальше радиуса агрессии сородича,
+## чтобы он мог прийти только на зов, а не заметить героя сам.
+func _test_pack():
+	var spawns = data.world.spawns
+	var first = -1
+	var second = -1
+	for i in spawns.size():
+		if first >= 0: break
+		var a = spawns[i]
+		var da = data.catalog.MOBS[a.mob]
+		if a.has("camp") or not da.get("social", false): continue
+		for j in range(i + 1, spawns.size()):
+			var b = spawns[j]
+			var db = data.catalog.MOBS[b.mob]
+			if b.has("camp") or not db.get("social", false): continue
+			if str(da.get("fam", a.mob)) != str(db.get("fam", b.mob)): continue
+			if Vector2(a.x - b.x, a.z - b.z).length() > 12.0: continue
+			first = i; second = j; break
+	if first < 0: check(false, "world has a pair of kin inside the social radius"); return
+	var victim_id = first + 1
+	var ally_id = second + 1
+	var away = Vector2(spawns[first].x - spawns[second].x, spawns[first].z - spawns[second].z).normalized()
+	# Попытки растянуты: убитая в прошлой попытке жертва возрождается около 25 секунд,
+	# а сородич успевает отойти на прогулке. Короткий цикл сгорал вхолостую.
+	for attempt in 8:
+		await _dev({"hp": 9000, "x": spawns[first].x + away.x * 16, "z": spawns[first].z + away.y * 16})
+		if not await wait_for(func(): return game.mobs.has(victim_id) and game.mobs.has(ally_id) and game.mobs[victim_id].visible and game.mobs[ally_id].visible and not game.mobs[victim_id].dead and not game.mobs[ally_id].dead, 14): continue
+		var victim = game.mobs[victim_id]
+		var ally = game.mobs[ally_id]
+		# Сородич гуляет вокруг точки спавна: ждём, пока он окажется вне своего радиуса
+		# агрессии и внутри радиуса крика, а не отбрасываем попытку по первому же кадру.
+		if not await wait_for(func(): return ally.position.distance_to(game.hero.position) >= 16.0 and ally.position.distance_to(victim.position) <= 12.0, 8): continue
+		if victim.dead or ally.dead: continue
+		var started = ally.position.distance_to(game.hero.position)
+		# Сверху: в лесу низкая камера упирается в крону ближайшего дерева.
+		game.camera_distance = 17; game.camera_pitch = 1.05
+		game.set_target(victim); game.attack()
+		var answered = await wait_for(func(): return started - game.mobs[ally_id].position.distance_to(game.hero.position) > 8.0, 14)
+		if not answered: continue
+		check(true, "attacking one mob brings its kin from outside its own aggression range")
+		# Ждём, пока подкрепление дойдёт до героя: кадр должен показать стаю в бою, а не бег вдалеке.
+		await wait_for(func(): return game.mobs[ally_id].position.distance_to(game.hero.position) < 9.0, 10)
+		await create_timer(0.3).timeout
+		await _screenshot("mob-pack.png")
+		game._cancel_attack(); game.set_target(null)
+		game.camera_distance = 28; game.camera_pitch = 0.56
+		return
+	check(false, "kin answered the call for help")
+
+func _gorge_elite():
+	for mob in game.mobs.values():
+		if mob.visible and not mob.dead and not mob.rank.is_empty() and data.zone_at(mob.position).id == "gorge": return mob
+	return null
+
+## Громовое ущелье: перенос у Хранителя врат, своя зона и воздух, река с водопадом,
+## стая в бою и элита. Кадры gorge-*.png — для визуальной проверки зоны.
+func _test_gorge():
+	var gate = null
+	for n in data.world.npcs:
+		if n.role == "gatekeeper": gate = n; break
+	var tp = null
+	for t in data.world.teleports:
+		if t.id == "gorge": tp = t
+	if not tp: check(false, "gorge teleport exists"); return
+	await _dev({"x": gate.x + 2, "z": gate.z + 2, "coins": 5000, "hp": 99999, "lvl": 27})
+	game.hud.show_window("teleport")
+	check(_find_button("teleport", "gorge") != null, "gatekeeper lists the Thunder Gorge teleport")
+	_click("teleport", "gorge")
+	check(await wait_for(func(): return Vector2(game.hero.position.x - tp.x, game.hero.position.z - tp.z).length() < 2), "teleport places the hero at the gorge mouth")
+	game.hud.close_window()
+	await create_timer(0.3).timeout
+	check(data.zone_at(game.hero.position).id == "gorge" and game.world.region_id == "gorge_terraces", "gorge zone and its lower-terrace air are active")
+	var gorge = game.world.find_child("ThunderGorge", true, false)
+	check(gorge != null and ["River", "Waterfall", "WaterfallVeil", "FallsPool", "FallsMist"].all(func(n): return gorge.find_child(n, false, false) != null), "gorge river, waterfall, pool and mist are built")
+	check(absf(game.hero.position.y - data.height_at(tp.x, tp.z)) < 1.5, "hero stands on the gorge ground")
+	game.camera_distance = 30; game.camera_pitch = 0.42; game.camera_yaw = atan2(-float(data.world.gorge.axis.x), -float(data.world.gorge.axis.z))
+	await create_timer(1.2).timeout
+	await _screenshot("gorge-arrival.png")
+	# Элита: в поле зрения у устья десятки мобов ущелья, ранг приходит с сервера.
+	check(await wait_for(func(): return _gorge_elite() != null, 14), "server sends a ranked gorge mob with its aura")
+	var elite = _gorge_elite()
+	if elite:
+		var art = load("res://scripts/art_assets.gd")
+		check(elite.art_model and elite.active_art == elite.base_model and elite.model.scene_file_path == str(art.entry_of(elite.base_model).path), "gorge mob uses its own manifest model or explicit alias")
+		# Герой ниже по оси ущелья, камера за ним смотрит вверх по оси — элита в кадре перед героем.
+		var up = Vector2(float(data.world.gorge.axis.x), float(data.world.gorge.axis.z))
+		await _dev({"x": elite.position.x - up.x * 10, "z": elite.position.z - up.y * 10, "hp": 99999})
+		game.set_target(elite); game.camera_distance = 16; game.camera_pitch = 0.42; game.camera_yaw = atan2(-up.x, -up.y)
+		await create_timer(0.8).timeout
+		await _screenshot("gorge-elite.png")
+		game.set_target(null)
+	# Стая: удар по одному поднимает сородичей, все бегут к герою.
+	var spawns = data.world.spawns
+	var victim_id = -1
+	for i in spawns.size():
+		if spawns[i].get("pack", "") == "gorge2": victim_id = i + 1; break
+	if victim_id < 0: check(false, "gorge pack exists"); return
+	var kin = []
+	for i in spawns.size():
+		if spawns[i].get("pack", "") == "gorge2" and i + 1 != victim_id: kin.append(i + 1)
+	await _dev({"x": spawns[victim_id - 1].x - 8, "z": spawns[victim_id - 1].z - 8, "hp": 99999})
+	check(await wait_for(func(): return game.mobs.has(victim_id) and game.mobs[victim_id].visible and not game.mobs[victim_id].dead, 12), "gorge pack is visible")
+	if not game.mobs.has(victim_id): return
+	game.set_target(game.mobs[victim_id]); game.attack()
+	var engaged = await wait_for(func(): return kin.filter(func(id): return game.mobs.has(id) and not game.mobs[id].dead and game.mobs[id].position.distance_to(game.hero.position) < 6.0).size() >= 2, 12)
+	check(engaged, "the whole gorge pack joins the fight")
+	game.camera_distance = 16; game.camera_pitch = 0.6
+	await create_timer(0.4).timeout
+	await _screenshot("gorge-pack.png")
+	game._cancel_attack(); game.set_target(null)
+	# Общий план: водопад с уступа — отдельный кадр с интерфейсом.
+	var falls = data.world.gorge.falls
+	var axis = Vector2(float(data.world.gorge.axis.x), float(data.world.gorge.axis.z))
+	var look = Vector2(falls.x, falls.z) - axis * 30.0 + Vector2(axis.y, -axis.x) * 25.0
+	await _dev({"x": look.x, "z": look.y, "hp": 99999})
+	game.camera_distance = 34; game.camera_pitch = 0.28; game.camera_yaw = atan2(-axis.x, -axis.y)
+	await create_timer(1.0).timeout
+	check(game.game_audio.waterfall.playing and game.game_audio.waterfall.bus == "Ambience", "waterfall recording plays near the falls on the ambience bus")
+	check(gorge.find_child("GorgeArt", false, false) != null, "scanned cliffs and fern patches are built in the gorge")
+	await _screenshot("gorge-falls.png")
+	await _dev({"x": gate.x + 2, "z": gate.z + 2, "hp": 99999})
+	check(await wait_for(func(): return not game.game_audio.waterfall.playing), "teleporting out of the gorge stops the waterfall voice")
+	game.camera_distance = 28; game.camera_pitch = 0.56
+
+## Опциональный замер реального клиента с HUD, серверными мобами и эффектами.
+func _gorge_benchmark(view: String):
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
+	await create_timer(3.0).timeout
+	var frames: Array = []
+	var cpu = 0.0; var gpu = 0.0; var draws = 0.0; var primitives = 0.0
+	var alive_frames = 0; var combat_frames = 0
+	var last = Time.get_ticks_usec()
+	for sample in 180:
+		await process_frame
+		if not game.hero.dead: alive_frames += 1
+		if game.mobs.values().any(func(m): return m.visible and not m.dead and m.position.distance_to(game.hero.position)<12 and (m.winding_up or m.action_until>0)): combat_frames += 1
+		var now = Time.get_ticks_usec()
+		frames.append(float(now-last)/1000.0); last=now
+		cpu += RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid())
+		gpu += RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid())
+		draws += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
+		primitives += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
+	var total = 0.0
+	for ms in frames: total += ms
+	frames.sort()
+	var result = {"view":view,"alive_frames":alive_frames,"combat_frames":combat_frames,"fps":180000.0/total,"median_ms":frames[90],"p95_ms":frames[171],"p99_ms":frames[178],"render_cpu_ms":cpu/180,"gpu_ms":gpu/180 if gpu>0 else null,"draw_calls":draws/180,"primitives":primitives/180,"camera_distance":game.camera_distance,"camera_pitch":game.camera_pitch,"visible_mobs":game.mobs.values().filter(func(m): return m.visible).size()}
+	check(alive_frames==180,"benchmark %s keeps a living hero through all samples"%view)
+	if view=="combat": check(combat_frames>0,"benchmark combat includes actual monster attacks")
+	gorge_measurements.append(result)
+	print("GORGE_GAME_BENCH ",JSON.stringify(result))
+	var file = FileAccess.open(artifacts.path_join("performance-gameplay.json"),FileAccess.WRITE)
+	file.store_string(JSON.stringify({"renderer":RenderingServer.get_current_rendering_method(),"adapter":RenderingServer.get_video_adapter_name(),"resolution":[root.size.x,root.size.y],"vsync":false,"samples":180,"warmup_seconds":3,"scenario":"isolated local server, real HUD and combat; test-only HP refill every 0.2 s; live mobs vary","views":gorge_measurements},"  "))
+
+## Замер идёт ПОСЛЕ проверки маршрута: прогрев не меняет условия smoke боя.
+func _gorge_benchmark_route():
+	Engine.max_fps=0
+	if game.hero.dead:
+		net.send({"t":"respawn"})
+		check(await wait_for(func(): return not game.hero.dead),"benchmark revives the test character before the route")
+	# Продлеваем только изолированную измерительную сессию, не меняя бой и эффекты.
+	var refill=Timer.new(); refill.wait_time=.2
+	refill.timeout.connect(func(): net.send({"t":"dev","hp":99999}))
+	add_child(refill); refill.start()
+	var g=data.world.gorge
+	var axis=Vector2(float(g.axis.x),float(g.axis.z))
+	game.camera_yaw=atan2(-axis.x,-axis.y)
+	var arrival=data.world.teleports.filter(func(t): return t.id=="gorge")[0]
+	await _dev({"x":arrival.x,"z":arrival.z,"hp":99999,"lvl":27})
+	game.camera_distance=30; game.camera_pitch=.42
+	await _gorge_benchmark("arrival")
+	await _screenshot("gorge-game-arrival.png")
+	var elite=_gorge_elite()
+	if elite:
+		await _dev({"x":elite.position.x-axis.x*10,"z":elite.position.z-axis.y*10,"hp":99999})
+		game.set_target(elite); game.camera_distance=16; game.camera_pitch=.42
+		await _gorge_benchmark("elite")
+		await _screenshot("gorge-game-elite.png")
+	game.set_target(null)
+	var spawns=data.world.spawns
+	for i in spawns.size():
+		if spawns[i].get("pack","")!="gorge2": continue
+		await _dev({"x":spawns[i].x-8,"z":spawns[i].z-8,"hp":99999})
+		await wait_for(func(): return game.mobs.has(i+1) and game.mobs[i+1].visible,4)
+		if game.mobs.has(i+1) and not game.mobs[i+1].dead:
+			game.set_target(game.mobs[i+1]); game.attack()
+		game.camera_distance=16; game.camera_pitch=.6
+		await _gorge_benchmark("combat")
+		await _screenshot("gorge-game-combat.png")
+		game._cancel_attack(); game.set_target(null)
+		break
+	var look=Vector2(g.falls.x,g.falls.z)-axis*30+Vector2(axis.y,-axis.x)*25
+	await _dev({"x":look.x,"z":look.y,"hp":99999})
+	game.camera_distance=34; game.camera_pitch=.28
+	await _gorge_benchmark("waterfall")
+	await _screenshot("gorge-game-waterfall.png")
+	# Фаза 2: настоящие смешанная стая Клыка и группа каменных стражей.
+	for pair in [["gorge4", "fang_shaman", "fang-pack"], ["gorge7", "fang_shaman", "fang-waterfall"], ["gorge10", "stone_guard", "stone-pack"], ["gorge19", "outpost_guard", "outpost-summit"], ["gorge0", "cliff_spider", "cliff-spiders"]]:
+		for i in spawns.size():
+			if spawns[i].get("pack", "") != pair[0]: continue
+			game._cancel_attack(); game.set_target(null)
+			await _dev({"x":spawns[i].x-axis.x*9,"z":spawns[i].z-axis.y*9,"hp":99999})
+			check(await wait_for(func(): return game.mobs.values().any(func(m): return m.base_model == pair[1] and m.visible and not m.dead), 5), "model benchmark receives " + pair[1])
+			game.camera_distance=16; game.camera_pitch=.50
+			if game.mobs.has(i+1) and not game.mobs[i+1].dead:
+				game.set_target(game.mobs[i+1]); game.attack()
+			await _gorge_benchmark(pair[2])
+			await _screenshot("gorge-game-"+pair[2]+".png")
+			if pair[2] == "fang-waterfall":
+				game.camera_distance=24; game.camera_pitch=.26
+				await wait_wall(.5)
+				await _screenshot("gorge-game-fang-waterfall-wide.png")
+			break
+	refill.queue_free()

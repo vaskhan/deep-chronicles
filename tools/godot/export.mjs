@@ -1,4 +1,5 @@
-import { skillRanks } from '../../src/progression.js';
+import { MOVE_SCALE } from '../../src/movement.js';
+import { skillRanks, profsFor, skillsOf } from '../../src/progression.js';
 import { LOOT } from '../../src/loot.js';
 // One source of truth: bake the existing world, catalog and procedural animation
 // into engine-neutral files. No server saves or credentials enter this export.
@@ -14,7 +15,7 @@ import { buildProps, obstacles, TOWNS, ZONES, TELEPORTS, CRYPT, DUNGEON, MAP, he
 import { buildHero, buildMob, buildNpc } from '../../src/models.js';
 import { MODEL_OF, rigModel } from '../../src/glb.js';
 import { calcStats, MAX_ENCH, SAFE_ENCH, ENCH_CHANCE } from '../../src/stats.js';
-import { sellPrice } from '../../src/sim.js';
+import { sellPrice, CORPSE } from '../../src/sim.js';
 import { newChar } from '../../server/sim/player.js';
 import { enhanceHumanoid, enhanceMob } from './art.mjs';
 import { artPlacements } from './placements.mjs';
@@ -36,10 +37,10 @@ const props = buildProps({ use(k) { material = k; }, add(shape, color, x, y, z, 
 const presentation = artPlacements(shapes, TOWNS, CRYPT);
 const terrain = { start: -1000, step: 4, count: 501 };
 const h = Buffer.alloc(terrain.count ** 2 * 4);
-for (let z = 0; z < terrain.count; z++) for (let x = 0; x < terrain.count; x++) h.writeFloatLE(heightAt(terrain.start + x * terrain.step, terrain.start + z * terrain.step), (z * terrain.count + x) * 4);
+for (let z = 0; z < terrain.count; z++) for (let x = 0; x < terrain.count; x++) h.writeFloatLE(heightAt(terrain.start + x * terrain.step, terrain.start + z * terrain.step, false), (z * terrain.count + x) * 4);
 await fs.writeFile(path.join(out, 'heights.bin'), h);
 await fs.writeFile(path.join(out, 'world.json'), JSON.stringify({ ...props, ...presentation, obstacles, towns: TOWNS, zones: ZONES, teleports: TELEPORTS, crypt: CRYPT, dungeon: DUNGEON, map: MAP, terrain }));
-await fs.writeFile(path.join(out, 'catalog.json'), JSON.stringify({ ...Object.fromEntries(Object.entries(data).filter(([, v]) => typeof v !== 'function')), UI_RULES: { skillRanks: Object.fromEntries(Object.keys(data.SKILLS).map(id => [id, skillRanks(id)])), loot: LOOT, previewCharacters: Object.fromEntries(Object.keys(data.CLASSES).map(cls => [cls, newChar("Предпросмотр", cls)])), maxEnch: MAX_ENCH, safeEnch: SAFE_ENCH, enchChance: ENCH_CHANCE, sellPrices: Object.fromEntries(Object.entries(data.ITEMS).map(([id, item]) => [id, sellPrice(item)])) } }));
+await fs.writeFile(path.join(out, 'catalog.json'), JSON.stringify({ ...Object.fromEntries(Object.entries(data).filter(([, v]) => typeof v !== 'function')), UI_RULES: { corpse: CORPSE, movementScale: MOVE_SCALE, skillRanks: Object.fromEntries(Object.keys(data.SKILLS).map(id => [id, skillRanks(id)])), loot: LOOT, previewCharacters: Object.fromEntries(Object.keys(data.CLASSES).map(cls => [cls, newChar("Предпросмотр", cls)])), maxEnch: MAX_ENCH, safeEnch: SAFE_ENCH, enchChance: ENCH_CHANCE, sellPrices: Object.fromEntries(Object.entries(data.ITEMS).map(([id, item]) => [id, sellPrice(item)])) } }));
 
 // Bake the exact existing procedural animations into standard glTF clips.
 delete MODEL_OF['Маг'];
@@ -118,10 +119,19 @@ await bake('npc', enhanceHumanoid(buildNpc(0xd09030), 'npc'));
 // Golden profiles exercise the native display calculation against JS rules.
 const fixtures = [];
 for (const cls of Object.keys(data.CLASSES)) for (const lvl of [1, 8, 18, 40]) for (const set of ['none', ...Object.keys(data.SETS)]) {
-  const p = { cls, lvl, inv: [{ id: 'potion_hp', n: 25 }], equip: Object.fromEntries(data.SLOTS.map(s => [s.id, null])), enc: {} };
-  p.equip.weapon = cls === 'mage' ? 'staff_crystal' : 'sword_crystal'; p.enc.weapon = lvl % 7;
-  for (const id of data.SETS[set]?.parts || []) { p.equip[data.ITEMS[id].slot] = id; p.enc[data.ITEMS[id].slot] = 4; }
-  fixtures.push({ p, stats: calcStats(p) });
+  // Профессии входят в набор эталонов: множители характеристик обязан повторять и клиентский предпросмотр.
+  for (const prof of [null, ...profsFor(cls).map(x => x.id)]) {
+    const p = { cls, lvl, prof, inv: [{ id: 'potion_hp', n: 25 }], equip: Object.fromEntries(data.SLOTS.map(s => [s.id, null])), enc: {} };
+    p.equip.weapon = cls === 'mage' ? 'staff_crystal' : 'sword_crystal'; p.enc.weapon = lvl % 7;
+    for (const id of data.SETS[set]?.parts || []) { p.equip[data.ITEMS[id].slot] = id; p.enc[data.ITEMS[id].slot] = 4; }
+    fixtures.push({ p, stats: calcStats(p) });
+  }
+}
+for (const [id, prof] of Object.entries(data.PROFESSIONS).filter(([,p])=>p.parent)) {
+  const p = newChar('Passive fixture',prof.base);p.lvl=60;p.prof=prof.parent;p.prof2=id;
+  if(p.cls==='warrior') p.equip.shield='shield_iron';
+  for(const skill of skillsOf(p)) p.skills[skill]=skillRanks(skill).length;
+  fixtures.push({p,stats:calcStats(p)});
 }
 await fs.writeFile(path.join(out, 'stats-fixtures.json'), JSON.stringify(fixtures));
 console.log(`Godot: ${shapes.length} objects, ${props.spawns.length} spawns, ${obstacles.length} obstacles, ${fixtures.length} stat fixtures exported.`);

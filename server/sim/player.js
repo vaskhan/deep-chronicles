@@ -1,13 +1,19 @@
 // Персонаж на сервере: профиль, сумка, экипировка, магазин, заточка, опыт и смерть.
 // Клиент ничего из этого не считает — он только присылает команды и рисует события.
-import { migrateProgression, effectiveSkill, learnError, skillRanks } from '../../src/progression.js';
-import { CLASSES, ITEMS, SKILLS, SHOP, RECIPES, MAX_LEVEL, xpToNext } from '../../src/data.js';
+import { resetMovement } from './movement.js';
+import { migrateProgression, effectiveSkill, learnError, promotionError, skillRanks, applyProf, skillsOf } from '../../src/progression.js';
+import { CLASSES, ITEMS, PROFESSIONS, SKILLS, SHOP, SHOP_STOCK, RECIPES, MAX_LEVEL, BAG_SLOTS, xpToNext } from '../../src/data.js';
 import { calcStats, equipFromBag, unequipSlot, migrate, MAX_ENCH } from '../../src/stats.js';
 import { TOWNS, TELEPORTS, heightAt, zoneAt } from '../../src/world-core.js';
-import { sellPrice, crystalsFor, enchSucceeds, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
+import { sellPrice, crystalsFor, xpLossOnDeath, flatDist, clamp } from '../../src/sim.js';
+import { DEFAULT_RATES, rateSellPrice, rateBuyPrice, rateRecipe, enchSucceedsRated } from '../../src/rates.js';
 
+// Рейты задаются один раз при старте сервера (server/rates.js); по умолчанию ×1 — прежний баланс.
+let RATES = DEFAULT_RATES;
+export const setRates = (rates) => { RATES = rates || DEFAULT_RATES; };
 export const SAVE_VERSION = 3; // всё, что старее, пересоздаётся (v2 выдавала новичку оружие 8 уровня, надеть его было нельзя)
 const NPC_RANGE = 8; // на каком расстоянии можно говорить с NPC
+const PROF_CD = 1000; // мс между попытками выбрать профессию: повтор пакета не проходит дважды
 
 export function newChar(name, cls) {
   const c = typeof cls === 'string' && Object.hasOwn(CLASSES, cls) ? cls : 'warrior';
@@ -40,23 +46,28 @@ export function loadChar(name, save) {
   for (const [sl, id] of Object.entries(P.equip)) if (id && !ITEMS[id]) P.equip[sl] = null;
   for (const sl of Object.keys(P.enc)) P.enc[sl] = clamp(P.enc[sl] | 0, 0, MAX_ENCH);
   const s = calcStats(P);
-  P.hp = clamp(+P.hp || s.maxHp, 0, s.maxHp); P.mp = clamp(+P.mp || s.maxMp, 0, s.maxMp);
+  // Ноль — сохраненное значение ресурса, а не отсутствие поля.
+  P.hp = clamp(Number.isFinite(P.hp) ? P.hp : s.maxHp, 0, s.maxHp);
+  P.mp = clamp(Number.isFinite(P.mp) ? P.mp : s.maxMp, 0, s.maxMp);
+  P.dead = P.dead === true || P.hp === 0;
+  if (P.dead) P.hp = 0;
   return P;
 }
 
 // игрок на сервере: профиль + всё, что живёт только в сессии
 export function newActor(id, name, P) {
   return {
-    id, name, P,
+    id, name, P, movement: { at: Date.now(), credit: 0, fresh: true },
     x: P.x, y: heightAt(P.x, P.z), z: P.z, r: 0,
     target: null,        // { m: mobId } | { p: playerId }
-    attacking: false, atkTimer: 0, swing: null, cds: {}, buffs: [], cast: null,
-    dead: false, dirty: true, out: [],
-    hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0,
+    attacking: false, actionUntil: 0, atkTimer: 0, swing: null, queuedSkill: null, cds: {}, effects: [], cast: null,
+    dead: P.dead === true || P.hp === 0, dirty: true, out: [],
+    hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0, profAt: 0,
   };
 }
 
-export const statsOf = (a, now) => calcStats(a.P, a.buffs, now);
+// Эффекты во времени (усиления, ослабления, замедление) считает calcStats — src/effects.js.
+export const statsOf = (a, now) => calcStats(a.P, a.effects, now);
 export const inTown = (a) => !!zoneAt(a.x, a.z).town;
 const ev = (a, e) => { a.out.push(e); };
 export const say = (a, text, cls) => ev(a, { k: 'msg', text, cls });
@@ -68,6 +79,31 @@ export function addItem(P, id, n = 1, ench = 0) {
   if (e) e.n += n;
   else for (let k = 0; k < (it.stack ? 1 : n); k++) P.inv.push(ench ? { id, n: 1, e: ench } : { id, n: it.stack ? n : 1 });
 }
+// Сколько новых ячеек займут вещи: стопка к уже лежащей — ни одной, иначе одна на стопку
+// или по одной на каждую нестопочную вещь.
+export function slotsFor(P, drops) {
+  let need = 0; const fresh = new Set();
+  for (const d of drops) {
+    const it = ITEMS[d.item]; if (!it || d.item === 'coins') continue;
+    if (it.stack) { if (!P.inv.some((e) => e.id === d.item) && !fresh.has(d.item)) { fresh.add(d.item); need++; } }
+    else need += Math.max(1, d.n | 0);
+  }
+  return need;
+}
+// Отказ по месту в сумке с понятным текстом или null.
+export function bagError(P, drops) {
+  const need = slotsFor(P, drops);
+  if (need && P.inv.length + need > BAG_SLOTS) return `Сумка полна (${P.inv.length}/${BAG_SLOTS}), нужно свободных ячеек: ${P.inv.length + need - BAG_SLOTS}`;
+  return null;
+}
+// Записать изменение профиля или откатить его: сбой записи не должен выглядеть успешной выдачей.
+function commit(a, save, before, fail) {
+  try { if (save()) return true; } catch { /* ниже — откат */ }
+  Object.assign(a.P, before);
+  say(a, fail, 'bad');
+  return false;
+}
+const snapshot = (P) => ({ coins: P.coins, inv: structuredClone(P.inv), equip: { ...P.equip }, enc: { ...P.enc } });
 export function takeItem(P, id, n = 1) {
   let idx = P.inv.findIndex((i) => i.id === id && !i.e); if (idx < 0) idx = P.inv.findIndex((i) => i.id === id);
   if (idx < 0) return false;
@@ -89,7 +125,8 @@ export function gainXp(a, xp) {
   a.dirty = true;
 }
 export function killPlayer(a, byName, byPk) {
-  a.dead = true; a.swing = null; a.P.hp = 0; a.attacking = false; a.target = null; a.cast = null;
+  a.dead = true; a.queuedSkill = null; a.swing = null; a.P.hp = 0; a.attacking = false; a.target = null; a.cast = null;
+  a.effects = [];
   const loss = xpLossOnDeath(a.P.lvl, a.karma > 0);
   a.P.xp = Math.max(0, a.P.xp - loss);
   ev(a, { k: 'dead', by: byName, loss, pk: !!byPk });
@@ -97,6 +134,7 @@ export function killPlayer(a, byName, byPk) {
 }
 export function respawn(a) {
   if (!a.dead) return;
+  a.effects = [];
   const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0];
   const s = statsOf(a);
   a.dead = false; a.P.hp = Math.round(s.maxHp * 0.7); a.P.mp = Math.round(s.maxMp * 0.7);
@@ -104,8 +142,11 @@ export function respawn(a) {
   a.dirty = true;
 }
 export function place(a, x, z) {
-  a.swing = null; a.attacking = false; a.target = null; a.cast = null;
+  a.queuedSkill = null; a.swing = null; a.attacking = false; a.target = null; a.cast = null;
   a.x = x; a.z = z; a.y = heightAt(x, z);
+  // Сервер уже перенес героя: новые позиции проверяются относительно места
+  // назначения. На запоздавшие старые координаты клиент получает обычный fix.
+  resetMovement(a);
   ev(a, { k: 'move', x, z });
 }
 
@@ -114,13 +155,20 @@ export function place(a, x, z) {
 export function cmdEquip(a, idx, want) {
   const it = ITEMS[a.P.inv[idx | 0]?.id];
   if (!it) return say(a, 'Нет такой вещи', 'bad');
-  const err = equipFromBag(a.P, idx | 0, typeof want === 'string' ? want : undefined);
+  // Двуручное оружие или полный доспех снимают до двух вещей в сумку: проверяем место заранее.
+  const trial = structuredClone(a.P);
+  const err = equipFromBag(trial, idx | 0, typeof want === 'string' ? want : undefined);
   if (err) return say(a, err, 'bad');
+  if (trial.inv.length > BAG_SLOTS && trial.inv.length > a.P.inv.length) return say(a, `Сумка полна (${a.P.inv.length}/${BAG_SLOTS}): некуда снять надетое`, 'bad');
+  equipFromBag(a.P, idx | 0, typeof want === 'string' ? want : undefined);
   a.dirty = true; say(a, `Экипировано: ${it.name}`, 'good');
 }
 export function cmdUnequip(a, sl) {
-  if (!a.P.equip[sl]) return;
+  // Имя слота приходит от клиента: 'constructor'/'toString' находились в прототипе объекта
+  // и роняли обработчик пакета. Снимаем только собственный слот с настоящим предметом.
+  if (!Object.hasOwn(a.P.equip, sl) || !ITEMS[a.P.equip[sl]]) return;
   const it = ITEMS[a.P.equip[sl]];
+  if (a.P.inv.length >= BAG_SLOTS) return say(a, `Сумка полна (${a.P.inv.length}/${BAG_SLOTS}): некуда снять`, 'bad');
   unequipSlot(a.P, sl);
   a.dirty = true; say(a, `Снято: ${it.name}`);
 }
@@ -141,7 +189,7 @@ export function cmdUse(a, id) {
   }
 }
 // усиление: ref = { bag: индекс } | { slot: id }
-export function cmdEnch(a, scrollId, ref) {
+export function cmdEnch(a, scrollId, ref, save = () => true) {
   const sc = ITEMS[scrollId];
   if (sc?.use !== 'ench') return say(a, 'Нужен свиток усиления', 'bad');
   const entry = ref?.slot ? null : a.P.inv[ref?.bag | 0];
@@ -151,10 +199,14 @@ export function cmdEnch(a, scrollId, ref) {
   if (it.grade === 'none') return say(a, 'Вещь без грейда нельзя усилить', 'bad');
   const cur = ref.slot ? a.P.enc[ref.slot] || 0 : entry.e || 0;
   if (cur >= MAX_ENCH) return say(a, 'Максимальное усиление', 'bad');
+  // При неудаче надетая вещь превращается в кристаллы: им нужна ячейка, если стопки ещё нет.
+  if (ref.slot && bagError(a.P, [{ item: 'crystal', n: 1 }])) return say(a, `${bagError(a.P, [{ item: 'crystal', n: 1 }])} — для кристаллов на случай неудачи`, 'bad');
+  const before = snapshot(a.P);
   if (!takeItem(a.P, scrollId)) return say(a, 'Нет свитка', 'bad');
   a.dirty = true;
-  if (enchSucceeds(cur)) {
+  if (enchSucceedsRated(cur, RATES)) {
     if (ref.slot) a.P.enc[ref.slot] = cur + 1; else entry.e = cur + 1;
+    if (!commit(a, save, before, 'Не удалось сохранить усиление. Свиток и вещь не изменились')) return;
     say(a, `Усиление удалось: ${it.name} +${cur + 1}`, 'rare');
     ev(a, { k: 'ench', ok: true, color: sc.color });
   } else {
@@ -162,6 +214,7 @@ export function cmdEnch(a, scrollId, ref) {
     else a.P.inv.splice(a.P.inv.indexOf(entry), 1);
     const n = crystalsFor(it.grade, cur);
     addItem(a.P, 'crystal', n);
+    if (!commit(a, save, before, 'Не удалось сохранить усиление. Свиток и вещь не изменились')) return;
     say(a, `Усиление не удалось — ${it.name} +${cur} рассыпается. Получено кристаллов: ${n}`, 'bad');
     ev(a, { k: 'ench', ok: false });
   }
@@ -169,25 +222,31 @@ export function cmdEnch(a, scrollId, ref) {
 
 // торговля — только рядом с торговцем
 const npcNear = (a, npcs, role) => npcs.some((n) => n.role === role && flatDist(a, n) < NPC_RANGE);
-export function cmdBuy(a, npcs, id, n) {
+export function cmdBuy(a, npcs, id, n, save = () => true) {
   if (!npcNear(a, npcs, 'merchant')) return say(a, 'Торговец далеко', 'bad');
   const it = ITEMS[id];
   if (!it || !SHOP.includes(id)) return say(a, 'Такого товара нет', 'bad');
+  if (!npcs.some(npc => npc.role === 'merchant' && flatDist(a,npc) < NPC_RANGE && (!npc.shop || SHOP_STOCK[npc.shop]?.includes(id)))) return say(a, 'В этой лавке нет такого товара', 'bad');
   n = clamp(n | 0 || 1, 1, 99);
-  const cost = it.price * n;
+  const cost = rateBuyPrice(it.price, RATES) * n;
   if (a.P.coins < cost) return say(a, 'Недостаточно монет', 'bad');
+  const full = bagError(a.P, [{ item: id, n }]); if (full) return say(a, full, 'bad');
+  const before = snapshot(a.P);
   a.P.coins -= cost; addItem(a.P, id, n);
+  if (!commit(a, save, before, 'Не удалось сохранить покупку. Монеты не списаны')) return;
   a.dirty = true; say(a, `Куплено: ${it.name}${n > 1 ? ` ×${n}` : ''} за ${cost} мон.`, 'good');
 }
-export function cmdSell(a, npcs, idx, n) {
+export function cmdSell(a, npcs, idx, n, save = () => true) {
   if (!npcNear(a, npcs, 'merchant')) return say(a, 'Торговец далеко', 'bad');
   const e = a.P.inv[idx | 0]; const it = ITEMS[e?.id];
   if (!it) return say(a, 'Нет такой вещи', 'bad');
   n = clamp(n | 0 || 1, 1, e.n);
-  const gain = sellPrice(it) * n;
+  const gain = rateSellPrice(sellPrice(it), RATES) * n;
   if (gain <= 0) return say(a, 'Этот предмет нельзя продать', 'bad');
+  const before = snapshot(a.P);
   e.n -= n; if (e.n <= 0) a.P.inv.splice(idx | 0, 1);
   a.P.coins += gain;
+  if (!commit(a, save, before, 'Не удалось сохранить продажу. Вещь осталась в сумке')) return;
   a.dirty = true; say(a, `Продано: ${it.name}${n > 1 ? ` ×${n}` : ''} за ${gain} мон.`, 'good');
 }
 export function cmdTeleport(a, npcs, id) {
@@ -202,13 +261,17 @@ export function cmdTeleport(a, npcs, id) {
 
 // ---------- умения ----------
 // Проверки те же, что были на клиенте, но теперь решающие: мана, кулдаун, уровень, город.
-export function skillError(a, id, now) {
+export function skillError(a, id, now, ignoreBusy = false) {
   const sk = effectiveSkill(a.P, id);
   if (!sk) return 'Нет такого умения';
-  if (a.dead || a.cast) return 'Сейчас нельзя';
-  if (!CLASSES[a.P.cls].skills.includes(id)) return 'Это умение не вашего класса';
+  if (sk.kind === 'passive') return 'Пассивное умение действует постоянно';
+  if (promotionError(a.P,sk.lvl)) return promotionError(a.P,sk.lvl);
+  if (a.dead || (a.cast && !ignoreBusy)) return 'Сейчас нельзя';
+  if (!ignoreBusy && (a.actionUntil || 0) > now) return 'Дождитесь завершения предыдущего действия';
+  if (!skillsOf(a.P).includes(id)) return 'Это умение не вашего класса';
   if (!a.P.skills[id]) return 'Сначала изучите умение за SP в карточке навыков';
   if (a.P.lvl < sk.lvl) return `${sk.name}: нужен уровень ${sk.lvl}`;
+  if (sk.needShield && !a.P.equip.shield) return `${sk.name}: нужен щит`;
   if ((a.cds[id] || 0) > now) return 'Умение ещё не готово';
   if (a.P.mp < sk.mp) return 'Недостаточно маны';
   if (inTown(a) && sk.kind !== 'heal' && sk.kind !== 'buff') return 'В городе сражаться нельзя';
@@ -241,8 +304,26 @@ export function cmdLearn(a, id, rank, save) {
   catch { Object.assign(a.P, before); return say(a, 'Не удалось сохранить обучение. SP возвращены', 'bad'); }
   a.dirty = true; say(a, `Изучено: ${next.name}, ранг ${rank}. Потрачено ${next.sp} SP`, 'good');
 }
+// Профессия выбирается один раз и навсегда: проверки, частота и сохранение — здесь, на сервере.
+export function cmdProf(a, id, save) {
+  if (a.dead || a.cast) return say(a, 'Сейчас нельзя выбрать профессию', 'bad');
+  const now = Date.now();
+  if (now - (a.profAt || 0) < PROF_CD) return say(a, 'Слишком часто. Подождите секунду', 'bad');
+  a.profAt = now;
+  const before = { prof: a.P.prof, prof2: a.P.prof2 };
+  const error = applyProf(a.P, id);
+  if (error) return say(a, error, 'bad');
+  try { if (!save()) throw Error('save failed'); }
+  catch { Object.assign(a.P,before); return say(a, 'Не удалось сохранить профессию. Попробуйте ещё раз', 'bad'); }
+  a.dirty = true;
+  const prof = PROFESSIONS[id];
+  say(a, `Профессия выбрана: ${prof.name}. Новые умения ждут в карточке навыков (K)`, 'rare');
+}
+
 // Одна транзакционная точка выдачи для ручного подбора и автолута.
 export function creditLoot(a, drops, save) {
+  const full = bagError(a.P, drops);
+  if (full) { say(a, `${full}. Добыча осталась на земле`, 'bad'); return false; }
   const before = { coins: a.P.coins, inv: structuredClone(a.P.inv) };
   for (const d of drops) {
     if (d.item === 'coins') a.P.coins += d.n;
@@ -259,7 +340,7 @@ export function cmdCraft(a, npcs, id, request, save) {
   if (a.dead || !npcNear(a, npcs, 'merchant')) return say(a, 'Для изготовления подойдите к торговцу живым', 'bad');
   if (typeof request !== 'string' || request.length < 8 || request.length > 80) return;
   if (a.P.craftReceipts?.includes(request)) return say(a, 'Этот заказ уже выполнен');
-  const recipe = Object.hasOwn(RECIPES, id) ? RECIPES[id] : null, item = ITEMS[id];
+  const recipe = Object.hasOwn(RECIPES, id) ? rateRecipe(RECIPES[id], RATES) : null, item = ITEMS[id];
   if (!recipe || !item) return say(a, 'Нет такого рецепта', 'bad');
   if (a.P.lvl < item.lvl) return say(a, `Нужен уровень ${item.lvl}`, 'bad');
   if (a.P.coins < recipe.coins) return say(a, 'Недостаточно монет', 'bad');
@@ -273,6 +354,7 @@ export function cmdCraft(a, npcs, id, request, save) {
     for (const entry of a.P.inv) if (entry.id === part) { const n = Math.min(entry.n, remaining); entry.n -= n; remaining -= n; }
   }
   a.P.inv = a.P.inv.filter(e => e.n > 0); addItem(a.P, id);
+  if (a.P.inv.length > BAG_SLOTS && a.P.inv.length > before.inv.length) { Object.assign(a.P, before); return say(a, `Сумка полна (${a.P.inv.length}/${BAG_SLOTS}): некуда положить изделие`, 'bad'); }
   a.P.craftReceipts = [...before.craftReceipts, request].slice(-32);
   try { if (!save()) throw Error('save failed'); }
   catch { Object.assign(a.P, before); return say(a, 'Изготовление не сохранено. Материалы и монеты возвращены', 'bad'); }

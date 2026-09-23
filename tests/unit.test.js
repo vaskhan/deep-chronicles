@@ -187,19 +187,19 @@ test('пивоты частей совпадают с суставами про�
 });
 
 // ===== правила симуляции (общие для сервера и клиента) =====
-import { calcDmg, missChance, evaChance, xpForKill, rollDrops, rollCoins, sellPrice, crystalsFor, enchSucceeds, mobStep, newMob, moveEntity, flatDist } from '../src/sim.js';
+import { calcDmg, missChance, evaChance, xpForKill, rollDrops, rollCoins, sellPrice, crystalsFor, enchSucceeds, mobStep, newMob, moveEntity, flatDist, leashDistance } from '../src/sim.js';
 import { SAFE_ENCH, MAX_ENCH } from '../src/stats.js';
 
 // генератор с фиксированным зерном — чтобы тесты не зависели от удачи
 const seeded = (seed) => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-test('урон: растёт с атакой, падает от защиты, крит удваивает', () => {
+test('урон: растёт с атакой, падает от защиты, крит усиливает на заданный множитель', () => {
   const r = () => 0.5; // середина разброса, без крита
   const a = calcDmg(100, 0, 1, 0, r).d, b = calcDmg(200, 0, 1, 0, r).d;
   assert.ok(b > a * 1.9 && b < a * 2.1, `удвоение атаки: ${a} → ${b}`);
   assert.ok(calcDmg(100, 200, 1, 0, r).d < a, 'защита не снижает урон');
   const crit = calcDmg(100, 0, 1, 1, () => 0.5);
-  assert.ok(crit.crit && crit.d === a * 2, `крит: ${crit.d} вместо ${a * 2}`);
+  assert.ok(crit.crit && crit.d === a * 1.75, `крит: ${crit.d} вместо ${a * 1.75}`);
   assert.ok(calcDmg(0.0001, 9999, 1, 0, r).d >= 1, 'урон должен быть хотя бы 1');
 });
 
@@ -212,12 +212,16 @@ test('промах и уклонение: в пределах разумного
   assert.ok(evaChance(1, 90) > evaChance(40, 30), 'уклонение не растёт от ловкости');
 });
 
-test('опыт за моба режется, если моб сильно ниже игрока', () => {
-  const mob = MOBS.rabbit;
+test('опыт режется ступенями за разницу уровней в обе стороны', () => {
+  const mob = MOBS.rabbit, strong = MOBS.golem;
   assert.equal(xpForKill(mob, mob.lvl), mob.xp, 'за ровню опыт полный');
-  assert.equal(xpForKill(mob, mob.lvl - 10), mob.xp, 'за моба выше себя опыт полный');
-  const low = xpForKill(mob, mob.lvl + 20);
-  assert.ok(low < mob.xp && low >= Math.round(mob.xp * 0.1), `срез опыта: ${low}`);
+  assert.equal(xpForKill(mob, mob.lvl + 3), mob.xp, 'разница до трёх уровней штрафа не даёт');
+  assert.equal(xpForKill(strong, strong.lvl - 3), strong.xp, 'за моба выше себя в пределах трёх уровней опыт полный');
+  assert.ok(xpForKill(mob, mob.lvl + 4) < mob.xp, 'с четвёртого уровня разницы начинается штраф');
+  assert.ok(xpForKill(mob, mob.lvl + 9) > 0 && xpForKill(mob, mob.lvl + 9) < xpForKill(mob, mob.lvl + 6), 'на 7–9 остаются крохи');
+  assert.equal(xpForKill(mob, mob.lvl + 10), 0, 'с десяти уровней разницы награды нет');
+  assert.equal(xpForKill(strong, strong.lvl - 10), 0, 'за слишком сильного моба тоже ноль');
+  assert.equal(xpForKill(strong, strong.lvl - 7), xpForKill(strong, strong.lvl + 7), 'штраф симметричен');
 });
 
 test('добыча и монеты — в границах таблицы моба', () => {
@@ -257,7 +261,9 @@ test('ИИ моба: агрится на игрока рядом, возвращ
   let cameHome = 0;
   for (let i = 0; i < 200 && !cameHome; i++) { mobStep(m, ctx, 0.1); if (m.state !== 'return' && m.state !== 'chase') cameHome = flatDist(m, m.home); }
   assert.ok(cameHome && cameHome < 2, `моб не дошёл до дома: ${cameHome}`);
-  assert.ok(m.hp > 1, 'моб не полечился на обратном пути');
+  assert.equal(m.hp, 1, 'на обратном пути лечения нет');
+  m.wanderT = 10; ctx.now += 5100; mobStep(m, ctx, .1);
+  assert.ok(m.hp > 1, 'восстановление у дома после паузы');
 });
 
 test('мирного моба не агрит близкий игрок', () => {
@@ -328,6 +334,36 @@ test('дроп: мёртвый, далёкий, неверный ID и истё�
   assert.deepEqual(loot.snapshotFor(d, 100, 'owner', now + LOOT.lifetimeMs), []);
 });
 
+test('городские магазины и NPC доступны от площади пешком', () => {
+  for(const town of TOWNS) {
+    const local=obstacles.filter(o=>Math.hypot(o.x-town.x,o.z-town.z)<town.r+30);
+    const seen=new Set(['0,8']), queue=[[0,8]];
+    for(let i=0;i<queue.length;i++) {
+      const [x,z]=queue[i];
+      for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx=x+dx,nz=z+dz,key=`${nx},${nz}`;
+        if(Math.abs(nx)>town.r+8||Math.abs(nz)>town.r+8||seen.has(key))continue;
+        if(local.some(o=>Math.hypot(town.x+nx-o.x,town.z+nz-o.z)<o.r+.8))continue;
+        seen.add(key);queue.push([nx,nz]);
+      }
+    }
+    for(const npc of world.npcs.filter(n=>n.town===town.id&&n.role!=='guard'))
+      assert.ok(queue.some(([x,z])=>Math.hypot(town.x+x-npc.x,town.z+z-npc.z)<2.5),npc.id+' недоступен от площади');
+    if(town.id==='harbor')for(const [tx,tz] of [[150,25],[150,50],[150,75],[-156,-3],[-7,-153],[-3,151]])
+      assert.ok(queue.some(([x,z])=>Math.hypot(x-tx*town.scale,z-tz*town.scale)<2),'Выход/причал '+tx+','+tz+' недоступен');
+  }
+});
+
+import {presentationHeightAt} from '../tools/godot/placements.mjs';
+test('порт и храм: поверхность движения совпадает с высотой настила и террасы',()=>{
+  for(const z of [25,50,75])for(let x=110;x<=150;x+=2){
+    assert.ok(Math.abs(heightAt(-430+x*TOWNS[0].scale,400+z*TOWNS[0].scale)+3)<.01);
+    assert.ok(Math.abs(presentationHeightAt(-430+x*TOWNS[0].scale,400+z*TOWNS[0].scale)+3)<.01,'клиентская сетка причала');
+  }
+  assert.equal(heightAt(-430+66*TOWNS[0].scale,400-76*TOWNS[0].scale),12);
+  assert.ok(heightAt(-430+140*TOWNS[0].scale,400+10*TOWNS[0].scale)<-6.5,'вода должна закрывать дно');
+});
+
 
 test('замах моба даёт время выйти из сектора; направление и жертва зафиксированы', () => {
   const m = newMob(991, { mob: 'orc', x: 1000, z: 1000 }, () => 0.5);
@@ -342,13 +378,13 @@ test('замах моба даёт время выйти из сектора; н
   for (let i = 0; i < 3; i++) mobStep(m, ctx, .1);
   assert.equal(hits.length, 0, 'урон не должен опережать замах');
   victim.z = 998;
-  for (let i = 0; i < 4; i++) mobStep(m, ctx, .1);
+  for (let i = 0; i < 6; i++) mobStep(m, ctx, .1);
   assert.equal(hits.length, 0, 'уход за спину должен избежать урона, сосед не подменяет жертву');
   assert.equal(m.r, r, 'моб не доворачивается во время замаха');
   assert.deepEqual(phases.at(-1), { phase: 'strike', landed: false });
   victim.z = 1002; m.atkCd = 0;
   mobStep(m, ctx, .1);
-  for (let i = 0; i < 7; i++) mobStep(m, ctx, .1);
+  for (let i = 0; i < 9; i++) mobStep(m, ctx, .1);
   assert.deepEqual(hits, [71]);
   assert.deepEqual(phases.at(-1), { phase: 'strike', landed: true });
 });
@@ -370,6 +406,56 @@ test('замах отменяется при смерти цели/выходе 
 });
 
 
+test('погоня и восстановление: обычный моб, босс, разрыв дистанции и повторный бой', () => {
+  for (const boss of [false,true]) {
+    const m=newMob(997,{mob:'wolf',x:1000,z:1000},()=>.5);
+    m.def={...m.def,boss}; m.hp=10; m.state='chase';m.target=1;
+    const limit=boss?140:180;assert.equal(leashDistance(m.def),limit);
+    m.x=m.home.x+limit-1;
+    const ctx={now:1000,players:[{id:1,x:m.x+3,z:m.z}],onHit(){}};
+    mobStep(m,ctx,.1);assert.equal(m.state,'chase');
+    m.x=m.home.x+limit+1;ctx.players[0].x=m.x+3;
+    mobStep(m,ctx,.1);assert.equal(m.state,'return');assert.equal(m.windup,null);
+    mobStep(m,ctx,.1);assert.equal(m.hp,10);
+    m.x=m.home.x;m.z=m.home.z;ctx.players=[];ctx.now=2000;
+    mobStep(m,ctx,.1);assert.equal(m.state,'idle');
+    ctx.now=6999;mobStep(m,ctx,.1);assert.equal(m.hp,10);
+    ctx.now=7000;mobStep(m,ctx,.1);assert.ok(Math.abs(m.hp-(10+m.def.hp*.002))<1e-6);
+    m.state='chase';m.target=1;ctx.players=[{id:1,x:m.x+221,z:m.z}];
+    const hp=m.hp;mobStep(m,ctx,.1);assert.equal(m.state,'return');assert.equal(m.hp,hp);
+  }
+});
+test('агрессия не сбрасывается истёкшим таймером прогулки',()=>{
+  const m=newMob(998,{mob:'orc',x:1000,z:1000},()=>.5);m.wanderT=0;m.hp=1;
+  mobStep(m,{now:9000,players:[{id:1,x:1002,z:1000}],onHit(){}},.1);
+  assert.equal(m.state,'chase');assert.equal(m.hp,1);
+});
+
+
+import { CORPSE, heroAttackTiming } from '../src/sim.js';
+import { createMobs } from '../server/sim/mobs.js';
+test('тело моба передаёт возраст смерти и остаётся на время падения и растворения',()=>{
+ const world=createMobs(),m=world.list[0],now=1000;
+ world.kill(m,now);
+ for(const age of [0,5000,9000,CORPSE.lifetimeMs]){
+  const row=world.snapshotFor(m,10,now+age).find(r=>r[0]===m.id);
+  assert.ok(row);assert.equal(row[7],age);assert.ok(row[5]&8);
+ }
+ assert.ok(!world.snapshotFor(m,10,now+CORPSE.lifetimeMs+1).some(r=>r[0]===m.id));
+ mobStep(m,{now:m.respawnAt+1,players:[],onHit(){}},.1);
+ const row=world.snapshotFor(m,10,m.respawnAt+1).find(r=>r[0]===m.id);
+ assert.equal(row[7],0);assert.equal(row[5]&8,0);
+});
+test('темп автоатаки: урон приходится на 55% полного взмаха, ускорение сохраняется',()=>{
+ for(const aspd of [.64,.8,1.6]){
+  const timing=heroAttackTiming(aspd);
+  assert.ok(timing.duration<timing.cooldown);
+  assert.equal(timing.windup,timing.duration*.55);
+ }
+ assert.ok(heroAttackTiming(.8).duration>=1);
+ assert.equal(heroAttackTiming(.8).duration/2,heroAttackTiming(1.6).duration);
+});
+
 test('starter hunting camps have dense, collision-free, non-aggressive groups outside town and slower movement', async () => {
   const { HUNTING_CAMPS, buildProps, blockedAt } = await import('../src/world-core.js');
   const { MOB_SPEED } = await import('../src/sim.js');
@@ -383,6 +469,22 @@ test('starter hunting camps have dense, collision-free, non-aggressive groups ou
       assert.ok(group.some(other => other !== spawn && Math.hypot(other.x-spawn.x,other.z-spawn.z) < 15));
     }
   }
-  for (const cls of Object.values(CLASSES)) assert.ok(cls.base.speed >= 7 && cls.base.speed <= 8);
-  for (const mob of Object.values(MOBS)) assert.ok(MOB_SPEED(mob) < CLASSES.mage.base.speed);
+  for (const cls of Object.values(CLASSES)) assert.ok(cls.base.speed * .275 >= 6 && cls.base.speed * .275 <= 8);
+  for (const mob of Object.values(MOBS)) assert.ok(MOB_SPEED(mob) < CLASSES.mage.base.speed * .275);
+});
+
+
+test('solitary encounters fill every outdoor biome without crowding towns, arrivals or other mobs', async () => {
+  const { blockedAt } = await import('../src/world-core.js');
+  const added = world.spawns.filter(s => s.habitat);
+  assert.ok(added.length >= 250 && added.length <= 324, `habitat population ${added.length}`);
+  for (const zone of ZONES.filter(z => !z.shaped)) {
+    assert.ok(added.filter(s => zoneAt(s.x,s.z).id === zone.id).length >= 60, zone.id);
+  }
+  for (const s of added) {
+    assert.ok(!blockedAt(s.x,s.z,3));
+    assert.ok(TOWNS.every(t => Math.hypot(s.x-t.x,s.z-t.z) >= t.r+40));
+    assert.ok(TELEPORTS.every(t => Math.hypot(s.x-t.x,s.z-t.z) >= 25));
+    assert.ok(world.spawns.every(other => other === s || Math.hypot(s.x-other.x,s.z-other.z) >= 28));
+  }
 });

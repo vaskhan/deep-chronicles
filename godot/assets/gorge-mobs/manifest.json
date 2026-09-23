@@ -1,0 +1,70 @@
+{
+  "sources": "art/sources/gorge-mobs/sources.json",
+  "models": {
+    "fang_warrior": {
+      "triangles": 7184,
+      "bytes": 938324,
+      "rig": "canonical",
+      "textureMax": 1024
+    },
+    "fang_shaman": {
+      "triangles": 6036,
+      "bytes": 726268,
+      "rig": "canonical",
+      "textureMax": 1024
+    },
+    "stone_guard": {
+      "triangles": 10565,
+      "bytes": 1098096,
+      "rig": "canonical",
+      "textureMax": 1024
+    },
+    "cliff_spider": {
+      "triangles": 2902,
+      "bytes": 866916,
+      "rig": "spider",
+      "textureMax": 1024
+    },
+    "outpost_guard": {
+      "triangles": 6204,
+      "bytes": 713452,
+      "rig": "canonical",
+      "textureMax": 1024
+    }
+  },
+  "files": {
+    "cliff_spider.glb": "a5f6c2ceacac2ab96028f0babce80e6ed9b14ebef277289a78463c7420096d16",
+    "cliff_spider_Spider dark chitin.png": "e53688b14794db31efc1838ce5321749632f6525b336610b4536b311cd0aedfe",
+    "cliff_spider_Spider moss basalt.png": "bc5656fdfc4ceb04d0b3e2fd81c6c02f84d0f7a2f63b459cb1efceb552c0bc1c",
+    "cliff_spider_rock_moss_set_01_diff_1k.jpg": "b1fa645fccc8b59458cf680cab4c1ba41d66d7c2d68c83f3b56a5227d7461856",
+    "cliff_spider_rock_moss_set_01_nor_gl_1k.jpg": "9a078330334c2510f7084588d03bc23a7f6222272a7350bc377e5de115351edc",
+    "cliff_spider_rock_moss_set_01_rough_1k.jpg": "696634b206b854cb54bc537dd9c2a41e6cf25ee78416c63c66efb37f88bc0ebb",
+    "fang_shaman.glb": "8ddbe4c95443c84d6b4d996d183a9ca1266abd2d704638beb4fb3d1747e7f4f6",
+    "fang_shaman_Fang braid bone.png": "61e1d41a770096aafde9fc95a49a679854518006e80d1a8586c48a9b9a9b5fb2",
+    "fang_shaman_Fang braids.png": "cf660c25af4e52fa6b70e82eef062449b5f6ce7b67a0b8dd12a70693d9cef89d",
+    "fang_shaman_Fang charcoal.png": "bd81afe17f3ff92740de2fa903162a2b97157dc58b0a77baa45de5485357c7a4",
+    "fang_shaman_Fang old bone.png": "079cd96e739d2cc0664aeda1595eeedc17acc1e91a4d2cd884071ac07371e5a0",
+    "fang_shaman_Fang olive skin.png": "20a39e8b7ab94a8ea03730461abe52e1e28d520fa0f31342677fafcfe814e096",
+    "fang_shaman_Fang petrol.png": "321622d81d6d4976d4bdf0136ef378f57eaf9e899c58ba91c847ddb734382beb",
+    "fang_warrior.glb": "95fb1371982bd3815d0161c3118f10c6598582ff3bb57088c723398d6e41bd1a",
+    "fang_warrior_Fang braid bone.png": "61e1d41a770096aafde9fc95a49a679854518006e80d1a8586c48a9b9a9b5fb2",
+    "fang_warrior_Fang braids.png": "cf660c25af4e52fa6b70e82eef062449b5f6ce7b67a0b8dd12a70693d9cef89d",
+    "fang_warrior_Fang charcoal.png": "bd81afe17f3ff92740de2fa903162a2b97157dc58b0a77baa45de5485357c7a4",
+    "fang_warrior_Fang dark iron.png": "222577a36266a64aad6ee4e18e7848cce945f52eaabb471bab674784f6a70b69",
+    "fang_warrior_Fang hide.png": "cbe33031bb5e48f38f7c4e9e1c6d6bc7b2909d933f5779607398e64329b8102e",
+    "fang_warrior_Fang leather.png": "d40ac61ee0dbbcc45c4441788a59b3befb076a37cdb46a64202db2e99a89370c",
+    "fang_warrior_Fang old bone.png": "079cd96e739d2cc0664aeda1595eeedc17acc1e91a4d2cd884071ac07371e5a0",
+    "fang_warrior_Fang olive skin.png": "20a39e8b7ab94a8ea03730461abe52e1e28d520fa0f31342677fafcfe814e096",
+    "fang_warrior_Fang oxide.png": "4245dde251b8fa7dfc4d007e76caa7f36e798abbd0302c2f535d32e0d02c70fc",
+    "outpost_guard.glb": "fd311c67be5ad4c9450c89dd197ae7fe3effdab1f77df24ecc5ca8c5b1aab4bf",
+    "outpost_guard_Outpost iron.png": "9ab9a735541007e321acffc4f6880a16167c1062be6fe2472b487ef827719bbd",
+    "outpost_guard_Outpost old bone.png": "7694e61b505c3ff13de2204687f14ec8db70433b3a18eba18254d7b2747706f6",
+    "outpost_guard_Outpost shield hide.png": "5d11949c51bb6008b056b5d279f780a05875db3d2e07073f951bbbb73c3a1a16",
+    "outpost_guard_Outpost worn cloth.png": "18cf4a65eae78491bd0e63c3e3b1810ddbb87e9f9b2ab2af07a8202ca7967ef6",
+    "outpost_guard_skeleton_texture.png": "3ff31d82eec0d0a0d84842d2557c294c96a9a791ec4cc823158f530b4b7225af",
+    "stone_guard.glb": "b31d53a00171cd936fb773bfd5ccd3aed052f7de409ef2a634b9f1430d72531e",
+    "stone_guard_rock_moss_set_01_diff_1k.jpg": "b1fa645fccc8b59458cf680cab4c1ba41d66d7c2d68c83f3b56a5227d7461856",
+    "stone_guard_rock_moss_set_01_nor_gl_1k.jpg": "9a078330334c2510f7084588d03bc23a7f6222272a7350bc377e5de115351edc",
+    "stone_guard_rock_moss_set_01_rough_1k.jpg": "696634b206b854cb54bc537dd9c2a41e6cf25ee78416c63c66efb37f88bc0ebb"
+  }
+}

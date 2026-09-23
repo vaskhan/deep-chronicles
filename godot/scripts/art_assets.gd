@@ -13,10 +13,42 @@ static func packed(path: String) -> PackedScene:
 	if not scenes.has(path): scenes[path] = load(path)
 	return scenes[path]
 
+## Запись манифеста с учётом псевдонима: {"base": "spider", "tint": "...", "height": ...}
+## берёт модель, риг и клипы основы, а рост и окраску — свои. Так новые мобы переиспользуют
+## готовые GLB без копий файлов (первый проход Громового ущелья).
+static func entry_of(id: String) -> Dictionary:
+	var entry: Dictionary = manifest().actors.get(id, {})
+	if entry.has("base"):
+		var merged: Dictionary = manifest().actors.get(str(entry.base), {}).duplicate()
+		merged.merge(entry, true)
+		return merged
+	return entry
+
+## Вид-основа модели: для псевдонима — исходная модель, иначе сам id.
+static func base_of(id: String) -> String:
+	return str(manifest().actors.get(id, {}).get("base", id))
+
+static var tinted: Dictionary = {}
+## Окраска умножением на цвет. Материалы кэшируются по (материал, цвет): сотня мобов
+## одного вида делит один набор материалов, а исходные материалы основы не меняются.
+static func _tint(root: Node3D, color: Color):
+	for mesh in root.find_children("*", "MeshInstance3D", true, false):
+		for i in mesh.get_surface_override_material_count():
+			var original = mesh.get_active_material(i)
+			if not original is BaseMaterial3D: continue
+			var key = "%s:%s" % [original.get_instance_id(), color.to_html()]
+			if not tinted.has(key):
+				var copy: BaseMaterial3D = original.duplicate()
+				copy.albedo_color = original.albedo_color * color
+				tinted[key] = copy
+			mesh.set_surface_override_material(i, tinted[key])
+
 static func actor(id: String) -> Node3D:
-	var entry = manifest().actors.get(id, {})
+	var entry = entry_of(id)
 	if entry.is_empty() or not ResourceLoader.exists(entry.path): return null
 	var result = packed(entry.path).instantiate()
+	if entry.has("tint"): _tint(result, Color(str(entry.tint)))
+	var anim_id = base_of(id)
 	if entry.get("rig", "") == "canonical":
 		if canonical_clips.is_empty():
 			var source_scene = packed("res://generated/anims/AnimationLibrary_Godot_Standard.nofingers.gltf").instantiate()
@@ -26,16 +58,22 @@ static func actor(id: String) -> Node3D:
 		var player = AnimationPlayer.new(); player.name = "AnimationPlayer"; result.add_child(player)
 		var library = AnimationLibrary.new()
 		var clips = {"idle": "Idle", "walk": "Walk", "run": "Jog_Fwd", "attack": "Sword_Attack", "attack_alt": "Sword_Attack", "cast": "Spell_Simple_Idle", "cast_enter": "Spell_Simple_Enter", "release": "Spell_Simple_Shoot", "hit": "Hit_Chest", "death": "Death01"}
-		if id in ["warrior", "warrior_chain"]: clips.idle = "Sword_Idle"; clips.attack_alt = "Punch_Cross"
-		if id in ["mage", "gatekeeper", "priest", "wraith", "lich"]: clips.idle = "Spell_Simple_Idle"
-		if id == "mage": clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
-		if id == "merchant": clips.idle = "Idle_Talking"
-		if id in ["goblin", "orc", "ghoul", "treant", "golem"]:
+		if anim_id in ["warrior", "warrior_chain"]: clips.idle = "Idle"; clips.attack_alt = "Sword_Attack"
+		if anim_id in ["mage", "gatekeeper", "priest", "wraith", "lich"]: clips.idle = "Spell_Simple_Idle"
+		if anim_id == "mage": clips.attack = "Sword_Attack"; clips.attack_alt = "Sword_Attack"
+		if anim_id == "merchant": clips.idle = "Idle_Talking"
+		if anim_id in ["goblin", "orc", "ghoul", "treant", "golem"]:
 			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"; clips.idle = "Idle"
-		if id in ["wraith", "lich"]: clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id in ["wraith", "lich"]: clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id == "fang_shaman":
+			clips.idle = "Spell_Simple_Idle"; clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id == "stone_guard":
+			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"
 		for key in clips:
 			var clip = canonical_clips[clips[key]].duplicate()
 			clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "walk", "run", "cast"] else Animation.LOOP_NONE
+			if anim_id in ["warrior", "warrior_chain"]:
+				_close_weapon_hand(clip, result.find_child("Skeleton3D", true, false))
 			library.add_animation(key, clip)
 		player.add_animation_library("", library)
 	else:
@@ -52,6 +90,9 @@ static func actor(id: String) -> Node3D:
 			player.add_animation_library("", library)
 	var box = aabb(result)
 	var factor = float(entry.get("height", 2.4)) / maxf(box.size.y, 0.01)
+	if entry.get("rig", "") == "canonical":
+		result.set_meta("gait_walk_speed",1.04985*factor)
+		result.set_meta("gait_run_speed",5.27730*factor)
 	result.scale = Vector3.ONE * factor
 	result.position = Vector3(-box.get_center().x, -box.position.y, -box.get_center().z) * factor
 	result.rotation.y = float(entry.get("yaw", 0))
@@ -67,3 +108,22 @@ static func aabb(root: Node3D) -> AABB:
 		var part = transform * mesh.get_aabb()
 		box = part if first else box.merge(part); first = false
 	return box
+
+## The no-fingers library leaves an open hand in every sword pose.
+## Keep a closed grip in the same animation/blending system as the wrist.
+static func _close_weapon_hand(clip: Animation, skeleton: Skeleton3D):
+	var path = ""
+	for track in clip.get_track_count():
+		if str(clip.track_get_path(track)).ends_with(":DEF-hand.R"):
+			path = str(clip.track_get_path(track)).get_slice(":", 0)
+			break
+	if path.is_empty(): return
+	for finger in ["index", "middle", "ring", "pinky"]:
+		for joint in 3:
+			var bone_name = "DEF-f_%s.%02d.R" % [finger, joint + 1]
+			var bone = skeleton.find_bone(bone_name)
+			if bone < 0: continue
+			var track = clip.add_track(Animation.TYPE_ROTATION_3D)
+			clip.track_set_path(track, NodePath(path + ":" + bone_name))
+			var rest = skeleton.get_bone_rest(bone).basis.get_rotation_quaternion()
+			clip.rotation_track_insert_key(track, 0, rest * Quaternion(Vector3(0,0,1), [.12, .30, .20][joint]))

@@ -13,6 +13,8 @@ var label: Label3D
 var hp = 100.0
 var dead = false
 var death_elapsed = 0.0
+var corpse_materials: Array = []
+var corpse_opacity = 1.0
 var model_rest_y = 0.0
 var moving = false
 var casting = false
@@ -37,12 +39,19 @@ var cast_remaining = 0.0
 var cast_skill = ""
 var previous_attack_flag = false
 var motion_speed = 0.0
+var external_motion_sample = false
+var travel_speed: float:
+	get: return motion_speed
 var motion_distance = 0.0
 var previous_position = Vector3.ZERO
 var have_motion_sample = false
 var stride_length = 3.8
+## Семейство звука/походки сохраняется при замене геометрии отдельным GLB.
+var art_base = ""
 var visual_height = 2.5
 var attack_sequence = 0
+var attack_recovery = .65
+var step_length = 1.5
 var windup_remaining = 0.0
 var winding_up = false
 var windup_clip_time = 0.0
@@ -51,6 +60,12 @@ var model_rest_position = Vector3.ZERO
 var model_rest_rotation = Vector3.ZERO
 var health_bar: MeshInstance3D
 var health_fill: MeshInstance3D
+## Ранг моба с сервера: "" — обычный, "elite" — элита, "champion" — чемпион.
+var rank = ""
+var rank_aura: MeshInstance3D
+## Активные эффекты цели из снапшота: [[id, вид, осталось мс], …]. Считает их сервер.
+var effects: Array = []
+var stone_ward: MeshInstance3D
 
 func setup(model_id: String, title: String, def: Dictionary = {}):
 	definition = def; display_name = title; base_model = model_id
@@ -66,7 +81,8 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	add_child(model)
 	model_rest_y = model.position.y
 	model_rest_position = model.position; model_rest_rotation = model.rotation
-	stride_length = {"rabbit": 1.2, "wolf": 2.8, "boar": 2.6, "spider": 2.8, "scorpion": 2.8, "treant": 5.6, "golem": 5.4}.get(model_id, 3.8)
+	art_base = str(Art.entry_of(model_id).get("family", Art.base_of(model_id)))
+	stride_length = {"rabbit": 1.2, "wolf": 2.8, "boar": 2.6, "spider": 2.8, "scorpion": 2.8, "treant": 5.6, "golem": 5.4}.get(art_base, 3.8)
 	animator = model.find_child("AnimationPlayer", true, false)
 	if animator:
 		for clip in animator.get_animation_list():
@@ -80,6 +96,9 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	if shield_node: shield_node.visible = false
 	if helm_node: helm_node.visible = false
 	if kind == "n" and weapon_node: weapon_node.visible = false
+	if art_id == "stone_guard":
+		stone_ward = model.find_child("StoneWard", true, false)
+		if stone_ward: stone_ward.visible = false
 	label = Label3D.new(); label.text = title
 	visual_height = float(Art.manifest().actors.get(art_id, {}).get("height", 2.5))
 	label.position.y = visual_height + 0.45
@@ -89,12 +108,43 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	add_child(label)
 	if kind == "m":
 		health_bar = _health_quad(Vector2(1.45, 0.10), Color("211617")); health_bar.position.y = label.position.y - 0.3
-		health_fill = _health_quad(Vector2(1.4, 0.065), Color("bf4338")); health_fill.position.y = health_bar.position.y; health_fill.position.z = 0.012
+		health_fill = _health_quad(Vector2(1.4, 0.065), Color("bf4338")); health_fill.position.y = health_bar.position.y; health_fill.position.z = 0.0
+		health_fill.material_override.render_priority = 2
+	_apply_rank()
+
+## Элита и чемпион крупнее обычного моба и светятся аурой. Множители присылает сервер
+## в определении (src/elites.js); клиент только показывает их.
+func rank_color() -> Color:
+	return Color("ff77e0") if rank == "champion" else Color("ffb347")
+
+func _apply_rank():
+	if rank.is_empty() or kind != "m": return
+	var base_size = float(GameData.catalog.MOBS.get(base_model, {}).get("size", 1.0))
+	var factor = float(definition.get("size", base_size)) / maxf(0.01, base_size)
+	model.scale *= factor
+	radius *= factor
+	visual_height *= factor
+	label.position.y = visual_height + 0.45
+	if health_bar:
+		health_bar.position.y = label.position.y - 0.3; health_fill.position.y = health_bar.position.y
+	var mesh = TorusMesh.new()
+	mesh.inner_radius = radius * Tuning.ELITE_AURA_SCALE; mesh.outer_radius = mesh.inner_radius + 0.09
+	mesh.rings = 40; mesh.ring_segments = 6
+	rank_aura = MeshInstance3D.new(); rank_aura.mesh = mesh
+	var material = StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED; material.albedo_color = rank_color()
+	rank_aura.material_override = material
+	rank_aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rank_aura.position.y = 0.1
+	add_child(rank_aura)
 
 func _health_quad(size: Vector2, color: Color) -> MeshInstance3D:
 	var node = MeshInstance3D.new(); var quad = QuadMesh.new(); quad.size = size; node.mesh = quad
 	var mat = StandardMaterial3D.new(); mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED; mat.albedo_color = color
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; mat.no_depth_test = true; mat.render_priority = 1
 	node.material_override = mat; node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node); return node
 
@@ -160,28 +210,45 @@ func snapshot(row: Array, timestamp: float):
 		snapshots.clear(); position = pos; rotation.y = row[4]
 	snapshots.append({"t": timestamp, "p": pos, "r": row[4]})
 	if snapshots.size() > 30: snapshots.pop_front()
+	# Девятый столбец снапшота — активные эффекты; сервер шлёт его только когда они есть.
+	effects = row[8] if row.size() > 8 else []
+	if is_instance_valid(stone_ward):
+		stone_ward.visible = effects.any(func(effect): return effect.size() >= 3 and effect[0] == "stone_guard:guard" and float(effect[2]) > 0)
 	var flags = int(row[5]); moving = (flags & 1) != 0; casting = (flags & 4) != 0
 	var attack_flag = (flags & 2) != 0
 	if attack_flag and not previous_attack_flag and action_until <= 0 and windup_remaining <= 0: play_action("attack")
 	previous_attack_flag = attack_flag
 	dead = (flags & 8) != 0; hp = row[6]
-	status = int(row[7]) if row.size() > 7 else 0
+	if dead and is_instance_valid(stone_ward): stone_ward.visible = false
+	# Восьмой столбец у мобов — возраст смерти, у игроков — PvP-статус.
+	if kind == "m" and dead and row.size() > 7: death_elapsed = maxf(death_elapsed,float(row[7])/1000.0)
+	status = int(row[7]) if kind != "m" and row.size() > 7 else 0
 	seen = Time.get_ticks_msec(); visible = true
 
-func interpolate(time: float):
-	if winding_up: return
+func measure_motion(before: Vector3, dt: float):
+	var displacement = position-before; displacement.y = 0
+	var traveled = displacement.length() if displacement.length()<3.0 else 0.0
+	motion_speed = traveled/maxf(dt,.001)
+	moving = motion_speed > .05 and not dead and not winding_up
+	if moving: motion_distance += traveled
+	else: motion_speed = 0
+	previous_position = position; have_motion_sample = true; external_motion_sample = true
+
+func interpolate(time: float, dt = .016):
+	if winding_up:
+		measure_motion(position,dt); return
 	while snapshots.size() > 2 and snapshots[1].t <= time: snapshots.pop_front()
-	if snapshots.size() < 2: return
+	if snapshots.size() < 2:
+		measure_motion(position,dt); return
 	var a = snapshots[0]; var b = snapshots[1]
-	var factor = clampf((time - a.t) / maxf(1, b.t - a.t), 0, 1.5)
-	position = a.p.lerp(b.p, factor); rotation.y = lerp_angle(a.r, b.r, minf(1, factor))
+	var factor = clampf((time - a.t) / maxf(1, b.t - a.t), 0, 1)
+	var before = position
+	position = a.p.lerp(b.p, factor); rotation.y = lerp_angle(a.r, b.r, factor)
+	measure_motion(before,dt)
 
 func _process(dt):
-	var displacement = position - previous_position; displacement.y = 0
-	var traveled = displacement.length() if have_motion_sample and displacement.length() < 4.0 else 0.0
-	previous_position = position; have_motion_sample = true
-	motion_speed = lerpf(motion_speed, traveled / maxf(dt, 0.001), 1.0 - exp(-dt * 14.0))
-	if moving and not dead: motion_distance += traveled
+	if not external_motion_sample: measure_motion(previous_position if have_motion_sample else position,dt)
+	external_motion_sample = false
 	attack_time = maxf(0, attack_time - dt)
 	action_until = maxf(0, action_until - dt)
 	cast_remaining = maxf(0, cast_remaining - dt)
@@ -193,10 +260,13 @@ func _process(dt):
 	if moving and not dead and action_until <= 0:
 		model.rotation.x += clampf(motion_speed / 8.0, 0, 1) * 0.065
 	death_elapsed = death_elapsed + dt if dead else 0.0
-	if kind == "m": model.position.y = model_rest_y - maxf(0, death_elapsed - 3.0) * 0.65
+	if kind == "m": _update_corpse()
 	if not animator or not animator.has_animation("death"):
 		model.rotation.z = lerp_angle(model.rotation.z, PI / 2 if dead else 0, minf(1, dt * 10))
-	var locomotion = "run" if motion_speed > 3.0 and animator and animator.has_animation("run") else "walk"
+	if moving and not winding_up and not casting and cast_remaining <= 0 and (action_clip.begins_with("attack") or action_clip in ["release","hit"]):
+		action_until = 0; attack_time = 0
+	var run_threshold = 2.7 if model.has_meta("gait_run_speed") else 5.0
+	var locomotion = "run" if motion_speed > run_threshold and animator and animator.has_animation("run") else "walk"
 	var clip = "cast" if casting or cast_remaining > 0 else (locomotion if moving and motion_speed > 0.2 else "idle")
 	if action_until > 0: clip = action_clip
 	elif attack_time > 0 and not casting: clip = "attack"
@@ -213,14 +283,58 @@ func _process(dt):
 		animator.play(clip, 0.14, action_speed if action_until > 0 and not dead else 1.0); last_clip = clip
 	if animator and clip in ["walk", "run"] and not dead:
 		var stride = stride_length if clip == "run" else stride_length * 0.48
-		animator.speed_scale = clampf(motion_speed * animator.get_animation(clip).length / stride, 0.45, 2.1)
+		var reference = float(model.get_meta("gait_walk_speed" if clip == "walk" else "gait_run_speed",stride/animator.get_animation(clip).length))
+		animator.speed_scale = clampf(motion_speed/reference,.05,3.0)
+		step_length = reference*animator.get_animation(clip).length*.5
 	elif animator and not winding_up: animator.speed_scale = 1.0
+	if dead and animator and animator.has_animation("death"):
+		animator.seek(minf(death_elapsed,animator.get_animation("death").length),true)
 	if health_bar:
 		health_bar.visible = label.visible and not dead and (selected or hp < 100 or windup_remaining > 0)
-		health_fill.visible = health_bar.visible; health_fill.mesh.size.x = maxf(0.01, 1.4 * hp / 100.0)
+		health_fill.visible = health_bar.visible
+		# заполнение прижато к левому краю: убывает справа, как в обычной полосе здоровья
+		var fill_w = maxf(0.01, 1.4 * hp / 100.0)
+		health_fill.mesh.size.x = fill_w; health_fill.mesh.center_offset.x = (fill_w - 1.4) * 0.5
 	if label:
 		label.text = display_name + (" · повержен" if dead else "")
-		label.modulate = Color("ffe3a6") if selected else (Color("ff7373") if status == 2 else (Color("d49bff") if status == 1 else (Color("e7d8ab") if kind == "n" else Color.WHITE)))
+		var plain = rank_color() if not rank.is_empty() else (Color("e7d8ab") if kind == "n" else Color.WHITE)
+		label.modulate = Color("ffe3a6") if selected else (Color("ff7373") if status == 2 else (Color("d49bff") if status == 1 else plain))
+		if kind == "m": label.modulate.a = corpse_opacity
+	if is_instance_valid(rank_aura):
+		rank_aura.visible = visible and not dead
+		rank_aura.rotation.y += dt * 0.9
+		rank_aura.material_override.albedo_color = rank_color() * (0.75 + 0.25 * sin(Time.get_ticks_msec() * 0.004))
+
+func _update_corpse():
+	# Keep the body on the ground. Duplicate only this corpse's materials:
+	# imported meshes/materials are shared with every living instance.
+	if not dead:
+		for entry in corpse_materials:
+			if not is_instance_valid(entry.node): continue
+			if entry.surface < 0: entry.node.material_override = entry.original
+			else: entry.node.set_surface_override_material(entry.surface,entry.original)
+		corpse_materials.clear(); model.visible = true; corpse_opacity = 1.0
+		return
+	var fall = animator.get_animation("death").length if animator and animator.has_animation("death") else .6
+	var rules = GameData.catalog.UI_RULES.corpse
+	var fade = clampf((death_elapsed-fall-float(rules.holdSeconds))/float(rules.fadeSeconds),0,1)
+	model.visible = fade < 1
+	corpse_opacity = 1-fade
+	if fade <= 0: return
+	if corpse_materials.is_empty():
+		for node in model.find_children("*","MeshInstance3D",true,false):
+			if not node.mesh: continue
+			var surfaces = [-1] if node.material_override else range(node.mesh.get_surface_count())
+			for surface in surfaces:
+				var original = node.material_override if surface < 0 else node.get_surface_override_material(surface)
+				var source = original if original else node.mesh.surface_get_material(surface)
+				if not source is BaseMaterial3D: continue
+				var mat = source.duplicate(); mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				corpse_materials.append({"node":node,"surface":surface,"original":original,"material":mat,"alpha":mat.albedo_color.a})
+				if surface < 0: node.material_override = mat
+				else: node.set_surface_override_material(surface,mat)
+	for entry in corpse_materials:
+		entry.material.albedo_color.a = entry.alpha*(1-fade)
 
 func play_action(clip: String, duration = 0.0):
 	if dead or not animator or not animator.has_animation(clip): return
@@ -232,13 +346,19 @@ func play_action(clip: String, duration = 0.0):
 	animator.play(clip, 0.08, action_speed); animator.seek(0, true); last_clip = clip
 	if clip.begins_with("attack"): attack_time = action_until
 
-func begin_attack(duration: float):
+func begin_attack(duration: float, windup = -1.0):
 	attack_sequence += 1
 	var clip = "attack_alt" if attack_sequence % 2 == 0 and animator and animator.has_animation("attack_alt") else "attack"
 	if not animator or not animator.has_animation(clip): return
-	play_action(clip, duration / 0.35)
-	windup_clip_time = animator.get_animation(clip).length * 0.35
-	windup_remaining = duration; winding_up = true
+	if windup < 0: windup = duration*.55
+	attack_recovery = maxf(.1,duration-windup)
+	play_action(clip, duration)
+	# The blade crosses the forward target plane at 29.6% of Sword_Attack.
+	# 40% is already the follow-through: effects used to arrive after the cut.
+	windup_clip_time = animator.get_animation(clip).length * 0.296
+	action_speed = windup_clip_time / maxf(windup, 0.05)
+	animator.play(clip, 0.08, action_speed)
+	windup_remaining = windup; winding_up = true
 
 func release_attack():
 	windup_remaining = 0; winding_up = false
@@ -246,7 +366,7 @@ func release_attack():
 	var clip = action_clip
 	# Preserve current clip and hand pose through the impact, then recover.
 	var remaining = animator.get_animation(clip).length - windup_clip_time
-	action_until = 0.38; attack_time = action_until
+	action_until = attack_recovery; attack_time = action_until
 	action_speed = remaining / action_until
 	animator.speed_scale = 1.0; animator.play(clip, 0, action_speed); animator.seek(windup_clip_time, true)
 
@@ -255,15 +375,18 @@ func begin_windup(duration: float, facing: float):
 	rotation.y = facing; moving = false
 	var clip = "windup" if animator and animator.has_animation("windup") else "attack"
 	if not animator or not animator.has_animation(clip): return
-	windup_clip_time = animator.get_animation(clip).length * (0.95 if clip == "windup" else 0.3)
+	windup_clip_time = animator.get_animation(clip).length * (0.95 if clip == "windup" else 0.4)
 	play_action(clip, duration * animator.get_animation(clip).length / maxf(0.01, windup_clip_time))
 	windup_remaining = duration; winding_up = true
 
 func finish_windup():
 	windup_remaining = 0; winding_up = false
-	play_action("attack", 0.38)
-	if animator and action_clip == "attack" and not animator.has_animation("windup"):
-		animator.seek(windup_clip_time, true)
+	var separate = animator and animator.has_animation("windup")
+	play_action("attack", 0.7)
+	if animator and not separate:
+		var remaining = animator.get_animation("attack").length - windup_clip_time
+		action_speed = remaining / 0.7
+		animator.play("attack", 0, action_speed); animator.seek(windup_clip_time, true)
 
 func receive_hit():
 	if dead: return
@@ -280,7 +403,7 @@ func release_cast():
 
 func cancel_presentation():
 	cast_remaining = 0; cast_skill = ""; casting = false; action_until = 0; attack_time = 0
-	windup_remaining = 0; winding_up = false; hit_recoil = 0; motion_speed = 0; have_motion_sample = false
+	windup_remaining = 0; winding_up = false; hit_recoil = 0; motion_speed = 0; have_motion_sample = false; external_motion_sample = false; moving = false
 	if animator: animator.speed_scale = 1.0
 
 func cast_origin() -> Vector3:
@@ -300,12 +423,14 @@ func _attach_weapon(id: String):
 		var attachment = BoneAttachment3D.new(); attachment.name = "RightHandEquipment"; attachment.bone_name = "DEF-hand.R"
 		skeleton.add_child(attachment)
 		var grip = Node3D.new(); grip.name = "WeaponGrip"; attachment.add_child(grip)
-		# Bone origin is the wrist; +Y follows the fingers. The canonical rig
-		# and equipment use +Z for the forward edge of the palm/blade.
-		grip.position = Vector3(0, 0.075, -0.015)
+		# The generated warrior palm sits below the canonical wrist axis.
+		# Seat the hilt between palm and curled fingers, not on the hand back.
+		grip.position = {"warrior": Vector3(-0.08, 0.085, 0.09), "warrior_chain": Vector3(-0.12, 0.105, 0.13)}.get(active_art, Vector3(0, 0.075, -0.015))
 		grip.add_child(weapon)
 		weapon.transform = Transform3D.IDENTITY
-		weapon.rotation = Vector3.ZERO
+		# Blade width is local X, thickness Y, length Z. The source sword
+		# is rolled 90 degrees relative to the canonical cutting plane.
+		weapon.rotation = Vector3(0, 0, PI / 2 if id == "warrior" else 0)
 		weapon.scale = Vector3.ONE * (0.8 / model.scale.x)
 		var handle_center = Vector3(0, 0, 0.14 if id == "warrior" else 0.0)
 		weapon.position = -(weapon.basis * handle_center)

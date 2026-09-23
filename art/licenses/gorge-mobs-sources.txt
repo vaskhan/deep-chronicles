@@ -1,0 +1,18 @@
+Sources checked 2026-09-23
+
+Quaternius / Ultimate Monsters
+https://quaternius.com/packs/ultimatemonsters.html
+Author page license field: CC0
+https://creativecommons.org/publicdomain/zero/1.0/
+Original downloaded License.txt: quaternius-ultimate-monsters.txt (verbatim).
+
+Poly Haven / Rock Moss Set 01
+https://polyhaven.com/a/rock_moss_set_01
+https://polyhaven.com/license
+Author license page: assets are CC0.
+Existing source metadata and authors: godot/assets/gorge/manifest.json
+
+Original additions (fur mantle, hide texture, staff, stone assembly, eyes)
+Project contributors dedicate these asset additions to CC0 1.0 Universal.
+https://creativecommons.org/publicdomain/zero/1.0/
+The preparation scripts themselves retain the project code license.
