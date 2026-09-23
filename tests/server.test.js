@@ -1061,3 +1061,65 @@ test('Громовое ущелье: телепорт у Хранителя вр
     assert.ok(cut.coins <= Math.round(def.coins[1] * factor) + 1, 'монеты режутся той же ступенью');
   } finally { a.ws.close(); await a.closed(); }
 });
+
+// ===== надёжность сервера =====
+const faultCount = () => (serverOutput.match(/SERVER_FAULT /g) || []).length;
+// сколько снапшотов пришло за окно и наибольший разрыв между ними
+async function snapRate(c, ms) {
+  const stamps = [], listener = (raw) => { if (String(raw).startsWith('{"t":"snap"')) stamps.push(Date.now()); };
+  c.ws.on('message', listener);
+  await pause(ms);
+  c.ws.off('message', listener);
+  let gap = 0; for (let i = 1; i < stamps.length; i++) gap = Math.max(gap, stamps[i] - stamps[i - 1]);
+  return { n: stamps.length, gap };
+}
+
+test('сбой команды и тика одного игрока не останавливает мир для второго; профиль откатывается', async () => {
+  const a = client(), b = client(); await Promise.all([a.open(), b.open()]);
+  try {
+    a.send({ t: 'register', name: 'СбойА', pass: 'test-secret', cls: 'warrior' });
+    b.send({ t: 'register', name: 'СбойБ', pass: 'test-secret', cls: 'warrior' });
+    const start = (await a.wait('authok')).p; await b.wait('authok');
+    const before = faultCount();
+    // команда меняет профиль и падает: изменение откатывается, игрок получает отказ
+    a.send({ t: 'dev', coins: 777777, fault: 'cmd' });
+    await untilEv(a, /ошибки сервера/, 'отказ после сбоя команды');
+    a.send({ t: 'dev', fault: 'tick' });
+    const rate = await snapRate(b, 1500);
+    assert.ok(rate.n >= 11, `второй клиент получил мало снапшотов: ${rate.n}`);
+    assert.ok(rate.gap < 400, `разрыв снапшотов у второго клиента ${rate.gap} мс`);
+    // первый клиент тоже жив и продолжает получать мир
+    assert.equal(a.ws.readyState, WebSocket.OPEN);
+    assert.ok(await a.wait('snap'));
+    a.send({ t: 'dev', xp: 1 });
+    const p = await untilP(a, (x) => x.xp >= 1, 'профиль после сбоев');
+    assert.equal(p.coins, start.coins, 'монеты из упавшей команды не должны остаться');
+    await pause(100);
+    assert.ok(faultCount() >= before + 2, 'сбои должны попасть в журнал');
+    assert.match(serverOutput, /SERVER_FAULT cmd:dev player=\d+ Error: проверочный сбой команды/);
+    assert.match(serverOutput, /SERVER_FAULT tick:player player=\d+ Error: проверочный сбой тика игрока/);
+  } finally { a.ws.close(); b.ws.close(); await Promise.all([a.closed(), b.closed()]); }
+});
+
+test('искажённые аргументы всех команд не вызывают исключений на сервере', async () => {
+  const a = client(); await a.open();
+  try {
+    const before = faultCount();
+    // до входа: вход по токену и паролю с мусором вместо строк
+    for (const v of [null, 0, [], {}, { toString: 1 }, 'constructor', 'x'.repeat(300)]) {
+      a.send({ t: 'auth', token: v }); a.send({ t: 'login', name: v, pass: v });
+    }
+    a.send({ t: 'register', name: 'Фаззер', pass: 'test-secret', cls: 'mage' });
+    await a.wait('authok');
+    const junk = [null, undefined, 0, -1, 1e308, NaN, '', 'constructor', '__proto__', 'toString', 'hasOwnProperty', [], [1, 2], {}, { slot: 'weapon' }, { bag: -5 }, { slot: '__proto__' }, { toString: 1 }, { valueOf: 'x', toJSON: 2 }, true, 'x'.repeat(300)];
+    const kinds = ['party', 'logout', 'st', 'atk', 'autoloot', 'learn', 'prof', 'skill', 'pickup', 'use', 'equip', 'unequip', 'craft', 'buy', 'sell', 'ench', 'tp', 'respawn', 'wash', 'pm', 'chat'];
+    for (const t of kinds) for (const v of junk) {
+      a.send({ t, id: v, idx: v, n: v, slot: v, scroll: v, ref: v, rank: v, request: v, enabled: v, kind: v, hold: v, x: v, z: v, path: v, to: v, text: v, ch: v, cmd: v, name: v, mode: v, token: v });
+    }
+    await pause(1500);
+    a.send({ t: 'ping' }); await a.wait('pong');
+    assert.equal(a.ws.readyState, WebSocket.OPEN);
+    const faults = serverOutput.split('\n').filter((line) => line.includes('SERVER_FAULT')).slice(before).map((line) => line.slice(0, 240));
+    assert.deepEqual(faults, [], 'сервер упал на искажённых аргументах');
+  } finally { a.ws.close(); await a.closed(); }
+});

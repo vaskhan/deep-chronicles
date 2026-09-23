@@ -18,6 +18,7 @@ import { createMovement } from './sim/movement.js';
 import { createMobs } from './sim/mobs.js';
 import { loadRates, logRates } from './rates.js';
 import * as PL from './sim/player.js';
+import { performance } from 'node:perf_hooks';
 
 const acc = openDb(process.env.DB || path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'realms.db'));
 
@@ -44,6 +45,10 @@ const groundLoot = createGroundLoot();
 const cryptDoor = { x: CRYPT.x, z: CRYPT.z + 8.5 };
 const dungeonExit = { x: DUNGEON.x0 + DUNGEON.cell / 2, z: DUNGEON.z0 + DUNGEON.cell / 2 };
 
+// Ключи, которые меняют приведение объекта к строке/числу: {"toString":1} ронял String(), |0 и +v
+// во всех командах. Отбрасываем их при разборе пакета — дальше любой объект приводится безопасно.
+const UNSAFE_KEYS = new Set(['toString', 'valueOf', 'toJSON', '__proto__', 'constructor', 'prototype']);
+const safeKeys = (k, v) => (UNSAFE_KEYS.has(k) ? undefined : v);
 const num = (v, lim = 1e5) => (Number.isFinite(+v) ? Math.max(-lim, Math.min(lim, +v)) : 0);
 const cleanText = (s) => String(s || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 160);
 const send = (p, m) => { if (p.ws.readyState === 1) p.ws.send(typeof m === 'string' ? m : JSON.stringify(m)); };
@@ -77,14 +82,88 @@ setInterval(() => { const now = Date.now(); for (const [ip, t] of tries) if (now
 
 const store = (p) => { if (p.key && p.a) acc.store(p.key, PL.profileOf(p.a)); };
 
+// ===== надёжность: границы операций, журнал сбоев, учёт времени =====
+// Исключение в одной команде или у одного игрока не должно останавливать мир для остальных.
+// Команда, меняющая профиль, выполняется над копией-страховкой: при сбое профиль откатывается,
+// игрок получает отказ, причина пишется в журнал одной строкой. Повторяющиеся сбои одного
+// игрока отключают только его; сбой общего шага мира много тиков подряд или необработанное
+// исключение процесса — контролируемый перезапуск: профили сохраняются, процесс выходит с кодом 1,
+// Docker/systemd поднимает его заново (restart: unless-stopped).
+const perf = { ticks: [], handlerMs: 0, messages: 0, faults: 0, storeMs: 0, stores: 0, since: Date.now() };
+const MUTATING = new Set(['autoloot', 'learn', 'prof', 'skill', 'pickup', 'use', 'equip', 'unequip', 'craft', 'buy', 'sell', 'ench', 'tp', 'respawn', 'dev', 'wash', 'party']);
+const FAULT_KICK = 5, FAULT_WINDOW = 60_000, WORLD_FAULT_LIMIT = 50;
+const oneLine = (error) => String(error?.stack || error).replace(/\s*\n\s*/g, ' | ').slice(0, 2000);
+function logFault(where, p, error) {
+  perf.faults++;
+  console.error(`SERVER_FAULT ${where} player=${p?.id ?? '-'} ${oneLine(error)}`);
+}
+// Считает сбои игрока в окне; после FAULT_KICK отключает его, сохранив профиль.
+function noteFault(p) {
+  if (!p) return;
+  const now = Date.now();
+  p.faults = (p.faults || []).filter((t) => now - t < FAULT_WINDOW); p.faults.push(now);
+  if (p.faults.length < FAULT_KICK || p.faultKicked) return;
+  p.faultKicked = true;
+  console.error(`SERVER_FAULT_KICK player=${p.id}`);
+  try { p.ws.close(1011, 'server error'); } catch { p.ws.terminate(); }
+}
+function guardedCommand(p, m, run) {
+  const a = p.a;
+  const backup = a && MUTATING.has(m.t) ? { P: structuredClone(a.P), karma: a.karma, dead: a.dead, x: a.x, z: a.z, y: a.y } : null;
+  try { run(); } catch (error) {
+    logFault(`cmd:${String(m.t).slice(0, 16)}`, p, error);
+    if (backup && p.a === a) {
+      for (const k of Object.keys(a.P)) delete a.P[k];
+      Object.assign(a.P, backup.P);
+      a.karma = backup.karma; a.dead = backup.dead; a.x = backup.x; a.z = backup.z; a.y = backup.y;
+    }
+    if (p.a) { p.a.dirty = true; PL.say(p.a, 'Команда отклонена из-за ошибки сервера, состояние восстановлено', 'bad'); }
+    noteFault(p);
+  }
+}
+// Шаг мира (мобы, эффекты, стражи): при сбое пропускается один тик; подряд много сбоев — перезапуск.
+let worldFaults = 0;
+function worldStep(name, run) {
+  try { run(); return true; } catch (error) { logFault(`world:${name}`, null, error); return false; }
+}
+function playerStep(p, name, run) {
+  try { run(); } catch (error) { logFault(`tick:${name}`, p, error); noteFault(p); }
+}
+const percentile = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : 0);
+function perfReport() {
+  const t = [...perf.ticks].sort((x, y) => x - y), secs = Math.max(0.001, (Date.now() - perf.since) / 1000);
+  const r = (v) => Math.round(v * 1000) / 1000;
+  return { ticks: t.length, p50: r(percentile(t, 0.5)), p95: r(percentile(t, 0.95)), p99: r(percentile(t, 0.99)), max: r(t.at(-1) || 0),
+    handlerMsPerSec: r(perf.handlerMs / secs), messages: perf.messages, stores: perf.stores, storeMs: r(perf.storeMs), faults: perf.faults, seconds: r(secs) };
+}
+function perfReset() { Object.assign(perf, { ticks: [], handlerMs: 0, messages: 0, storeMs: 0, stores: 0, since: Date.now() }); }
+
 wss.on('connection', (ws, req) => {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const p = { id: ++seq, ws, name: null, key: null, a: null, known: new Set(), knownMobs: new Set(), lastChat: {}, stN: 0, stT: 0 };
   players.set(p.id, p);
   send(p, { t: 'hi', online: online(), features: { groundLoot: 1, progression: 1, autoloot: 1, crafting: 1, nativeOnly: 1, heartbeat: 1, combatTelegraphs: 1, party: 1, professions: 1, timedEffects: 1, eliteMobs: 1, mobPacks: 1, rates: 1 }, rates: RATES });
   ws.on('message', (raw) => {
-    let m; try { m = JSON.parse(raw); } catch { return; }
+    let m; try { m = JSON.parse(raw, safeKeys); } catch { return; }
     if (!m || typeof m !== 'object') return;
+    const started = performance.now();
+    guardedCommand(p, m, () => onMessage(p, m, ip));
+    perf.handlerMs += performance.now() - started; perf.messages++;
+  });
+  ws.on('close', () => {
+    // Сбой сохранения или группы не должен оставить «призрака» в списке игроков.
+    playerStep(p, 'close-store', () => store(p));
+    playerStep(p, 'close-party', () => parties.remove(p));
+    players.delete(p.id);
+    if (p.name) { broadcast({ t: 'leave', id: p.id }); broadcast({ t: 'online', n: online() }); }
+    p.key = null;
+  });
+  // A reset TCP socket must not become an unhandled EventEmitter error.
+  ws.on('error', error => console.warn('WS_ERROR', error.code || 'transport'));
+});
+
+// Один входящий пакет. Исключение внутри не выходит за пределы этой функции (guardedCommand).
+function onMessage(p, m, ip) {
     if (m.t === 'ping') {
       if (Date.now() - (p.lastPing || 0) >= 1000) { p.lastPing = Date.now(); send(p, { t: 'pong' }); }
       return;
@@ -156,23 +235,17 @@ wss.on('connection', (ws, req) => {
         if (m.drop && ITEMS[m.drop]) groundLoot.spawn(a, { coins: 17, drops: [m.drop] }, p.key, p.name, now);
         if (m.xp != null) PL.gainXp(a, num(m.xp, 1e7) | 0);
         a.dirty = true;
+        if (m.stats) { send(p, { t: 'devstats', perf: perfReport() }); if (m.stats === 'reset') perfReset(); }
+        // Проверка изоляции сбоев: исключение в команде (после правки профиля) или в тике игрока.
+        if (m.fault === 'tick') a.devFault = true;
+        if (m.fault === 'cmd') throw Error('проверочный сбой команды');
         return;
       }
       case 'wash': return onWash(p, a);
       case 'pm': return onPm(p, m);
       case 'chat': return onChat(p, m);
     }
-  });
-  ws.on('close', () => {
-    store(p);
-    parties.remove(p);
-    players.delete(p.id);
-    if (p.name) { broadcast({ t: 'leave', id: p.id }); broadcast({ t: 'online', n: online() }); }
-    p.key = null;
-  });
-  // A reset TCP socket must not become an unhandled EventEmitter error.
-  ws.on('error', error => console.warn('WS_ERROR', error.code || 'transport'));
-});
+}
 
 function onAuth(p, m, ip) {
   if (p.key) return;
@@ -265,7 +338,15 @@ function damageMob(a, mb, dmg, crit, now, dot = false) {
     return;
   }
   const topId = world.kill(mb, now);
-  const winner = players.get(topId)?.key ? players.get(topId) : players.get(a.id);
+  // Лидер по урону мог выйти или быть вытеснен вторым устройством: тогда награда — добившему,
+  // а если нет и его (источник урона со временем ушёл) — моб умирает без награды.
+  const top = players.get(topId), finisher = players.get(a.id);
+  const winner = top?.key && top.a ? top : finisher?.key && finisher.a ? finisher : null;
+  if (!winner) {
+    pushNear(a, { k: 'mdie', m: mb.id });
+    for (const q of players.values()) if (q.a && q.a.target?.m === mb.id) q.a.attacking = false;
+    return;
+  }
   const plan = parties.rewardPlan(winner, players.get(a.id), mb);
   const rw = world.rewardFor(mb, plan.level ?? winner.a.P.lvl);
   for (const share of plan.shares) {
@@ -557,89 +638,121 @@ function pushNear(a, e, remoteOnly = false) {
 
 // ===== главный цикл =====
 let last = Date.now(), partyTick = 0;
-setInterval(() => {
+// Шаг рассылки одному игроку: снапшот, события, профиль.
+function broadcastTo(p, list, now) {
+  const a = p.a;
+  const o = [];
+  for (const q of list) {
+    if (q === a || flatDist(a, q) > VIEW) continue;
+    if (!p.known.has(q.id)) { p.known.add(q.id); send(p, { t: 'look', id: q.id, name: q.name, look: q.look }); }
+    const row = [q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~8) | (q.dead ? 8 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)];
+    // девятый столбец появляется только у игроков с активными эффектами
+    if (q.effects.length) row.push(snapshotEffects(q.effects, now));
+    o.push(row);
+  }
+  for (const id of p.known) if (!players.has(id)) p.known.delete(id);
+  const mobs = world.snapshotFor(a, VIEW, now);
+  // впервые увиденный моб: клиенту нужен его вид, чтобы построить модель
+  const fresh = [];
+  // элите и чемпиону клиенту нужны ранг и готовое имя: подпись и ауру рисует он
+  for (const row of mobs) if (!p.knownMobs.has(row[0])) {
+    p.knownMobs.add(row[0]);
+    const mb = world.byId.get(row[0]);
+    fresh.push(mb.def.rank ? [mb.id, mb.kind, mb.def.rank, mb.def.name, mb.def.size] : [mb.id, mb.kind]);
+  }
+  if (fresh.length) send(p, { t: 'mobs', n: fresh });
+  send(p, { t: 'snap', ts: now, o, m: mobs, g: groundLoot.snapshotFor(a, VIEW, p.key, now), me: { hp: Math.round(a.P.hp), mp: Math.round(a.P.mp), x: +a.x.toFixed(2), z: +a.z.toFixed(2), dead: a.dead, ...(a.effects.length ? { fx: snapshotEffects(a.effects, now) } : {}) } });
+  if (a.out.length) { send(p, { t: 'ev', e: a.out }); a.out = []; }
+  if (a.dirty) {
+    a.dirty = false;
+    const look = lookOf(a.P);
+    if (JSON.stringify(look) !== JSON.stringify(a.look)) {
+      a.look = look;
+      const s = JSON.stringify({ t: 'look', id: a.id, name: a.name, look });
+      for (const q of players.values()) if (q.known.has(a.id)) send(q, s);
+    }
+    send(p, { t: 'you', p: PL.profileOf(a) });
+  }
+}
+function tick() {
   const now = Date.now(), dt = Math.min(0.5, (now - last) / 1000); last = now;
-  groundLoot.expire(now);
-  if (now >= partyTick) { for (const p of players.values()) if (p.a && p.key) p.a.partyMaxHp = PL.statsOf(p.a, now).maxHp; parties.tick(now); partyTick = now + 1000; }
+  let ok = worldStep('loot', () => groundLoot.expire(now));
+  if (now >= partyTick) {
+    partyTick = now + 1000;
+    for (const p of players.values()) if (p.a && p.key) playerStep(p, 'party', () => { p.a.partyMaxHp = PL.statsOf(p.a, now).maxHp; });
+    ok = worldStep('party', () => parties.tick(now)) && ok;
+  }
   const list = actors();
   // мобы
-  const view = list.map((a) => ({ id: a.id, x: a.x, z: a.z, dead: a.dead, inTown: PL.inTown(a) }));
-  world.tick(dt, view, now, (mb, pv) => { const a = players.get(pv.id)?.a; if (a) damagePlayer(mb, a, now); }, (mb, phase, attack, landed) => {
-    const event = { k: `mob_${phase}`, m: mb.id, p: attack.target, t: attack.duration, x: attack.x, z: attack.z, r: attack.r, reach: attack.reach, arc: attack.arc, landed };
-    for (const a of list) if (flatDist(a, mb) < VIEW) a.out.push(event);
-  });
-  effectsTick(now);
-  guardsTick(now);
-  // игроки
+  ok = worldStep('mobs', () => {
+    const view = list.map((a) => ({ id: a.id, x: a.x, z: a.z, dead: a.dead, inTown: PL.inTown(a) }));
+    world.tick(dt, view, now, (mb, pv) => {
+      const p = players.get(pv.id);
+      if (p?.a) playerStep(p, 'mob-hit', () => damagePlayer(mb, p.a, now));
+    }, (mb, phase, attack, landed) => {
+      const event = { k: `mob_${phase}`, m: mb.id, p: attack.target, t: attack.duration, x: attack.x, z: attack.z, r: attack.r, reach: attack.reach, arc: attack.arc, landed };
+      for (const a of list) if (flatDist(a, mb) < VIEW) a.out.push(event);
+    });
+  }) && ok;
+  ok = worldStep('effects', () => effectsTick(now)) && ok;
+  ok = worldStep('guards', () => guardsTick(now)) && ok;
+  // Много тиков подряд с отказом общего шага: мир неконсистентен — перезапуск с сохранением.
+  worldFaults = ok ? 0 : worldFaults + 1;
+  if (worldFaults >= WORLD_FAULT_LIMIT) return shutdown(1, `world step failed ${worldFaults} ticks in a row`);
+  // игроки: сбой одного не мешает остальным
   for (const a of list) {
-    PL.regen(a, dt);
-    if (a.flagUntil && a.flagUntil <= now) { a.flagUntil = 0; sendMe(a); }
-    if (a.cast) {
-      a.cast.t -= dt;
-      if (a.cast.t <= 0) {
-        const c = a.cast; a.cast = null;
-        if (c.id === 'escape') { const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0]; PL.place(a, t.x, t.z - 12); }
-        else applySkill(a, c.id, c.target, now);
+    const p = players.get(a.id);
+    playerStep(p, 'player', () => {
+      if (DEV_CMD && a.devFault) { a.devFault = false; throw Error('проверочный сбой тика игрока'); }
+      PL.regen(a, dt);
+      if (a.flagUntil && a.flagUntil <= now) { a.flagUntil = 0; sendMe(a); }
+      if (a.cast) {
+        a.cast.t -= dt;
+        if (a.cast.t <= 0) {
+          const c = a.cast; a.cast = null;
+          if (c.id === 'escape') { const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0]; PL.place(a, t.x, t.z - 12); }
+          else applySkill(a, c.id, c.target, now);
+        }
       }
-    }
-    autoAttack(a, dt, now);
+      autoAttack(a, dt, now);
+    });
   }
   // рассылка
   for (const p of players.values()) {
-    const a = p.a; if (!p.key || !a) continue;
-    const o = [];
-    for (const q of list) {
-      if (q === a || flatDist(a, q) > VIEW) continue;
-      if (!p.known.has(q.id)) { p.known.add(q.id); send(p, { t: 'look', id: q.id, name: q.name, look: q.look }); }
-      const row = [q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~8) | (q.dead ? 8 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)];
-      // девятый столбец появляется только у игроков с активными эффектами
-      if (q.effects.length) row.push(snapshotEffects(q.effects, now));
-      o.push(row);
-    }
-    for (const id of p.known) if (!players.has(id)) p.known.delete(id);
-    const mobs = world.snapshotFor(a, VIEW, now);
-    // впервые увиденный моб: клиенту нужен его вид, чтобы построить модель
-    const fresh = [];
-    // элите и чемпиону клиенту нужны ранг и готовое имя: подпись и ауру рисует он
-    for (const row of mobs) if (!p.knownMobs.has(row[0])) {
-      p.knownMobs.add(row[0]);
-      const mb = world.byId.get(row[0]);
-      fresh.push(mb.def.rank ? [mb.id, mb.kind, mb.def.rank, mb.def.name, mb.def.size] : [mb.id, mb.kind]);
-    }
-    if (fresh.length) send(p, { t: 'mobs', n: fresh });
-    send(p, { t: 'snap', ts: now, o, m: mobs, g: groundLoot.snapshotFor(a, VIEW, p.key, now), me: { hp: Math.round(a.P.hp), mp: Math.round(a.P.mp), x: +a.x.toFixed(2), z: +a.z.toFixed(2), dead: a.dead, ...(a.effects.length ? { fx: snapshotEffects(a.effects, now) } : {}) } });
-    if (a.out.length) { send(p, { t: 'ev', e: a.out }); a.out = []; }
-    if (a.dirty) {
-      a.dirty = false;
-      const look = lookOf(a.P);
-      if (JSON.stringify(look) !== JSON.stringify(a.look)) {
-        a.look = look;
-        const s = JSON.stringify({ t: 'look', id: a.id, name: a.name, look });
-        for (const q of players.values()) if (q.known.has(a.id)) send(q, s);
-      }
-      send(p, { t: 'you', p: PL.profileOf(a) });
-    }
+    if (!p.key || !p.a) continue;
+    playerStep(p, 'send', () => broadcastTo(p, list, now));
   }
+}
+setInterval(() => {
+  const started = performance.now();
+  try { tick(); } catch (error) { logFault('tick', null, error); }
+  perf.ticks.push(performance.now() - started);
+  if (perf.ticks.length > 6000) perf.ticks.splice(0, perf.ticks.length - 6000);
 }, TICK);
 
 // объявления: где сейчас PK
-setInterval(() => {
+setInterval(() => worldStep('announce', () => {
   for (const a of actors()) if (a.karma > 0) broadcast({ t: 'announce', text: `PK ${a.name} (карма ${a.karma}) замечен: ${zoneAt(a.x, a.z).name}`, pk: a.id });
-}, PVP.announceMs);
+}), PVP.announceMs);
 // периодическое сохранение
-setInterval(() => { for (const p of players.values()) store(p); }, 30_000);
+setInterval(() => { for (const p of players.values()) playerStep(p, 'save', () => store(p)); }, 30_000);
 // пинг, чтобы nginx не рвал простаивающие соединения
 setInterval(() => { for (const p of players.values()) if (p.ws.readyState === 1) p.ws.ping(); }, 25000);
 wss.on('listening', () => { console.log(`realms-ws :${PORT}, аккаунтов: ${acc.count()}, мобов: ${world.list.length}`); logRates(RATES_INFO); });
 
 // Save active profiles before systemd or a local runner restarts the process.
 let stopping = false;
-function shutdown() {
+function shutdown(code = 0, reason = '') {
   if (stopping) return;
   stopping = true;
-  for (const p of players.values()) store(p);
-  acc.close();
-  process.exit(0);
+  if (reason) console.error(`SERVER_RESTART ${reason}`);
+  for (const p of players.values()) { try { store(p); } catch (error) { logFault('shutdown-store', p, error); } }
+  try { acc.close(); } catch { /* база уже закрыта */ }
+  process.exit(code);
 }
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => shutdown(0));
+process.on('SIGINT', () => shutdown(0));
+// Необработанное исключение оставляет процесс в неизвестном состоянии: сохраняем профили и
+// выходим с кодом 1, чтобы супервизор поднял чистый процесс (restart: unless-stopped).
+process.on('uncaughtException', (error) => { console.error(`SERVER_UNCAUGHT ${oneLine(error)}`); shutdown(1, 'uncaughtException'); });
+process.on('unhandledRejection', (error) => { console.error(`SERVER_UNHANDLED_REJECTION ${oneLine(error)}`); shutdown(1, 'unhandledRejection'); });

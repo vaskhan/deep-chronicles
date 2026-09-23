@@ -135,7 +135,9 @@ export function cmdEquip(a, idx, want) {
   a.dirty = true; say(a, `Экипировано: ${it.name}`, 'good');
 }
 export function cmdUnequip(a, sl) {
-  if (!a.P.equip[sl]) return;
+  // Имя слота приходит от клиента: 'constructor'/'toString' находились в прототипе объекта
+  // и роняли обработчик пакета. Снимаем только собственный слот с настоящим предметом.
+  if (!Object.hasOwn(a.P.equip, sl) || !ITEMS[a.P.equip[sl]]) return;
   const it = ITEMS[a.P.equip[sl]];
   unequipSlot(a.P, sl);
   a.dirty = true; say(a, `Снято: ${it.name}`);
