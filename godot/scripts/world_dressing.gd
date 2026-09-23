@@ -1,7 +1,7 @@
 extends Node3D
 ## Декоративный подлесок: детерминированные участки, без игровых коллизий.
 const TILE = 48.0
-const RADIUS = 2
+const RADIUS = 4
 var chunks: Dictionary = {}
 var pending: Array[Vector2i] = []
 var current = Vector2i(9999, 9999)

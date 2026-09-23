@@ -59,9 +59,16 @@ export function heightAt(x, z) {
   if (x > DUNGEON.x0 - 100) return 0;
   let h = fbm(x * 0.006, z * 0.006) * 34 - 12;
   h += Math.pow(fbm(x * 0.02 + 5, z * 0.02), 2) * 6;
-  // края карты — горы
+  // Separate ridges and low passes, rather than a square 90m perimeter wall.
   const edge = Math.max(Math.abs(x), Math.abs(z)) / (MAP / 2);
-  h += smooth(0.82, 1.0, edge) * 90;
+  if (edge > 0.76) {
+    const peak = (px, pz, width, height) => height * Math.exp(-((x-px)**2+(z-pz)**2)/(width*width));
+    const ridges = peak(-770,-660,230,95) + peak(120,-850,280,70) + peak(850,330,230,85);
+    h += smooth(0.76, 1.05, edge) * ridges;
+  }
+  // Beyond the playable map the land descends below the sea; the terrain mesh
+  // therefore ends underwater, not at a visible straight vertical cut.
+  h = lerp(h, -14, smooth(1.01, 1.2, edge));
   // пустошь ровнее
   const w = ZONES[2]; h = lerp(h, h * 0.35 + 2, smooth(w.r, w.r * 0.5, Math.hypot(x - w.x, z - w.z)));
   // Громовое ущелье: горный массив с коридором; вне своего прямоугольника высоту не трогает
@@ -371,6 +378,37 @@ export function buildProps(B = nullEmitter) {
   }
   // Стаи Громового ущелья идут в конце списка: номера старых точек и их ранги не сдвигаются.
   spawns.push(...gorgeSpawns((x, z) => blockedAt(x, z, 2)));
+  // Solitary encounters fill empty stretches of each biome. Append them so
+  // existing mobs keep their IDs/ranks; starter camps and gorge packs remain.
+  for (const [zoneIndex, zn] of ZONES.entries()) {
+    if (zn.shaped) continue;
+    for (let encounter = 0; encounter < 36; encounter++) {
+      for (const [speciesIndex, [mob]] of zn.mobs.entries()) {
+        const seed = 8101 + zoneIndex * 10000 + speciesIndex * 1000 + encounter * 7;
+        let best = null, clearanceSquared = 28 * 28;
+        for (let attempt = 0; attempt < 80; attempt++) {
+          const angle = hash(seed,attempt) * Math.PI * 2;
+          const distance = Math.sqrt(hash(attempt+91,seed)) * zn.r * .96;
+          const x = zn.x+Math.cos(angle)*distance, z = zn.z+Math.sin(angle)*distance;
+          if (zoneAt(x,z).id !== zn.id) continue;
+          if (TOWNS.some(t => Math.hypot(x-t.x,z-t.z) < t.r+40)) continue;
+          if (TELEPORTS.some(t => Math.hypot(x-t.x,z-t.z) < 25)) continue;
+          let nearestSquared=Infinity;
+          for (const other of spawns) {
+            nearestSquared=Math.min(nearestSquared,(other.x-x)**2+(other.z-z)**2);
+            if (nearestSquared <= clearanceSquared) break;
+          }
+          if (nearestSquared <= clearanceSquared) continue;
+          const y=heightAt(x,z);
+          if (y < -3 || y > 40 || blockedAt(x,z,3)) continue;
+          if (Math.max(Math.abs(heightAt(x+3,z)-y), Math.abs(heightAt(x-3,z)-y), Math.abs(heightAt(x,z+3)-y), Math.abs(heightAt(x,z-3)-y)) > 2) continue;
+          // Prefer the largest local gap, spreading sightings over the map.
+          clearanceSquared=nearestSquared; best={x,z};
+        }
+        if (best) spawns.push({mob,...best,habitat:`${zn.id}:${mob}:solo:${encounter}`});
+      }
+    }
+  }
   const placed=(key)=>TOWNS.flatMap(t=>(townLayout(t.id)[key]||[]).map(v=>({...v,town:t.id,scale:t.scale,x:t.x+(v.x||0)*t.scale,z:t.z+(v.z||0)*t.scale,...(v.points?{points:v.points.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])}:{})})));
   props = {npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
   return props;

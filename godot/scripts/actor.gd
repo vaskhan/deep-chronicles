@@ -108,7 +108,8 @@ func setup(model_id: String, title: String, def: Dictionary = {}):
 	add_child(label)
 	if kind == "m":
 		health_bar = _health_quad(Vector2(1.45, 0.10), Color("211617")); health_bar.position.y = label.position.y - 0.3
-		health_fill = _health_quad(Vector2(1.4, 0.065), Color("bf4338")); health_fill.position.y = health_bar.position.y; health_fill.position.z = 0.012
+		health_fill = _health_quad(Vector2(1.4, 0.065), Color("bf4338")); health_fill.position.y = health_bar.position.y; health_fill.position.z = 0.0
+		health_fill.material_override.render_priority = 2
 	_apply_rank()
 
 ## Элита и чемпион крупнее обычного моба и светятся аурой. Множители присылает сервер
@@ -143,6 +144,7 @@ func _health_quad(size: Vector2, color: Color) -> MeshInstance3D:
 	var node = MeshInstance3D.new(); var quad = QuadMesh.new(); quad.size = size; node.mesh = quad
 	var mat = StandardMaterial3D.new(); mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED; mat.albedo_color = color
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; mat.no_depth_test = true; mat.render_priority = 1
 	node.material_override = mat; node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node); return node
 
@@ -348,10 +350,14 @@ func begin_attack(duration: float, windup = -1.0):
 	attack_sequence += 1
 	var clip = "attack_alt" if attack_sequence % 2 == 0 and animator and animator.has_animation("attack_alt") else "attack"
 	if not animator or not animator.has_animation(clip): return
-	if windup < 0: windup = duration*.35
+	if windup < 0: windup = duration*.55
 	attack_recovery = maxf(.1,duration-windup)
 	play_action(clip, duration)
-	windup_clip_time = animator.get_animation(clip).length * 0.35
+	# The blade crosses the forward target plane at 29.6% of Sword_Attack.
+	# 40% is already the follow-through: effects used to arrive after the cut.
+	windup_clip_time = animator.get_animation(clip).length * 0.296
+	action_speed = windup_clip_time / maxf(windup, 0.05)
+	animator.play(clip, 0.08, action_speed)
 	windup_remaining = windup; winding_up = true
 
 func release_attack():
@@ -369,15 +375,18 @@ func begin_windup(duration: float, facing: float):
 	rotation.y = facing; moving = false
 	var clip = "windup" if animator and animator.has_animation("windup") else "attack"
 	if not animator or not animator.has_animation(clip): return
-	windup_clip_time = animator.get_animation(clip).length * (0.95 if clip == "windup" else 0.3)
+	windup_clip_time = animator.get_animation(clip).length * (0.95 if clip == "windup" else 0.4)
 	play_action(clip, duration * animator.get_animation(clip).length / maxf(0.01, windup_clip_time))
 	windup_remaining = duration; winding_up = true
 
 func finish_windup():
 	windup_remaining = 0; winding_up = false
-	play_action("attack", 0.38)
-	if animator and action_clip == "attack" and not animator.has_animation("windup"):
-		animator.seek(windup_clip_time, true)
+	var separate = animator and animator.has_animation("windup")
+	play_action("attack", 0.7)
+	if animator and not separate:
+		var remaining = animator.get_animation("attack").length - windup_clip_time
+		action_speed = remaining / 0.7
+		animator.play("attack", 0, action_speed); animator.seek(windup_clip_time, true)
 
 func receive_hit():
 	if dead: return
@@ -414,12 +423,14 @@ func _attach_weapon(id: String):
 		var attachment = BoneAttachment3D.new(); attachment.name = "RightHandEquipment"; attachment.bone_name = "DEF-hand.R"
 		skeleton.add_child(attachment)
 		var grip = Node3D.new(); grip.name = "WeaponGrip"; attachment.add_child(grip)
-		# Bone origin is the wrist; +Y follows the fingers. The canonical rig
-		# and equipment use +Z for the forward edge of the palm/blade.
-		grip.position = Vector3(0, 0.075, -0.015)
+		# The generated warrior palm sits below the canonical wrist axis.
+		# Seat the hilt between palm and curled fingers, not on the hand back.
+		grip.position = {"warrior": Vector3(-0.08, 0.085, 0.09), "warrior_chain": Vector3(-0.12, 0.105, 0.13)}.get(active_art, Vector3(0, 0.075, -0.015))
 		grip.add_child(weapon)
 		weapon.transform = Transform3D.IDENTITY
-		weapon.rotation = Vector3.ZERO
+		# Blade width is local X, thickness Y, length Z. The source sword
+		# is rolled 90 degrees relative to the canonical cutting plane.
+		weapon.rotation = Vector3(0, 0, PI / 2 if id == "warrior" else 0)
 		weapon.scale = Vector3.ONE * (0.8 / model.scale.x)
 		var handle_center = Vector3(0, 0, 0.14 if id == "warrior" else 0.0)
 		weapon.position = -(weapon.basis * handle_center)

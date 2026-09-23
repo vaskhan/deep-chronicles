@@ -82,7 +82,7 @@ func build():
 			mm.mesh = group.mesh; mm.instance_count = group.transforms.size()
 			for i in mm.instance_count: mm.set_instance_transform(i, group.transforms[i])
 			var instance = MultiMeshInstance3D.new(); instance.multimesh = mm; instance.material_override = group.material; instance.position = group.anchor
-			instance.visibility_range_end = 650; instance.visibility_range_end_margin = 20; add_child(instance)
+			instance.visibility_range_end = Tuning.CAMERA_FAR; instance.visibility_range_end_margin = 20; add_child(instance)
 			continue
 		# Плоское у земли (мостовая, газоны, инкрустации) и мелочь (фрукты, цветы) тени не дают
 		# заметной — их каскады теней не перерисовывают.
@@ -102,10 +102,10 @@ func build():
 		var node = MeshInstance3D.new(); node.name = "TownStatic_%d" % get_child_count(); node.mesh = _merge(batch.parts)
 		node.material_override = batch.material; node.position = batch.anchor
 		if not batch.shadow: node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		node.visibility_range_end = 650; node.visibility_range_end_margin = 20; add_child(node)
+		node.visibility_range_end = Tuning.CAMERA_FAR; node.visibility_range_end_margin = 20; add_child(node)
 	if not tree_transforms.is_empty():
 		var source = get_parent().tree_source("elm_field")
-		Lod.place(self, "TownTree", source.parts, tree_transforms, Lod.bands("tree", 650.0), {"end_margin": 20.0, "shadow_lod": true})
+		Lod.place(self, "TownTree", source.parts, tree_transforms, Lod.bands("tree", Tuning.CAMERA_FAR), {"end_margin": 20.0, "shadow_lod": true})
 
 ## Лежит ли плоская деталь у земли: верх не выше полуметра над рельефом под её центром.
 func _low(box: AABB, anchor: Vector3) -> bool:

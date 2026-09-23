@@ -8,8 +8,8 @@ import { openDb } from './accounts.js';
 import { zoneAt, TOWNS, DUNGEON, CRYPT, heightAt, obstacles } from '../src/world-core.js';
 import { PVP, karmaForPk, karmaWashCost } from '../src/pvp.js';
 import { effectiveSkill, spForKill } from '../src/progression.js';
-import { CLASSES, SKILLS, ITEMS } from '../src/data.js';
-import { heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp, mobAtk, mobPdef, mobCrit, MOB_SPREAD } from '../src/sim.js';
+import { MAX_LEVEL, CLASSES, SKILLS, ITEMS } from '../src/data.js';
+import { BASIC_ATTACK_POWER, skillActionTiming, heroAttackTiming, calcDmg, missChance, evaChance, flatDist, clamp, mobAtk, mobPdef, mobCrit, MOB_SPREAD } from '../src/sim.js';
 import { mobHitEffects, guardTrigger } from '../src/mob-skills.js';
 import { applyEffect, tickEffects, snapshotEffects, drainMul, drainHeal, makeBuff, makeDebuff, makeSlow, makeDot, makeHot, makeDrain } from '../src/effects.js';
 import { createParties } from './sim/party.js';
@@ -30,7 +30,7 @@ const NEAR = 60;   // м — канал «Рядом»
 const TICK = 100;  // мс — шаг симуляции
 // клиент видит мир на ~250 мс в прошлом (снапшот + интерполяция), поэтому по движущейся цели
 // его оценка расстояния отстаёт на несколько метров. Допуск, чтобы честные удары не пропадали.
-const LAG_M = 4;
+const LAG_M = 0.75;
 // отладочные команды для автотестов: включаются только переменной окружения, в проде их нет
 const DEV_CMD = process.env.DEV_CMD === '1';
 // фаззинг в автотестах шлёт сотни пакетов разом: лимиты снимаются только вместе с DEV_CMD
@@ -301,7 +301,7 @@ function onMessage(p, m, ip) {
       // выбор цели и автоатака: hold — просто взять на прицел, не нападая
       case 'atk': {
         if (a.dead) return;
-        if (m.id == null) { a.swing = null; a.attacking = false; a.target = null; return; }
+        if (m.id == null) { a.queuedSkill = null; a.swing = null; a.attacking = false; a.target = null; return; }
         a.target = m.kind === 'p' ? { p: m.id | 0 } : { m: m.id | 0 };
         a.attacking = !m.hold;
         return;
@@ -340,8 +340,9 @@ function onMessage(p, m, ip) {
         if (m.x != null) { PL.place(a, num(m.x), num(m.z)); }
         if (m.sp != null) a.P.sp = Math.max(0, num(m.sp, 1e9) | 0);
         if (m.coins != null) a.P.coins = Math.max(0, num(m.coins, 1e9) | 0);
-        if (m.lvl != null) a.P.lvl = clamp(m.lvl | 0, 1, 40);
+        if (m.lvl != null) a.P.lvl = clamp(m.lvl | 0, 1, MAX_LEVEL);
         if (m.hp != null) a.P.hp = num(m.hp, 1e6);
+        if (m.mp != null) a.P.mp = num(m.mp, 1e6);
         if (m.item) PL.addItem(a.P, String(m.item), Math.max(1, m.n | 0));
         if (m.drop && ITEMS[m.drop]) groundLoot.spawn(a, { coins: 17, drops: [m.drop] }, p.key, p.name, now);
         if (m.xp != null) PL.gainXp(a, num(m.xp, 1e7) | 0);
@@ -425,7 +426,7 @@ function affectTarget(ref, eff, now) {
 function skillEffects(a, ref, sk, id, atk, now) {
   const t = targetPos(ref);
   if (!alive(t)) return;
-  if (sk.dot) affectTarget(ref, makeDot(`${id}:dot`, sk.dot, atk, now, a.id), now);
+  if (sk.dot) affectTarget(ref, makeDot(`${id}:dot`, sk.dot, atk * (ref.p != null ? PVP.damageScale : 1), now, a.id), now);
   if (sk.debuff) affectTarget(ref, makeDebuff(`${id}:weak`, { ...sk.debuff, name: sk.name }, now, a.id), now);
   if (sk.slow) affectTarget(ref, makeSlow(`${id}:slow`, { ...sk.slow, name: sk.name }, now, a.id), now);
 }
@@ -486,7 +487,7 @@ function damagePlayer(mb, a, now) {
   const s = PL.statsOf(a, now);
   if (Math.random() < evaChance(mb.def.lvl, s.eva)) return a.out.push({ k: 'hurt', dodge: true, from: mb.id });
   // Та же формула, что у игрока: шире разброс и собственный крит моба (src/sim.js).
-  const { d, crit } = calcDmg(mobAtk(mb, now), s.pdef, 1, mobCrit(mb.def), Math.random, MOB_SPREAD);
+  const { d, crit } = calcDmg(mobAtk(mb, now), s.pdef, 1, mobCrit(mb.def), Math.random, MOB_SPREAD, mb.def.critPower ?? 1.5);
   a.P.hp -= d;
   a.out.push({ k: 'hurt', dmg: d, from: mb.id, crit });
   if (a.P.hp <= 0) { PL.killPlayer(a, mb.def.name); onPlayerDied(a, null); return; }
@@ -499,7 +500,7 @@ function damageActor(a, v, atk, mul, school, critChance, now) {
   if (v.dead || a.dead) return;
   if (PL.inTown(a) || PL.inTown(v)) return PL.say(a, 'В городе сражаться нельзя', 'bad');
   const vs = PL.statsOf(v, now);
-  const { d, crit } = calcDmg(atk, school === 'm' ? vs.mdef : vs.pdef, mul, critChance);
+  const { d, crit } = calcDmg(atk, school === 'm' ? vs.mdef : vs.pdef, mul * PVP.damageScale, critChance, Math.random, 0.2, PL.statsOf(a, now).critPower);
   v.P.hp -= d; v.dirty = true;
   v.hitBy.set(a.id, now);
   // напал на белого — флаг (у PK флаг не нужен, он и так красный)
@@ -511,6 +512,13 @@ function damageActor(a, v, atk, mul, school, critChance, now) {
 }
 
 function onSkill(p, a, id, now) {
+  // One pending command; revalidate target/resources when the current action ends.
+  if (a.cast || (a.actionUntil || 0) > now) {
+    const err = PL.skillError(a, id, now, true);
+    if (err) return PL.say(a, err, 'bad');
+    a.queuedSkill = { id, target: a.target ? { ...a.target } : null };
+    return;
+  }
   const err = PL.skillError(a, id, now);
   if (err) return PL.say(a, err, 'bad');
   const sk = effectiveSkill(a.P, id), s = PL.statsOf(a, now);
@@ -521,14 +529,18 @@ function onSkill(p, a, id, now) {
   }
   a.P.mp -= sk.mp; a.cds[id] = now + sk.cd * 1000; a.dirty = true;
   a.out.push({ k: 'cd', id, cd: sk.cd });
-  if (sk.cast) {
-    a.cast = { id, t: sk.cast / s.cast, target: a.target };
-    a.out.push({ k: 'cast', id, t: sk.cast / s.cast });
-    // Old clients treat `cast` as their own cast bar. New nearby-only cue is
-    // safely ignored by those builds instead of blocking their movement.
-    pushNear(a, { k: 'cast_start', id, t: sk.cast / s.cast }, true); return;
+  const timing = skillActionTiming(sk, s);
+  a.swing = null; a.attacking = false;
+  a.actionUntil = now + timing.cooldown * 1000;
+  a.atkTimer = Math.max(a.atkTimer, timing.cooldown);
+  a.cast = { id, t: timing.windup, target: a.target ? { ...a.target } : null };
+  a.out.push({ k: 'action_cd', t: timing.cooldown });
+  if (sk.school === 'p') {
+    pushNear(a, { k: 'skill_start', id, t: timing.cooldown, windup: timing.windup });
+  } else {
+    a.out.push({ k: 'cast', id, t: timing.windup });
+    pushNear(a, { k: 'cast_start', id, t: timing.windup }, true);
   }
-  applySkill(a, id, a.target, now);
 }
 
 function applySkill(a, id, ref, now) {
@@ -538,10 +550,10 @@ function applySkill(a, id, ref, now) {
     if (!alive(t) || flatDist(a, t) > sk.range + targetRadius(ref) + LAG_M + 2) return;
     const atk = sk.school === 'm' ? s.matk : s.patk, crit = Math.random() < s.crit + 0.05 ? 1 : 0;
     pushNear(a, { k: 'cast_fx', id, to: ref });
-    if (ref.m != null) { const r = calcDmg(atk, mobPdef(t, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, crit); damageMob(a, t, r.d, r.crit, now); }
+    if (ref.m != null) { const r = calcDmg(atk, mobPdef(t, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, crit, Math.random, 0.2, s.critPower); damageMob(a, t, r.d, r.crit, now); }
     else damageActor(a, t, atk, sk.mul, sk.school, crit, now);
     skillEffects(a, ref, sk, id, atk, now);
-    a.attacking = true;
+    // Casting does not opt the player into normal attacks.
   } else if (sk.kind === 'heal') {
     // Часть возвращается сразу, часть — лечением со временем: лечение стало растянутым.
     const amt = Math.round(s.maxHp * sk.amount);
@@ -563,7 +575,7 @@ function applySkill(a, id, ref, now) {
     pushNear(a, { k: 'cast_fx', id });
     for (const mb of world.list) {
       if (mb.dead || flatDist(mb, a) > sk.radius + world.radiusOf(mb)) continue;
-      const r = calcDmg(atk, mobPdef(mb, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, s.crit);
+      const r = calcDmg(atk, mobPdef(mb, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, s.crit, Math.random, 0.2, s.critPower);
       damageMob(a, mb, r.d, r.crit, now);
       skillEffects(a, { m: mb.id }, sk, id, atk, now); n++;
     }
@@ -590,9 +602,11 @@ function autoAttack(a, dt, now) {
   const targetKey = JSON.stringify(a.target);
   if (a.swing && a.swing.target !== targetKey) a.swing = null;
   if (!a.swing) {
-    if (a.atkTimer > 0) return;
+    if (a.atkTimer > 0 || (a.actionUntil || 0) > now) return;
     const timing = heroAttackTiming(s.aspd);
     a.atkTimer = timing.cooldown;
+    a.actionUntil = now + timing.cooldown * 1000;
+    a.out.push({ k: 'action_cd', t: timing.cooldown });
     const windup = timing.windup;
     a.swing = { target: targetKey, remaining: windup };
     pushNear(a, { k: 'attack_start', t: timing.duration, windup, to: { ...a.target } });
@@ -602,15 +616,15 @@ function autoAttack(a, dt, now) {
   if (a.swing.remaining > 0) return;
   a.swing = null;
   const mage = a.P.cls === 'mage';
+  if (mage) a.attacking = false; // A deliberate single staff swing, never a magic autoattack.
   pushNear(a, { k: 'attack_release', to: { ...a.target } });
   if (a.target.p != null) {
     const crit = Math.random() < s.crit ? 1 : 0;
-    damageActor(a, t, mage ? s.matk * 0.6 : s.patk, 1, mage ? 'm' : 'p', crit, now);
+    damageActor(a, t, s.patk, BASIC_ATTACK_POWER, 'p', crit, now);
     return;
   }
-  if (mage) { const r = calcDmg(s.matk * 0.6, mobPdef(t, now), 1, s.crit); return damageMob(a, t, r.d, r.crit, now); }
   if (Math.random() < missChance(t.def.lvl, s.acc)) return pushNear(a, { k: 'miss', m: t.id });
-  const r = calcDmg(s.patk, mobPdef(t, now), 1, s.crit);
+  const r = calcDmg(s.patk, mobPdef(t, now), BASIC_ATTACK_POWER, s.crit, Math.random, 0.2, s.critPower);
   damageMob(a, t, r.d, r.crit, now);
 }
 
@@ -847,6 +861,11 @@ function tick() {
           if (c.id === 'escape') { const t = TOWNS.find((x) => x.id === a.P.home) || TOWNS[0]; PL.place(a, t.x, t.z - 12); }
           else applySkill(a, c.id, c.target, now);
         }
+      }
+      if (a.queuedSkill && !a.cast && !a.dead && now >= (a.actionUntil || 0)) {
+        const next = a.queuedSkill; a.queuedSkill = null;
+        a.target = next.target;
+        onSkill(p, a, next.id, now);
       }
       autoAttack(a, dt, now);
     });

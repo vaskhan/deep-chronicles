@@ -8,8 +8,9 @@ func _run():
  DirAccess.make_dir_recursive_absolute(output)
  var world=load("res://scenes/world.tscn").instantiate(); root.add_child(world); world.build()
  var data=root.get_node("GameData")
- var camera=Camera3D.new(); root.add_child(camera); camera.current=true; camera.fov=58; camera.far=1500
+ var camera=Camera3D.new(); root.add_child(camera); camera.current=true; camera.fov=58; camera.far=root.get_node("Tuning").CAMERA_FAR
  var views=[
+  ["horizon",Vector2(-180,80),Vector3(0,48,400)],
   ["meadow",Vector2(-245,165),Vector3(24,12,26)],
   ["forest",Vector2(-20,55),Vector3(22,11,27)],
   ["waste",Vector2(300,-160),Vector3(23,12,30)],
@@ -25,7 +26,7 @@ func _run():
   await create_timer(2.5).timeout
   for child in world.get_children():
    if child.get_script() != null and child.get_script().resource_path == "res://scripts/world_dressing.gd":
-    if child.chunks.size()>25 or (view[0]=="crypt" and not child.chunks.is_empty()):
+    if child.chunks.size()>81 or (view[0]=="crypt" and not child.chunks.is_empty()):
      push_error("Подлесок не освободил удалённые участки"); quit(1); return
   await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png(output.path_join(view[0]+".png"))

@@ -58,9 +58,9 @@ static func actor(id: String) -> Node3D:
 		var player = AnimationPlayer.new(); player.name = "AnimationPlayer"; result.add_child(player)
 		var library = AnimationLibrary.new()
 		var clips = {"idle": "Idle", "walk": "Walk", "run": "Jog_Fwd", "attack": "Sword_Attack", "attack_alt": "Sword_Attack", "cast": "Spell_Simple_Idle", "cast_enter": "Spell_Simple_Enter", "release": "Spell_Simple_Shoot", "hit": "Hit_Chest", "death": "Death01"}
-		if anim_id in ["warrior", "warrior_chain"]: clips.idle = "Sword_Idle"; clips.attack_alt = "Punch_Cross"
+		if anim_id in ["warrior", "warrior_chain"]: clips.idle = "Idle"; clips.attack_alt = "Sword_Attack"
 		if anim_id in ["mage", "gatekeeper", "priest", "wraith", "lich"]: clips.idle = "Spell_Simple_Idle"
-		if anim_id == "mage": clips.attack = "Spell_Simple_Shoot"; clips.attack_alt = "Spell_Simple_Shoot"
+		if anim_id == "mage": clips.attack = "Sword_Attack"; clips.attack_alt = "Sword_Attack"
 		if anim_id == "merchant": clips.idle = "Idle_Talking"
 		if anim_id in ["goblin", "orc", "ghoul", "treant", "golem"]:
 			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"; clips.idle = "Idle"
@@ -72,6 +72,10 @@ static func actor(id: String) -> Node3D:
 		for key in clips:
 			var clip = canonical_clips[clips[key]].duplicate()
 			clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "walk", "run", "cast"] else Animation.LOOP_NONE
+			if key == "run" and anim_id in ["warrior", "warrior_chain", "mage"]:
+				_running_arms(clip, result.find_child("Skeleton3D", true, false))
+			if anim_id in ["warrior", "warrior_chain"]:
+				_close_weapon_hand(clip, result.find_child("Skeleton3D", true, false))
 			library.add_animation(key, clip)
 		player.add_animation_library("", library)
 	else:
@@ -106,3 +110,72 @@ static func aabb(root: Node3D) -> AABB:
 		var part = transform * mesh.get_aabb()
 		box = part if first else box.merge(part); first = false
 	return box
+
+## The no-fingers library leaves an open hand in every sword pose.
+## Keep a closed grip in the same animation/blending system as the wrist.
+static func _close_weapon_hand(clip: Animation, skeleton: Skeleton3D):
+	var path = ""
+	for track in clip.get_track_count():
+		if str(clip.track_get_path(track)).ends_with(":DEF-hand.R"):
+			path = str(clip.track_get_path(track)).get_slice(":", 0)
+			break
+	if path.is_empty(): return
+	for finger in ["index", "middle", "ring", "pinky"]:
+		for joint in 3:
+			var bone_name = "DEF-f_%s.%02d.R" % [finger, joint + 1]
+			var bone = skeleton.find_bone(bone_name)
+			if bone < 0: continue
+			var track = clip.add_track(Animation.TYPE_ROTATION_3D)
+			clip.track_set_path(track, NodePath(path + ":" + bone_name))
+			var rest = skeleton.get_bone_rest(bone).basis.get_rotation_quaternion()
+			clip.rotation_track_insert_key(track, 0, rest * Quaternion(Vector3(0,0,1), [.12, .30, .20][joint]))
+
+## Bake a quieter upper body into locomotion. Legs, root motion and cadence
+## retain their source keys; arm swing is in sagittal planes beside the torso.
+static func _running_arms(clip: Animation, skeleton: Skeleton3D):
+	var targets = ["DEF-neck", "DEF-head", "DEF-spine.001", "DEF-spine.002", "DEF-spine.003", "DEF-shoulder.L", "DEF-shoulder.R", "DEF-upper_arm.L", "DEF-upper_arm.R", "DEF-forearm.L", "DEF-forearm.R"]
+	var rotations = {}; var paths = {}; var source_tracks = []
+	for track in clip.get_track_count():
+		var bone = skeleton.find_bone(str(clip.track_get_path(track)).get_slice(":", 1))
+		if bone >= 0: source_tracks.append([track, bone])
+		if bone >= 0 and skeleton.get_bone_name(bone) in targets and clip.track_get_type(track) == Animation.TYPE_ROTATION_3D:
+			rotations[bone] = []; paths[bone] = track
+	var samples = 60
+	for frame in samples + 1:
+		var time = clip.length * frame / samples
+		var local_poses = []; var global_poses = []
+		for bone in skeleton.get_bone_count(): local_poses.append(skeleton.get_bone_rest(bone))
+		for pair in source_tracks:
+			var track = pair[0]; var bone = pair[1]
+			if clip.track_get_type(track) == Animation.TYPE_ROTATION_3D: local_poses[bone].basis = Basis(clip.rotation_track_interpolate(track, time))
+			elif clip.track_get_type(track) == Animation.TYPE_POSITION_3D: local_poses[bone].origin = clip.position_track_interpolate(track, time)
+		for bone in skeleton.get_bone_count():
+			var name = skeleton.get_bone_name(bone); var parent = skeleton.get_bone_parent(bone)
+			var parent_pose = global_poses[parent] if parent >= 0 else Transform3D.IDENTITY
+			var pose = local_poses[bone]
+			if name.begins_with("DEF-spine."):
+				var rest = skeleton.get_bone_rest(bone).basis
+				var delta = (rest.inverse() * pose.basis).get_euler()
+				delta.y *= .2; delta.z *= .2; delta.x *= .75
+				pose.basis = rest * Basis.from_euler(delta)
+			elif name.begins_with("DEF-shoulder.") or name in ["DEF-neck", "DEF-head"]:
+				pose.basis = skeleton.get_bone_rest(bone).basis
+			var global_pose = parent_pose * pose
+			if name == "DEF-spine.003":
+				var euler = global_pose.basis.get_euler()
+				euler.y *= .2; euler.z *= .2
+				global_pose.basis = Basis.from_euler(euler)
+			if name.begins_with("DEF-upper_arm.") or name.begins_with("DEF-forearm."):
+				var side = 1.0 if name.ends_with(".L") else -1.0
+				var swing = .42 * cos(TAU * frame / samples) * -side
+				var angle = swing + (1.35 if name.begins_with("DEF-forearm.") else 0.0)
+				var direction = Vector3(side * .08, -cos(angle), sin(angle)).normalized()
+				var normal = Vector3(side, 0, 0)
+				var z_axis = normal.cross(direction).normalized()
+				global_pose.basis = Basis(direction.cross(z_axis).normalized(), direction, z_axis)
+			global_poses.append(global_pose)
+			if rotations.has(bone): rotations[bone].append((parent_pose.basis.inverse() * global_pose.basis).get_rotation_quaternion())
+	for bone in rotations:
+		var track = paths[bone]
+		while clip.track_get_key_count(track) > 0: clip.track_remove_key(track, clip.track_get_key_count(track)-1)
+		for frame in samples + 1: clip.rotation_track_insert_key(track, clip.length * frame / samples, rotations[bone][frame])

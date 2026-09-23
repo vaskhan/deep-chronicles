@@ -119,9 +119,14 @@ func begin_cast(actor, color: Color, duration: float):
 	for i in 5: fx.orbs.append(_orb(fx.node, color, 0.055 + i * 0.009))
 	fx.focus = _orb(fx.node, color.lightened(0.6), 0.13)
 
-func swing(actor, color = Color("ffe3a0")):
+func swing(actor, color = Color("ffe3a0"), restart = false):
 	if not is_instance_valid(actor) or not is_instance_valid(actor.weapon_node): return
-	var fx = _spawn("swing", actor.global_position, clampf(actor.action_until, 0.25, 0.8))
+	# Start tracking during the windup; release events reuse the same trail.
+	for existing in active.duplicate():
+		if existing.kind == "swing" and existing.actor.get_ref() == actor:
+			if not restart: return
+			active.erase(existing); _dispose(existing)
+	var fx = _spawn("swing", actor.global_position, maxf(actor.action_until + .15, .3))
 	fx.actor = weakref(actor); fx.points = []
 	fx.trail = _mesh(fx.node, ImmediateMesh.new(), color)
 
@@ -169,6 +174,15 @@ func _process(dt):
 			"swing":
 				var actor = fx.actor.get_ref()
 				if is_instance_valid(actor.weapon_node):
+					var cutting = true
+					if actor.animator and actor.animator.current_animation.begins_with("attack"):
+						var phase = actor.animator.current_animation_position / actor.animator.current_animation_length
+						cutting = phase >= .22 and phase <= .35
+					elif actor.animator: cutting = false
+					if not cutting:
+						fx.points.clear(); fx.trail.mesh.clear_surfaces()
+						if u >= 1: active.erase(fx); _dispose(fx)
+						continue
 					var weapon = actor.weapon_node
 					fx.points.append([fx.node.to_local(weapon.to_global(Vector3(0, 0, 0.2))), fx.node.to_local(weapon.to_global(Vector3(0, 0, 1.2)))])
 					if fx.points.size() > 5: fx.points.pop_front()

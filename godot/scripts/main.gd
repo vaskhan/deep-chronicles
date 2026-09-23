@@ -31,6 +31,7 @@ var state_timer = 0.0
 var ui_timer = 0.0
 var cast_time = 0.0
 var cooldowns: Dictionary = {}
+var action_ready_at = 0
 var last_pm = ""
 var own_id = 0
 var clock_offset = 0.0
@@ -135,7 +136,7 @@ func _message(m: Dictionary):
 			hero = Actor.new(); hero.kind = "self"; hero.name = "Hero"; add_child(hero)
 			hero.setup(profile.cls, profile.name); hero.position = GameData.position_at(profile.x, profile.z)
 			hero.apply_look(_look_of(profile)); hero.dead = profile.get("dead", false)
-			buffs.clear(); cooldowns.clear(); cast_time = 0; has_destination = false; attacking = false
+			buffs.clear(); cooldowns.clear(); action_ready_at = 0; cast_time = 0; has_destination = false; attacking = false
 			hud.active_effects = []; hud.target_effects = []
 			initial_camera = true
 			hud.login_pass.clear()
@@ -144,6 +145,7 @@ func _message(m: Dictionary):
 			hud.enter(profile)
 			if not startup_panel.is_empty(): hud.show_window(startup_panel); startup_panel = ""
 			hud.log_line("Добро пожаловать, %s! Хранитель врат перенесёт вас в зону охоты." % profile.name)
+			screenshot_done = false
 			print("NATIVE_AUTH_OK")
 		"autherr":
 			hud.continue_button.visible = not Network.session.is_empty()
@@ -234,22 +236,27 @@ func _event(e: Dictionary):
 	match e.k:
 		"msg": hud.log_line(e.text)
 		"cd": cooldowns[e.id] = Time.get_ticks_msec() + float(e.cd) * 1000
+		"action_cd":
+			action_ready_at = Time.get_ticks_msec() + int(float(e.t) * 1000)
+			cooldowns["_action"] = action_ready_at
+		"skill_start":
+			if is_instance_valid(source):
+				source.begin_attack(float(e.t), float(e.windup))
+				combat_fx.swing(source, GameData.color(GameData.catalog.SKILLS[e.id].color), true)
+			if source == hero:
+				cast_time = float(e.windup); has_destination = false
+				hud.cast_duration = cast_time; hud.cast_name = GameData.catalog.SKILLS[e.id].name
 		"attack_start":
 			if is_instance_valid(source):
 				source.begin_attack(float(e.t),float(e.get("windup",float(e.t)*.35)))
-				if source.base_model != "mage": combat_fx.swing(source); game_audio.play_at("swing", source.position)
+				combat_fx.swing(source, Color("ffe3a0"), true)
+
 		"attack_release":
+			if is_instance_valid(source): combat_fx.swing(source); game_audio.play_at("swing", source.position)
 			if is_instance_valid(source): source.release_attack()
-			if is_instance_valid(source) and source.base_model == "mage":
-				var spell_target = mobs.get(int(e.to.get("m", -1))) if e.to.has("m") else (hero if int(e.to.get("p", -1)) == own_id else players.get(int(e.to.get("p", -1))))
-				if is_instance_valid(spell_target): combat_fx.projectile(source, spell_target, Color("9fbdff")); game_audio.play_at("fire", source.position, -5)
+			if source == hero and profile.get("cls", "") == "mage": attacking = false
+
 		"hit", "miss":
-			if is_instance_valid(source) and source.cast_remaining <= 0 and source.action_until <= 0 and not e.has("dot"):
-				source.play_action("attack", 0.65)
-				if source.base_model == "mage" and is_instance_valid(victim):
-					combat_fx.projectile(source, victim, Color("9fbdff")); game_audio.play_at("fire", source.position, -5)
-				else:
-					combat_fx.swing(source); game_audio.play_at("swing", source.position)
 			if source == hero and is_instance_valid(victim): hud.log_line("%s: %s" % [victim.display_name, "Промах" if e.k == "miss" else "Урон %s" % int(e.dmg)], "combat")
 			if is_instance_valid(victim) and victim != hero:
 				_float(victim.position, "Промах" if e.k == "miss" else (("КРИТ " if e.get("crit", false) else "") + str(int(e.dmg))), Color("ffdd79") if e.get("crit", false) else Color.WHITE)
@@ -315,18 +322,18 @@ func _event(e: Dictionary):
 			var sk = GameData.catalog.SKILLS[e.id]
 			if is_instance_valid(source):
 				combat_fx.stop_cast(source)
-				if sk.has("cast"): source.release_cast()
-				else: source.play_action("attack", 0.65)
+				if sk.get("school", "") == "p": source.release_attack()
+				else: source.release_cast()
 				if source == hero: cast_time = 0
 				var hit_target = null
 				if e.has("to"):
 					hit_target = mobs.get(int(e.to.get("m", -1))) if e.to.has("m") else (hero if int(e.to.get("p", -1)) == own_id else players.get(int(e.to.get("p", -1))))
 				var color = GameData.color(sk.color)
 				if sk.get("school") == "m" and is_instance_valid(hit_target): combat_fx.projectile(source, hit_target, color)
-				elif e.id == "heal": combat_fx.burst(source.position, color, "heal", 2)
+				elif sk.kind == "heal": combat_fx.burst(source.position, color, "heal", 2)
 				elif e.id == "ice_nova": combat_fx.burst(source.position, color, "frost", float(sk.radius))
 				else:
-					combat_fx.swing(source, color); combat_fx.burst(source.position, color, "buff" if e.id == "battle_cry" else "impact", float(sk.get("radius", 2)))
+					combat_fx.swing(source, color); combat_fx.burst(source.position, color, "buff" if sk.kind == "buff" else "impact", float(sk.get("radius", 2)))
 				game_audio.play_at({"fire_bolt": "fire", "heal": "heal", "ice_nova": "frost", "battle_cry": "buff"}.get(e.id, "swing"), source.position)
 		"fx":
 			# Наложение и спад эффекта во времени. Сила, урон и срок — серверные, клиент рисует ауру.
@@ -429,7 +436,7 @@ func _move_hero(dt):
 			Network.send({"t": "pickup", "id": pending_pickup}); pickup_sent_at = Time.get_ticks_msec()
 		elif Time.get_ticks_msec() - pickup_sent_at > 2500:
 			pending_pickup = ""; pickup_sent_at = 0; hud.log_line("Сервер не подтвердил подбор. Попробуйте ещё раз.")
-	elif attacking and is_instance_valid(target) and not target.dead:
+	elif (attacking or pending_skill != "") and is_instance_valid(target) and not target.dead:
 		var reach = float(stats.range) + target.radius
 		if pending_skill != "": reach = float(GameData.catalog.SKILLS[pending_skill].get("range", stats.range)) + target.radius
 		var offset = target.position - hero.position; offset.y = 0
@@ -438,7 +445,8 @@ func _move_hero(dt):
 			hero.rotation.y = atan2(offset.x, offset.z)
 			if pending_skill != "":
 				if not movement_path.is_empty(): _send_position()
-				Network.send({"t": "skill", "id": pending_skill}); pending_skill = ""
+				var ready_skill = pending_skill; pending_skill = ""
+				use_skill(ready_skill)
 	elif has_destination:
 		var offset = destination - hero.position; offset.y = 0
 		if offset.length() < (3.5 if is_instance_valid(talking_to) else 0.5):
@@ -489,17 +497,34 @@ func attack():
 	if not is_instance_valid(target) or target.dead or target.kind == "n": return
 	if target.kind == "p" and not pvp_enabled and not Input.is_key_pressed(KEY_CTRL):
 		hud.log_line("Для PvP удерживайте Ctrl при атаке или включите PvP в окне персонажа."); return
-	attacking = true; has_destination = false; talking_to = null; pending_pickup = ""
+	attacking = true; pending_skill = ""; has_destination = false; talking_to = null; pending_pickup = ""
 	Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind})
 
 func use_skill(id: String):
-	var sk = GameData.skill(profile, id)
-	if sk.kind == "dmg" and is_instance_valid(target):
-		if target.kind == "p" and not pvp_enabled and not Input.is_key_pressed(KEY_CTRL): hud.log_line("Включите PvP в окне персонажа."); return
+	# A skill is a single command, never an implicit normal-attack mode.
+	attacking = false; pending_skill = ""; has_destination = false
+	if is_instance_valid(target) and target.kind in ["m", "p"]:
 		Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind, "hold": true})
+	if not GameData.catalog.SKILLS.has(id) or int(profile.get("skills", {}).get(id, 0)) <= 0:
+		hud.log_line("Умение ещё не изучено."); return
+	if float(cooldowns.get(id, 0)) > Time.get_ticks_msec():
+		hud.log_line("Умение ещё восстанавливается."); return
+	var sk = GameData.skill(profile, id)
+	if sk.kind == "passive":
+		hud.log_line("Пассивное умение действует постоянно."); return
+	var promotion = GameData.promotion_required(profile, int(sk.lvl))
+	if promotion != "":
+		hud.log_line(promotion); return
+	if float(profile.get("mp", 0)) < float(sk.mp):
+		hud.log_line("Недостаточно маны."); return
+	if sk.kind == "dmg":
+		if not is_instance_valid(target) or target.dead or target.kind == "n":
+			hud.log_line("Выберите живую цель."); return
+		if target.kind == "p" and not pvp_enabled and not Input.is_key_pressed(KEY_CTRL):
+			hud.log_line("Включите PvP в окне персонажа."); return
 		var distance = Vector2(target.position.x - hero.position.x, target.position.z - hero.position.z).length()
 		if distance > sk.get("range", stats.range) + target.radius:
-			pending_skill = id; attacking = true; has_destination = false; return
+			pending_skill = id; return
 		hero.rotation.y = atan2(target.position.x - hero.position.x, target.position.z - hero.position.z)
 	if not movement_path.is_empty(): _send_position()
 	Network.send({"t": "skill", "id": id})
@@ -636,8 +661,10 @@ func _unhandled_input(event):
 				else: set_target(null); _cancel_attack(); has_destination = false; hud.show_window("menu")
 			KEY_ENTER: hud.chat_input.grab_focus()
 			KEY_V: camera_yaw = hero.rotation.y + PI; camera_pitch = Tuning.CAMERA_PITCH_RESET; camera_distance = Tuning.CAMERA_DISTANCE_RESET
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9: hud.activate_slot(int(event.physical_keycode) - KEY_1)
-			KEY_0: hud.activate_slot(9)
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9: hud.activate_slot(int(event.physical_keycode) - KEY_1 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
+			KEY_0: hud.activate_slot(9 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
+			KEY_MINUS: hud.activate_slot(10 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
+			KEY_EQUAL: hud.activate_slot(11 + (24 if event.alt_pressed else 12 if event.ctrl_pressed else 0))
 			KEY_F11: DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 	elif event is InputEventMouseButton:
 		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP: camera_distance = clampf(camera_distance / Tuning.CAMERA_ZOOM_STEP, Tuning.CAMERA_DISTANCE_MIN, Tuning.CAMERA_DISTANCE_MAX)
@@ -747,7 +774,7 @@ func _capture():
 	var report = FileAccess.open(capture_path + ".json", FileAccess.WRITE)
 	if report:
 		var state = {"endpoint": Network.endpoint, "connected": Network.online, "authenticated": Network.authed, "online": Network.online_count, "fps": Engine.get_frames_per_second(), "window": hud.window_kind, "music": game_audio.music.cue, "music_playing": game_audio.music.players.any(func(player): return player.playing)}
-		if is_instance_valid(hero): state.merge({"health": hud.hp_text.text, "animation": hero.last_clip, "model": hero.active_art, "mobs": mobs.size(), "ready": not hud.hp_text.text.is_empty() and not hero.last_clip.is_empty()})
+		if is_instance_valid(hero): state.merge({"health": hud.hp_text.text, "animation": hero.last_clip, "model": hero.active_art, "mobs": mobs.size(), "visible_mobs": mobs.values().filter(func(m): return m.visible and not m.dead).size(), "position": [hero.position.x, hero.position.y, hero.position.z], "ready": not hud.hp_text.text.is_empty() and not hero.last_clip.is_empty()})
 		else: state["ready"] = hud.login_panel.visible and Network.online
 		report.store_string(JSON.stringify(state))
 	print("NATIVE_SCREENSHOT_SAVED")

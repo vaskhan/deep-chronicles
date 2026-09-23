@@ -193,13 +193,13 @@ import { SAFE_ENCH, MAX_ENCH } from '../src/stats.js';
 // генератор с фиксированным зерном — чтобы тесты не зависели от удачи
 const seeded = (seed) => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-test('урон: растёт с атакой, падает от защиты, крит удваивает', () => {
+test('урон: растёт с атакой, падает от защиты, крит усиливает на заданный множитель', () => {
   const r = () => 0.5; // середина разброса, без крита
   const a = calcDmg(100, 0, 1, 0, r).d, b = calcDmg(200, 0, 1, 0, r).d;
   assert.ok(b > a * 1.9 && b < a * 2.1, `удвоение атаки: ${a} → ${b}`);
   assert.ok(calcDmg(100, 200, 1, 0, r).d < a, 'защита не снижает урон');
   const crit = calcDmg(100, 0, 1, 1, () => 0.5);
-  assert.ok(crit.crit && crit.d === a * 2, `крит: ${crit.d} вместо ${a * 2}`);
+  assert.ok(crit.crit && crit.d === a * 1.75, `крит: ${crit.d} вместо ${a * 1.75}`);
   assert.ok(calcDmg(0.0001, 9999, 1, 0, r).d >= 1, 'урон должен быть хотя бы 1');
 });
 
@@ -378,13 +378,13 @@ test('замах моба даёт время выйти из сектора; н
   for (let i = 0; i < 3; i++) mobStep(m, ctx, .1);
   assert.equal(hits.length, 0, 'урон не должен опережать замах');
   victim.z = 998;
-  for (let i = 0; i < 4; i++) mobStep(m, ctx, .1);
+  for (let i = 0; i < 6; i++) mobStep(m, ctx, .1);
   assert.equal(hits.length, 0, 'уход за спину должен избежать урона, сосед не подменяет жертву');
   assert.equal(m.r, r, 'моб не доворачивается во время замаха');
   assert.deepEqual(phases.at(-1), { phase: 'strike', landed: false });
   victim.z = 1002; m.atkCd = 0;
   mobStep(m, ctx, .1);
-  for (let i = 0; i < 7; i++) mobStep(m, ctx, .1);
+  for (let i = 0; i < 9; i++) mobStep(m, ctx, .1);
   assert.deepEqual(hits, [71]);
   assert.deepEqual(phases.at(-1), { phase: 'strike', landed: true });
 });
@@ -446,13 +446,13 @@ test('тело моба передаёт возраст смерти и оста
  const row=world.snapshotFor(m,10,m.respawnAt+1).find(r=>r[0]===m.id);
  assert.equal(row[7],0);assert.equal(row[5]&8,0);
 });
-test('темп автоатаки: урон приходится на 35% полного взмаха, ускорение сохраняется',()=>{
+test('темп автоатаки: урон приходится на 55% полного взмаха, ускорение сохраняется',()=>{
  for(const aspd of [.64,.8,1.6]){
   const timing=heroAttackTiming(aspd);
   assert.ok(timing.duration<timing.cooldown);
-  assert.equal(timing.windup,timing.duration*.35);
+  assert.equal(timing.windup,timing.duration*.55);
  }
- assert.ok(heroAttackTiming(.8).duration>1);
+ assert.ok(heroAttackTiming(.8).duration>=1);
  assert.equal(heroAttackTiming(.8).duration/2,heroAttackTiming(1.6).duration);
 });
 
@@ -471,4 +471,20 @@ test('starter hunting camps have dense, collision-free, non-aggressive groups ou
   }
   for (const cls of Object.values(CLASSES)) assert.ok(cls.base.speed * .275 >= 6 && cls.base.speed * .275 <= 8);
   for (const mob of Object.values(MOBS)) assert.ok(MOB_SPEED(mob) < CLASSES.mage.base.speed * .275);
+});
+
+
+test('solitary encounters fill every outdoor biome without crowding towns, arrivals or other mobs', async () => {
+  const { blockedAt } = await import('../src/world-core.js');
+  const added = world.spawns.filter(s => s.habitat);
+  assert.ok(added.length >= 250 && added.length <= 324, `habitat population ${added.length}`);
+  for (const zone of ZONES.filter(z => !z.shaped)) {
+    assert.ok(added.filter(s => zoneAt(s.x,s.z).id === zone.id).length >= 60, zone.id);
+  }
+  for (const s of added) {
+    assert.ok(!blockedAt(s.x,s.z,3));
+    assert.ok(TOWNS.every(t => Math.hypot(s.x-t.x,s.z-t.z) >= t.r+40));
+    assert.ok(TELEPORTS.every(t => Math.hypot(s.x-t.x,s.z-t.z) >= 25));
+    assert.ok(world.spawns.every(other => other === s || Math.hypot(s.x-other.x,s.z-other.z) >= 28));
+  }
 });

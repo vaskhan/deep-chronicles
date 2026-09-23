@@ -1,5 +1,6 @@
 """Align generated warrior lower-leg geometry to its canonical bind skeleton.
-Usage: python3 tools/godot/align-human-legs.py source.glb output.glb
+Usage: python3 tools/godot/align-human-legs.py source.glb output.glb [appearance.glb]
+Appearance keeps the current materials/textures while geometry comes from the original.
 Run once on the original rigged asset (before this correction). UVs, joints,
 weights, topology, textures and animation data are preserved byte-for-byte.
 Only POSITION/NORMAL buffers and position bounds change. No mesh remeshing.
@@ -7,7 +8,7 @@ Only POSITION/NORMAL buffers and position bounds change. No mesh remeshing.
 import json, math, statistics, struct, sys
 from pathlib import Path
 
-def align(source, output):
+def align(source, output, appearance=None):
     raw=Path(source).read_bytes()
     size=struct.unpack_from('<I',raw,12)[0]
     doc=json.loads(raw[20:20+size])
@@ -39,38 +40,74 @@ def align(source, output):
             for jo,wo in zip(joff,woff):
                 js=struct.unpack_from(jfmt,blob,jo);ws=struct.unpack_from(wfmt,blob,wo)
                 influence.append(sum(w for j,w in zip(js,ws) if joints[j].startswith(('DEF-thigh.','DEF-shin.','DEF-foot.','DEF-toe.'))))
-            axis=.089; heights=[.1,.25,.45,.65,.82,.94]
-            profiles={}
+            # Fit the complete thigh-to-ankle centerline to the bind skeleton.
+            # The old calf-only warp left the thigh on its original slanted axis;
+            # an added knee bulge then created a second bend instead of fixing it.
+            axis=.089; profiles={}
+            def regression(samples):
+                my=statistics.mean(h for h,x in samples)
+                mx=statistics.mean(x for h,x in samples)
+                slope=sum((h-my)*(x-mx) for h,x in samples)/sum((h-my)**2 for h,x in samples)
+                return mx-slope*my,slope
             for side in [-1,1]:
-                deltas=[]
-                for h in heights[:-1]:
-                    xs=[side*p[0] for p,w in zip(positions,influence) if side*p[0]>0 and abs(p[1]-h)<.035 and w>.7]
-                    # Fade the correction into the pelvis; preserve its width.
-                    target=axis if h<=.65 else .105
-                    deltas.append(max(0,statistics.median(xs)-target) if xs else 0)
-                deltas.append(0)
-                profiles[side]=deltas
-                print(Path(source).name,'side',side,'lower-leg offsets', [round(d,4) for d in deltas])
+                samples=[]
+                for h in [.18,.24,.30,.36,.42,.48,.54,.60,.66,.72,.78,.82]:
+                    xs=sorted(side*p[0] for p,w in zip(positions,influence)
+                              if side*p[0]>0 and abs(p[1]-h)<.02 and w>.9)
+                    if xs:
+                        samples.append((h,(xs[int(len(xs)*.1)]+xs[int(len(xs)*.9)])*.5-axis))
+                leg=regression(samples)
+                # Original boots also point sideways. Fit their longitudinal
+                # axis separately, retaining the sole height and toe length.
+                samples=[]
+                for z in [-.08,-.04,0,.04,.08,.12,.16]:
+                    xs=sorted(side*p[0] for p,w in zip(positions,influence)
+                              if side*p[0]>0 and p[1]<.12 and abs(p[2]-z)<.015 and w>.9)
+                    if xs:
+                        samples.append((z,(xs[int(len(xs)*.1)]+xs[int(len(xs)*.9)])*.5-axis))
+                foot=regression(samples)
+                profiles[side]=(leg,foot)
+                print(Path(source).name,'side',side,'leg/foot correction',profiles[side])
+            def offset_at(y,z,profile):
+                (intercept,gradient),(foot_intercept,foot_gradient)=profile
+                hip=.82; pelvis=1.00
+                if y<=hip: offset=intercept+gradient*max(.14,y)
+                elif y<pelvis:
+                    t=(y-hip)/(pelvis-hip);v=intercept+gradient*hip
+                    offset=(2*t**3-3*t*t+1)*v+(t**3-2*t*t+t)*(pelvis-hip)*gradient
+                else: offset=0
+                t=max(0,min(1,(y-.10)/.12));blend=1-t*t*(3-2*t)
+                return offset*(1-blend)+(foot_intercept+foot_gradient*z)*blend
             changed=[]
             for i,(p,w) in enumerate(zip(positions,influence)):
-                x,y,z=p;side=1 if x>=0 else -1;deltas=profiles[side];offset=slope=0
-                if y<=heights[0]:offset=deltas[0]
-                elif y<heights[-1]:
-                    for k in range(len(heights)-1):
-                        lo,hi=heights[k:k+2]
-                        if lo<=y<hi:
-                            t=(y-lo)/(hi-lo);smooth=t*t*(3-2*t)
-                            offset=deltas[k]+(deltas[k+1]-deltas[k])*smooth
-                            slope=(deltas[k+1]-deltas[k])*6*t*(1-t)/(hi-lo)
-                            break
-                shift=side*offset*w
-                q=(x-shift,y,z);changed.append(q);struct.pack_into(pfmt,blob,poff[i],*q)
-                # Inverse-transpose of the lateral warp preserves source normals.
-                nx,ny,nz=struct.unpack_from(nfmt,blob,noff[i]);ny+=side*slope*w*nx
+                x,y,z=p;side=1 if x>=0 else -1;profile=profiles[side]
+                offset=offset_at(y,z,profile)
+                q=(x-side*offset*w,y,z);changed.append(q);struct.pack_into(pfmt,blob,poff[i],*q)
+                # Inverse-transpose includes both shin alignment and toe yaw.
+                epsilon=.0001
+                dy=(offset_at(y+epsilon,z,profile)-offset_at(y-epsilon,z,profile))/(2*epsilon)
+                dz=(offset_at(y,z+epsilon,profile)-offset_at(y,z-epsilon,profile))/(2*epsilon)
+                nx,ny,nz=struct.unpack_from(nfmt,blob,noff[i]);ny+=side*dy*w*nx;nz+=side*dz*w*nx
                 norm=math.sqrt(nx*nx+ny*ny+nz*nz) or 1
                 struct.pack_into(nfmt,blob,noff[i],nx/norm,ny/norm,nz/norm)
             a['min']=[min(p[k] for p in changed) for k in range(3)]
             a['max']=[max(p[k] for p in changed) for k in range(3)]
+    if appearance:
+        raw=Path(appearance).read_bytes();size=struct.unpack_from('<I',raw,12)[0]
+        current=json.loads(raw[20:20+size]);current_blob=bytearray(raw[28+size:])
+        for original_mesh,current_mesh in zip(doc['meshes'],current['meshes']):
+            for original_prim,current_prim in zip(original_mesh['primitives'],current_mesh['primitives']):
+                for semantic in ['POSITION','NORMAL']:
+                    old=doc['accessors'][original_prim['attributes'][semantic]]
+                    new=current['accessors'][current_prim['attributes'][semantic]]
+                    assert old['count']==new['count'] and old['type']==new['type']=='VEC3'
+                    ov=doc['bufferViews'][old['bufferView']];nv=current['bufferViews'][new['bufferView']]
+                    for i in range(old['count']):
+                        a=ov.get('byteOffset',0)+old.get('byteOffset',0)+i*ov.get('byteStride',12)
+                        b=nv.get('byteOffset',0)+new.get('byteOffset',0)+i*nv.get('byteStride',12)
+                        current_blob[b:b+12]=blob[a:a+12]
+                    if semantic=='POSITION':new['min']=old['min'];new['max']=old['max']
+        doc=current;blob=current_blob
     text=json.dumps(doc,separators=(',',':')).encode();text+=b' '*(-len(text)%4)
     result=struct.pack('<III',0x46546c67,2,12+8+len(text)+8+len(blob))+struct.pack('<II',len(text),0x4e4f534a)+text+struct.pack('<II',len(blob),0x004e4942)+blob
     Path(output).write_bytes(result)

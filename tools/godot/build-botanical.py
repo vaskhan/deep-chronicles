@@ -94,9 +94,9 @@ def broadleaf(name,height,seed,slim=False):
 def pine(name):
  random.seed(372);bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
  wood=Builder();needles=Builder();bark=material('Pine bark',(.25,.19,.13),ROOT/'godot/generated/tex/bark.png');green=material('Pine foliage alpha cutout',(.055,.17,.065),TEX/'spruce-spray.png',True)
- tube(wood,[Vector((.06*math.sin(i),0,i)) for i in range(14)],[.30*(1-i/14)+.025 for i in range(14)],12)
- for level in range(10):
-  z=3+level*.94;reach=3.8*(1-level/12)
+ tube(wood,[Vector((.06*math.sin(i),0,i)) for i in range(14)],[.30*(1-i/13)+.007 for i in range(14)],12)
+ for level in range(12):
+  z=3+level*.87;reach=3.8*(1-level/12)
   for b in range(6):
    a=b*math.tau/6+level*1.19;d=Vector((math.cos(a),math.sin(a),0));side=Vector((-d.y,d.x,0));start=Vector((0,0,z))
    points=[start+d*reach*t+Vector((0,0,-.38*math.sin(t*math.pi)+t*.3)) for t in [0,.25,.5,.75,1]]
@@ -114,6 +114,16 @@ def pine(name):
        cross=axis.cross(up).normalized() if plane==0 else up
        center=c-axis*length*.2
        needles.face([center-cross*length*.32,center+cross*length*.32,center+axis*length+cross*length*.32,center+axis*length-cross*length*.32],[(0,0),(1,0),(1,1),(0,1)])
+ # Needled leader: the old 13m trunk stood above the final foliage tier.
+ for ring in range(7):
+  z=11.7+ring*.21
+  length=.75*(1-ring/8)
+  for branch_index in range(6):
+   a=branch_index*math.tau/6+ring*.7
+   axis=Vector((math.cos(a)*.65,math.sin(a)*.65,.76)).normalized()
+   cross=Vector((-math.sin(a),math.cos(a),0))*length*.34
+   center=Vector((0,0,z));tip=center+axis*length
+   needles.face([center-cross,center+cross,tip+cross,tip-cross],[(0,0),(1,0),(1,1),(0,1)])
  wood.object('Natural pine trunk and tiered branches',bark);needles.object('Individual needle sprays',green);export(name)
 
 def export(name):
@@ -138,6 +148,8 @@ def shrub(name,seed,dry=False):
  LEAF_COUNT=38; LEAF_GRID=2
 
 import sys
+if '--pine-only' in sys.argv:
+ pine('pine_natural');sys.exit(0)
 if '--shrubs-only' not in sys.argv:
  broadleaf('elm_field',10.5,134)
  broadleaf('elm_slender',12.0,871,True)

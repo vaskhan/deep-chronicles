@@ -15,9 +15,9 @@ export const irand = (a, b, rng = Math.random) => Math.floor(rand(a, b + 1, rng)
 
 // ---------- бой ----------
 // spread — полная ширина разброса: 0.2 даёт привычные ±10 %.
-export function calcDmg(atk, def, mul = 1, crit = 0, rng = Math.random, spread = 0.2) {
+export function calcDmg(atk, def, mul = 1, crit = 0, rng = Math.random, spread = 0.2, critPower = 1.75) {
   let d = atk * mul * (70 / (70 + def)) * rand(1 - spread / 2, 1 + spread / 2, rng) * 3;
-  const isCrit = rng() < crit; if (isCrit) d *= 2;
+  const isCrit = rng() < crit; if (isCrit) d *= Math.max(1, critPower);
   return { d: Math.max(1, Math.round(d)), crit: isCrit };
 }
 // Удары мобов: чуть шире разброс и собственный крит вместо прежней фиксированной пятёрки.
@@ -33,11 +33,19 @@ export const mobPdef = (m, now) => m.def.pdef * effectMul(m.effects || [], 'pdef
 export const missChance = (mobLvl, acc) => clamp(0.06 + (mobLvl + 33 - acc) * 0.01, 0.01, 0.3);
 export const evaChance = (mobLvl, eva) => clamp(0.05 + (eva - (mobLvl + 33)) * 0.01, 0.02, 0.3);
 
-export const MOB_ATK_CD = (def) => (def.boss ? 1.4 : 1.8);
+export const MOB_ATK_CD = (def) => (def.boss ? 2.4 : 2.8);
 export const MOB_SPEED = (def) => 12 * MOVE_SCALE * (def.boss || ['tree', 'golem'].includes(def.shape) ? 0.8 : 1);
+export const BASIC_ATTACK_POWER = .85;
 export function heroAttackTiming(aspd) {
-  const cooldown = 1 / aspd, duration = cooldown * .88;
-  return { cooldown, duration, windup: duration * .35 };
+  const cooldown = 1 / aspd, duration = cooldown * .80;
+  return { cooldown, duration, windup: duration * .55 };
+}
+// All skills occupy the same action channel as a weapon swing.
+export function skillActionTiming(skill, stats) {
+  const attack = heroAttackTiming(stats.aspd);
+  const windup = skill.cast ? skill.cast / stats.cast : skill.school === 'p' ? attack.windup : 0.45;
+  const recovery = skill.school === 'p' ? Math.max(0.45, attack.cooldown * 0.35) : Math.max(0.35, 0.6 / stats.cast);
+  return { windup, recovery, cooldown: windup + recovery };
 }
 export const CORPSE = { holdSeconds: 5, fadeSeconds: 1.5, lifetimeMs: 12000 };
 export const leashDistance = (def) => def.boss ? 140 : 180;
@@ -45,7 +53,7 @@ export const mobRadius = (def) => (def.size || 1) * 0.9;
 // Замах фиксирует направление. Игрок успевает выйти из сектора до удара;
 // клиент рисует ровно эти параметры, но попадание проверяется только здесь.
 export const mobAttack = (def) => ({
-  duration: def.boss || ['tree', 'golem'].includes(def.shape) ? 0.9 : def.shape === 'humanoid' ? 0.7 : 0.55,
+  duration: def.boss || ['tree', 'golem'].includes(def.shape) ? 1.1 : def.shape === 'humanoid' ? 0.9 : 0.8,
   reach: 2 + mobRadius(def) + 0.6,
   arc: 2.3,
 });

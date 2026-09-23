@@ -1,7 +1,7 @@
 // Персонаж на сервере: профиль, сумка, экипировка, магазин, заточка, опыт и смерть.
 // Клиент ничего из этого не считает — он только присылает команды и рисует события.
 import { resetMovement } from './movement.js';
-import { migrateProgression, effectiveSkill, learnError, skillRanks, applyProf, skillsOf } from '../../src/progression.js';
+import { migrateProgression, effectiveSkill, learnError, promotionError, skillRanks, applyProf, skillsOf } from '../../src/progression.js';
 import { CLASSES, ITEMS, PROFESSIONS, SKILLS, SHOP, SHOP_STOCK, RECIPES, MAX_LEVEL, BAG_SLOTS, xpToNext } from '../../src/data.js';
 import { calcStats, equipFromBag, unequipSlot, migrate, MAX_ENCH } from '../../src/stats.js';
 import { TOWNS, TELEPORTS, heightAt, zoneAt } from '../../src/world-core.js';
@@ -60,7 +60,7 @@ export function newActor(id, name, P) {
     id, name, P, movement: { at: Date.now(), credit: 0, fresh: true },
     x: P.x, y: heightAt(P.x, P.z), z: P.z, r: 0,
     target: null,        // { m: mobId } | { p: playerId }
-    attacking: false, atkTimer: 0, swing: null, cds: {}, effects: [], cast: null,
+    attacking: false, actionUntil: 0, atkTimer: 0, swing: null, queuedSkill: null, cds: {}, effects: [], cast: null,
     dead: P.dead === true || P.hp === 0, dirty: true, out: [],
     hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0, profAt: 0,
   };
@@ -125,7 +125,7 @@ export function gainXp(a, xp) {
   a.dirty = true;
 }
 export function killPlayer(a, byName, byPk) {
-  a.dead = true; a.swing = null; a.P.hp = 0; a.attacking = false; a.target = null; a.cast = null;
+  a.dead = true; a.queuedSkill = null; a.swing = null; a.P.hp = 0; a.attacking = false; a.target = null; a.cast = null;
   a.effects = [];
   const loss = xpLossOnDeath(a.P.lvl, a.karma > 0);
   a.P.xp = Math.max(0, a.P.xp - loss);
@@ -142,7 +142,7 @@ export function respawn(a) {
   a.dirty = true;
 }
 export function place(a, x, z) {
-  a.swing = null; a.attacking = false; a.target = null; a.cast = null;
+  a.queuedSkill = null; a.swing = null; a.attacking = false; a.target = null; a.cast = null;
   a.x = x; a.z = z; a.y = heightAt(x, z);
   // Сервер уже перенес героя: новые позиции проверяются относительно места
   // назначения. На запоздавшие старые координаты клиент получает обычный fix.
@@ -261,10 +261,13 @@ export function cmdTeleport(a, npcs, id) {
 
 // ---------- умения ----------
 // Проверки те же, что были на клиенте, но теперь решающие: мана, кулдаун, уровень, город.
-export function skillError(a, id, now) {
+export function skillError(a, id, now, ignoreBusy = false) {
   const sk = effectiveSkill(a.P, id);
   if (!sk) return 'Нет такого умения';
-  if (a.dead || a.cast) return 'Сейчас нельзя';
+  if (sk.kind === 'passive') return 'Пассивное умение действует постоянно';
+  if (promotionError(a.P,sk.lvl)) return promotionError(a.P,sk.lvl);
+  if (a.dead || (a.cast && !ignoreBusy)) return 'Сейчас нельзя';
+  if (!ignoreBusy && (a.actionUntil || 0) > now) return 'Дождитесь завершения предыдущего действия';
   if (!skillsOf(a.P).includes(id)) return 'Это умение не вашего класса';
   if (!a.P.skills[id]) return 'Сначала изучите умение за SP в карточке навыков';
   if (a.P.lvl < sk.lvl) return `${sk.name}: нужен уровень ${sk.lvl}`;
@@ -307,11 +310,11 @@ export function cmdProf(a, id, save) {
   const now = Date.now();
   if (now - (a.profAt || 0) < PROF_CD) return say(a, 'Слишком часто. Подождите секунду', 'bad');
   a.profAt = now;
-  const before = a.P.prof;
+  const before = { prof: a.P.prof, prof2: a.P.prof2 };
   const error = applyProf(a.P, id);
   if (error) return say(a, error, 'bad');
   try { if (!save()) throw Error('save failed'); }
-  catch { a.P.prof = before; return say(a, 'Не удалось сохранить профессию. Попробуйте ещё раз', 'bad'); }
+  catch { Object.assign(a.P,before); return say(a, 'Не удалось сохранить профессию. Попробуйте ещё раз', 'bad'); }
   a.dirty = true;
   const prof = PROFESSIONS[id];
   say(a, `Профессия выбрана: ${prof.name}. Новые умения ждут в карточке навыков (K)`, 'rare');

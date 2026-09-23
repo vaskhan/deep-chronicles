@@ -1,5 +1,5 @@
 import { MOVE_SCALE } from '../../src/movement.js';
-import { skillRanks, profsFor } from '../../src/progression.js';
+import { skillRanks, profsFor, skillsOf } from '../../src/progression.js';
 import { LOOT } from '../../src/loot.js';
 // One source of truth: bake the existing world, catalog and procedural animation
 // into engine-neutral files. No server saves or credentials enter this export.
@@ -126,6 +126,12 @@ for (const cls of Object.keys(data.CLASSES)) for (const lvl of [1, 8, 18, 40]) f
     for (const id of data.SETS[set]?.parts || []) { p.equip[data.ITEMS[id].slot] = id; p.enc[data.ITEMS[id].slot] = 4; }
     fixtures.push({ p, stats: calcStats(p) });
   }
+}
+for (const [id, prof] of Object.entries(data.PROFESSIONS).filter(([,p])=>p.parent)) {
+  const p = newChar('Passive fixture',prof.base);p.lvl=60;p.prof=prof.parent;p.prof2=id;
+  if(p.cls==='warrior') p.equip.shield='shield_iron';
+  for(const skill of skillsOf(p)) p.skills[skill]=skillRanks(skill).length;
+  fixtures.push({p,stats:calcStats(p)});
 }
 await fs.writeFile(path.join(out, 'stats-fixtures.json'), JSON.stringify(fixtures));
 console.log(`Godot: ${shapes.length} objects, ${props.spawns.length} spawns, ${obstacles.length} obstacles, ${fixtures.length} stat fixtures exported.`);

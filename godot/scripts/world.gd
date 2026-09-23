@@ -54,13 +54,13 @@ func set_region(pos: Vector3):
 	if id == region_id: return
 	region_id = id; underground = id == "crypt"
 	atmosphere = {
-		"town": {"fog": Color("acbbc2"), "density": 0.00012, "sun": Color("ffe0b0"), "energy": 1.15, "ambient": 0.28},
-		"meadow": {"fog": Color("a8bec5"), "density": 0.00016, "sun": Color("fff0cf"), "energy": 1.1, "ambient": 0.35},
-		"forest": {"fog": Color("6f9293"), "density": 0.00045, "sun": Color("e5ecd1"), "energy": 1.05, "ambient": 0.23},
-		"waste": {"fog": Color("c4a589"), "density": 0.00025, "sun": Color("ffdbb6"), "energy": 1.15, "ambient": 0.32},
-		"gorge_terraces": {"fog": Color("6d8c8b"), "density": 0.0007, "sun": Color("ffe6bf"), "energy": 1.05, "ambient": 0.38},
-		"gorge_falls": {"fog": Color("7d9c9b"), "density": 0.0011, "sun": Color("ffe5c4"), "energy": 1.02, "ambient": 0.38},
-		"gorge_summit": {"fog": Color("c3d0dc"), "density": 0.0007, "sun": Color("f3f6ff"), "energy": 1.08, "ambient": 0.3},
+		"town": {"fog": Color("acbbc2"), "density": 0.000025, "sun": Color("ffe0b0"), "energy": 1.15, "ambient": 0.28},
+		"meadow": {"fog": Color("a8bec5"), "density": 0.000025, "sun": Color("fff0cf"), "energy": 1.1, "ambient": 0.35},
+		"forest": {"fog": Color("6f9293"), "density": 0.000025, "sun": Color("e5ecd1"), "energy": 1.05, "ambient": 0.23},
+		"waste": {"fog": Color("c4a589"), "density": 0.000025, "sun": Color("ffdbb6"), "energy": 1.15, "ambient": 0.32},
+		"gorge_terraces": {"fog": Color("6d8c8b"), "density": 0.000025, "sun": Color("ffe6bf"), "energy": 1.05, "ambient": 0.38},
+		"gorge_falls": {"fog": Color("7d9c9b"), "density": 0.000025, "sun": Color("ffe5c4"), "energy": 1.02, "ambient": 0.38},
+		"gorge_summit": {"fog": Color("c3d0dc"), "density": 0.000025, "sun": Color("f3f6ff"), "energy": 1.08, "ambient": 0.3},
 		"crypt": {"fog": Color("191e30"), "density": 0.008, "sun": Color("9fb1da"), "energy": 0.12, "ambient": 0.23},
 	}.get(id, {})
 	var e = environment.environment
@@ -126,7 +126,7 @@ func _terrain():
 			var mesh = ArrayMesh.new(); mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 			var node = MeshInstance3D.new(); node.mesh = mesh; node.material_override = material
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF; add_child(node)
-	var water = MeshInstance3D.new(); var plane = PlaneMesh.new(); plane.size = Vector2(2000, 2000)
+	var water = MeshInstance3D.new(); var plane = PlaneMesh.new(); plane.size = Vector2(8000, 8000)
 	water.mesh = plane; water.position.y = -6.5
 	var wm = ShaderMaterial.new(); wm.shader = preload("res://shaders/living_water.gdshader")
 	water.material_override = wm; water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF; add_child(water)
@@ -240,8 +240,7 @@ func _models():
 			var offset = Vector3(-box.get_center().x, -box.position.y, -box.get_center().z)
 			transforms.append(Transform3D(basis, Vector3(r[1], r[2], r[3]) + basis * offset))
 		var tree = id in ["oak", "pine", "elm_field", "elm_slender", "alder_round", "pine_natural"]
-		var small = tree or id in ["rock_a", "rock_b", "bush", "moss_boulder"]
-		var end = 360.0 if small else 800.0
+		var end = 360.0 if id == "bush" else Tuning.CAMERA_FAR
 		Lod.place(self, "Art_" + id, source.parts, transforms, Lod.bands("tree" if tree else "prop", end), {"end_margin": 30.0, "shadow_lod": true})
 
 ## Части модели реквизита с материалами мира (листва деревьев, мох камней ущелья); кэш на сборку.

@@ -15,12 +15,13 @@ import { effectMul } from '../src/effects.js';
 
 const { spawns, npcs } = buildProps();
 const gorge = spawns.map((s, i) => ({ ...s, index: i + 1 })).filter((s) => s.pack);
-const old = spawns.filter((s) => !s.pack);
+const old = spawns.filter((s) => !s.pack && !s.habitat);
 const GORGE_KINDS = Object.keys(MOBS).filter((k) => gorge.some((s) => s.mob === k));
 
 test('старый мир не изменился: 225 прежних точек спавна совпадают байт в байт и идут первыми', () => {
   assert.equal(old.length, 225);
-  assert.ok(spawns.slice(0, 225).every((s) => !s.pack), 'стаи ущелья дописаны в конец: номера и ранги старых точек не сдвинулись');
+  assert.deepEqual(spawns.slice(0, 225), old, 'старые точки остаются первыми: номера и ранги не сдвинулись');
+  assert.ok(spawns.slice(225, 225+gorge.length).every(s => s.pack), 'добавочные группы не сдвигают точки ущелья');
   const fingerprint = crypto.createHash('sha1').update(JSON.stringify(old.map((s) => [s.mob, +s.x.toFixed(4), +s.z.toFixed(4), s.camp || '']))).digest('hex').slice(0, 12);
   assert.equal(fingerprint, '36d8d38829bf', 'координаты и виды прежних спавнов не должны меняться');
 });
@@ -179,7 +180,7 @@ test('мобы ущелья: отдельная модель или явный �
     assert.ok(plain[i].coins[0] + plain[i].coins[1] >= plain[i - 1].coins[0] + plain[i - 1].coins[1] - 1, `${plain[i].name}: монет меньше`);
   }
   // с 25 до 40 для каждого уровня есть обычный моб не старше героя и не младше на 3 — полная награда
-  for (let lvl = 25; lvl < MAX_LEVEL; lvl++) {
+  for (let lvl = 25; lvl < Math.min(40, MAX_LEVEL); lvl++) {
     const best = Object.values(MOBS).filter((m) => !m.boss && m.lvl <= lvl).sort((a, b) => b.lvl - a.lvl)[0];
     assert.equal(levelFactor(best.lvl, lvl, DEFAULT_RATES), 1, `уровень ${lvl}: ближайший моб ${best.name} ${best.lvl} режется штрафом`);
   }

@@ -190,6 +190,15 @@ func _run():
 	game.hud.assign_slot(8, "potion_hp")
 	check(game.hud.hotbar_bindings[8] == "potion_hp" and game.hud.Settings.read_value("hotbar", "warrior", [])[8] == "potion_hp", "custom action bindings are saved")
 	game.hud.hotbar_bindings = game.hud.default_bindings(); game.hud._save_hotbar(); game.hud.set_hotbar_locked(true)
+	game.hud.set_hotbar_rows(3); game.hud.set_hotbar_page(2); await process_frame
+	check(game.hud.hotbar_bindings.size() == 108 and game.hud.skill_buttons.size() == 36, "expanded hotbar has three pages of 36 slots")
+	check(game.hud.hotbar_row_nodes.all(func(row): return row.visible), "all three hotbar rows expand")
+	game.hud.assign_slot(107, "potion_hp")
+	check(game.hud.skill_buttons[35].index == 107 and game.hud.skill_buttons[35].tooltip_text.contains("Зелье"), "last slot of last page is assignable")
+	game.hud.assign_slot(106, "weapon_mastery")
+	check(game.hud.hotbar_bindings[106] == "empty", "passive skills cannot be assigned to the hotbar")
+	await _screenshot("hotbar-expanded.png")
+	game.hud.set_hotbar_page(0); game.hud.set_hotbar_rows(1)
 	await _test_hotbar_drag()
 	_test_gait()
 	check(game.hud.pickup_button.visible and game.hud.pickup_button.text.contains("Поднять"), "pickup has an explicit permanent action button")
@@ -287,7 +296,13 @@ func _run():
 		check(await wait_for(func(): return game.profile.get("autoloot") == false), "autoloot toggle persists on the server")
 		var sp_before = int(game.profile.get("sp", 0))
 		var coins_before = int(game.profile.coins)
-		game.attack(); game.use_skill("power_strike")
+		game.use_skill("power_strike")
+		check(await wait_for(func(): return game.hero.winding_up), "physical skill starts its own windup")
+		check(await wait_for(func(): return not game.hero.winding_up), "physical skill reaches its impact")
+		check(not game.attacking and game.pending_skill.is_empty(), "skill does not enable ordinary attack mode")
+		game.use_skill("power_strike")
+		check(not game.attacking and game.pending_skill.is_empty(), "cooldown click does not enable attacks or approach")
+		game.attack() # Explicit F resumes ordinary attacks after the skill.
 		var killed = await wait_for(func(): return game.profile.get("kills", 0) > 0, 12)
 		if not killed:
 			print("Combat diagnostics: player=", game.hero.position, " mob=", mob.position, " hp=", mob.hp, " visible=", mob.visible, " attacking=", game.attacking)
@@ -450,6 +465,7 @@ func _run():
 	_finish()
 
 func _test_combat_presentation():
+	await _dev({"lvl": 14})
 	game.hud.show_window("skills"); _click("learn", "ice_nova")
 	check(await wait_for(func(): return game.profile.skills.get("ice_nova", 0) == 1), "mage learns the frost spell for visual integration test")
 	game.hud.close_window()
@@ -714,8 +730,8 @@ func _test_profession():
 	# HUD пересчитывает полосы раз в 0.2 с: ждём настоящего обновления, а не доверяем кадру.
 	check(await wait_for(func(): return game.hud.hp_bar.max_value > health_before), "profession bonus reaches the health bar")
 	game.hud.show_window("profession"); await process_frame; await process_frame
-	var rejected = _find_button("prof", "berserker")
-	check(is_instance_valid(rejected) and rejected.disabled, "the second profession is closed after the choice")
+	var rejected = _find_button("prof", "paladin")
+	check(is_instance_valid(rejected) and rejected.disabled, "second promotion remains locked before level 40")
 	game.hud.show_window("character"); await process_frame; await process_frame
 	var hero_lines = game.hud.window.find_children("*", "Label", true, false).filter(func(n): return n.has_meta("hero_profession"))
 	check(hero_lines.size() == 1 and hero_lines[0].text.contains("Страж"), "hero window shows the chosen profession")
@@ -726,6 +742,18 @@ func _test_profession():
 	_click("learn", "shield_bash")
 	check(await wait_for(func(): return int(game.profile.get("skills", {}).get("shield_bash", 0)) == 1), "profession skill is learned for SP under the usual rules")
 	check("shield_bash" in game.hud.binding_choices(), "profession skill becomes assignable to the action bar")
+	game.hud.skills_filter = "passive"; game.hud.show_window("skills"); await process_frame
+	var before_passive = data.stats(game.profile).patk
+	_click("learn", "weapon_mastery")
+	check(await wait_for(func(): return game.profile.skills.get("weapon_mastery",0) == 1), "passive is learned from its separate tab")
+	check(data.stats(game.profile).patk > before_passive, "learned passive changes native stats")
+	game.hud.skills_filter = "active"
+	await _dev({"lvl": 40, "sp": 100000})
+	game.hud.show_window("profession"); await process_frame
+	_click("prof", "paladin")
+	check(await wait_for(func(): return game.profile.get("prof2", "") == "paladin"), "second promotion is selected on the server at level 40")
+	check("sacred_guard" in game.hud.binding_choices(), "second promotion exposes its active skill")
+
 	game.hud.close_window()
 
 func _find_button(key: String, value):

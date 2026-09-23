@@ -72,7 +72,8 @@ async function huntAt(c, cx, cz, helper = null) {
   c.send({ t: 'atk', id: mob[0], kind: 'm' });
   // цель уходит на прогулке и в погоне — держимся рядом с её текущим положением
   let mx = mob[1], mz = mob[3];
-  for (let i = 0; i < 120; i++) {
+  const killDeadline = Date.now() + 45000;
+  while (Date.now() < killDeadline) {
     c.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
     const m = await c.wait('ev', 'snap');
     if (m.t === 'snap') { const r = (m.m || []).find(r => r[0] === mob[0]); if (r) { mx = r[1]; mz = r[3]; } }
@@ -821,9 +822,12 @@ test('элитный моб сильнее и даёт больше наград
     const id = index + 1, spawn = spawns[index];
     await at(a, spawn.x + 1, spawn.z + 1);
     a.send({ t: 'atk', id, kind: 'm' });
-    for (let i = 0; i < 200; i++) {
-      a.send({ t: 'st', x: spawn.x + 1, y: 0, z: spawn.z + 1, r: 0, a: 0 });
+    let mx = spawn.x, mz = spawn.z;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      a.send({ t: 'st', x: mx + 1, y: 0, z: mz + 1, r: 0, a: 0 });
       const m = await a.wait('ev', 'snap');
+      if (m.t === 'snap') { const row = m.m?.find(r => r[0] === id); if (row) { mx = row[1]; mz = row[3]; } }
       if (m.t === 'ev') { const kill = m.e.find((e) => e.k === 'kill'); if (kill) return kill; }
     }
     throw new Error('моб не умер за отведённое время');
@@ -1300,4 +1304,136 @@ test('SIGTERM записывает несохранённый прогресс �
     for (const s of [s1, s2]) if (s && s.proc.exitCode === null) { s.proc.kill(); await new Promise((r) => s.proc.once('exit', r)); }
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('physical skill has a wind-up and cannot overlap the next ordinary swing', async () => {
+  const a = client(); await a.open(); await a.wait('hi');
+  const events = [];
+  a.ws.on('message', raw => {
+    const m = JSON.parse(raw);
+    if (m.t === 'ev') for (const e of m.e) events.push({ ...e, receivedAt: Date.now() });
+  });
+  try {
+    a.send({ t: 'register', name: 'PacingCheck', pass: 'test-password', cls: 'warrior' });
+    const auth = await a.wait('authok');
+    await at(a, -620, 400);
+    let mob;
+    const deadline = Date.now() + 4000;
+    while (!mob && Date.now() < deadline) {
+      const snap = await a.wait('snap');
+      mob = snap.m?.find(r => !(r[5] & 8) && Math.hypot(r[1] + 620, r[3] - 400) < 22);
+    }
+    assert.ok(mob);
+    await at(a, mob[1] + .8, mob[3] + .8);
+    a.send({ t: 'atk', id: mob[0], kind: 'm', hold: true });
+    a.send({ t: 'skill', id: 'power_strike' });
+    a.send({ t: 'atk', id: mob[0], kind: 'm' });
+    await pause(2900);
+    const own = events.filter(e => e.by == null || e.by === auth.id);
+    const start = own.find(e => e.k === 'skill_start');
+    const impact = own.find(e => e.k === 'cast_fx' && e.id === 'power_strike');
+    const nextSwing = own.find(e => e.k === 'attack_start');
+    assert.ok(start && impact && nextSwing, 'wind-up, impact and next attack must all arrive');
+    assert.ok(impact.receivedAt - start.receivedAt >= start.windup * 1000 - 150, 'no instant skill damage');
+    assert.ok(nextSwing.receivedAt - start.receivedAt >= start.t * 1000 - 150, 'autoattack waits for skill recovery');
+    assert.ok(own.filter(e => e.k === 'attack_start').length <= 1, 'no overlapping autoattacks');
+  } finally { a.ws.close(); await a.closed(); }
+});
+
+test('mage staff attack is melee and single-shot; spells enforce their individual ranges', async () => {
+  const mage = client(), target = client(); await Promise.all([mage.open(), target.open()]);
+  const events = [];
+  mage.ws.on('message', raw => { const m = JSON.parse(raw); if (m.t === 'ev') events.push(...m.e); });
+  try {
+    mage.send({ t: 'register', name: 'SpellRange', pass: 'range-test', cls: 'mage' }); await mage.wait('authok');
+    target.send({ t: 'register', name: 'RangeTarget', pass: 'range-test', cls: 'warrior' }); const auth = await target.wait('authok');
+    await at(mage, -240, 185); await at(target, -230, 185);
+    mage.send({ t: 'atk', id: auth.id, kind: 'p' }); await pause(1200);
+    assert.ok(!events.some(e => e.k === 'attack_start'), 'staff cannot hit at spell range');
+    await at(target, -239, 185); await pause(4000);
+    assert.equal(events.filter(e => e.k === 'attack_release' && e.by == null).length, 1, 'one manual command makes one physical staff hit');
+    mage.send({ t: 'dev', lvl: 14, sp: 5000, mp: 999 }); await pause(200);
+    mage.send({ t: 'learn', id: 'curse', rank: 1 }); await untilP(mage, p => p.skills.curse === 1);
+    await at(target, -216.5, 185);
+    mage.send({ t: 'atk', id: auth.id, kind: 'p', hold: true });
+    mage.send({ t: 'skill', id: 'curse' }); await untilEv(mage, /Цель слишком далеко/);
+    mage.send({ t: 'skill', id: 'fire_bolt' });
+    const ev = await untilEv(mage, /"k":"cast"/);
+    assert.ok(ev.some(e => e.k === 'cast' && e.id === 'fire_bolt'), '24m fire spell reaches where 20m curse cannot');
+  } finally { mage.ws.close(); target.ws.close(); await Promise.all([mage.closed(), target.closed()]); }
+});
+
+test('warrior and mage skills never enable autoattack, including cooldown and mana rejection', async () => {
+  for (const cls of ['warrior','mage']) {
+    const a=client(); await a.open(); await a.wait('hi');
+    const events=[];
+    a.ws.on('message',raw=>{ const m=JSON.parse(raw); if(m.t==='ev') events.push(...m.e); });
+    try {
+      a.send({t:'register',name:`Manual_${cls}`,pass:'test-password',cls}); const auth=await a.wait('authok');
+      await at(a,-620,400);
+      const snap=await a.wait('snap');
+      const mob=snap.m.find(r=>!(r[5]&8)&&Math.hypot(r[1]+620,r[3]-400)<22);
+      assert.ok(mob); await at(a,mob[1]+.8,mob[3]+.8);
+      a.send({t:'atk',id:mob[0],kind:'m',hold:true});
+      const skill=cls==='warrior'?'power_strike':'fire_bolt';
+      a.send({t:'skill',id:skill});
+      await untilEv(a,new RegExp(`"k":"cast_fx","id":"${skill}"`));
+      a.send({t:'skill',id:skill}); // Skill cooldown: no fallback attack.
+      await pause(2200);
+      if (cls==='warrior') await pause(2300);
+      a.send({t:'dev',mp:0}); await pause(150);
+      a.send({t:'skill',id:skill});
+      await untilEv(a,/Недостаточно маны/);
+      await pause(1000);
+      const own=events.filter(e=>e.by==null||e.by===auth.id);
+      assert.equal(own.filter(e=>e.k==='cast_fx'&&e.id===skill).length,1,cls+' casts once');
+      assert.equal(own.filter(e=>e.k==='attack_start'||e.k==='attack_release').length,0,cls+' requires explicit F for a normal attack');
+    } finally {a.ws.close();await a.closed();}
+  }
+});
+
+
+test('PvP magic waits for its cast and uses reduced player damage', async () => {
+  const mage=client(), warrior=client();
+  await Promise.all([mage.open(),warrior.open()]);
+  const events=[];
+  mage.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.t==='ev')for(const e of m.e)events.push({...e,receivedAt:Date.now()});});
+  try {
+    mage.send({t:'register',name:'CastPvpMage',pass:'cast-pvp-test',cls:'mage'});
+    await mage.wait('authok');
+    warrior.send({t:'register',name:'CastPvpWarrior',pass:'cast-pvp-test',cls:'warrior'});
+    const target=await warrior.wait('authok');
+    await at(mage,-620,400);await at(warrior,-616,400);
+    mage.send({t:'atk',id:target.id,kind:'p',hold:true});
+    mage.send({t:'skill',id:'fire_bolt'});
+    await untilEv(mage,/"k":"cast"/);
+    const start=events.find(e=>e.k==='cast'&&e.id==='fire_bolt');
+    assert.ok(start && start.t>=1.4, 'a novice spell has a visible windup');
+    await pause(400);
+    assert.ok(!events.some(e=>e.k==='hit'&&e.p===target.id),'no damage during early cast');
+    await untilEv(mage,/"k":"hit"/);
+    const hit=events.find(e=>e.k==='hit'&&e.p===target.id);
+    assert.ok(hit, 'spell must damage selected player');
+    assert.ok(hit.receivedAt-start.receivedAt>=start.t*1000-150,'damage follows server windup');
+    assert.ok(hit.dmg>=20 && hit.dmg<=50, `PvP damage including critical: ${hit.dmg}`);
+  } finally {mage.ws.close();warrior.ws.close();await Promise.all([mage.closed(),warrior.closed()]);}
+});
+
+
+test('level 60 progression enforces both promotions and rejects casting learned passives', async () => {
+  const a=client();await a.open();
+  try {
+    a.send({t:'register',name:'PromotionSteps',pass:'promotion-test',cls:'warrior'});await a.wait('authok');
+    a.send({t:'dev',lvl:60,sp:1000000});await untilP(a,p=>p.lvl===60);
+    a.send({t:'learn',id:'weapon_mastery',rank:1});await untilP(a,p=>p.skills.weapon_mastery===1);
+    a.send({t:'skill',id:'weapon_mastery'});await untilEv(a,/Пассивное/);
+    for(let rank=2;rank<=4;rank++){await pause(250);a.send({t:'learn',id:'power_strike',rank});await untilP(a,p=>p.skills.power_strike===rank);}
+    await pause(250);a.send({t:'learn',id:'power_strike',rank:5});await untilEv(a,/Сначала выберите профессию/);
+    a.send({t:'prof',id:'knight'});await untilP(a,p=>p.prof==='knight');
+    for(let rank=5;rank<=9;rank++){await pause(250);a.send({t:'learn',id:'power_strike',rank});await untilP(a,p=>p.skills.power_strike===rank);}
+    await pause(250);a.send({t:'learn',id:'power_strike',rank:10});await untilEv(a,/вторую профессию/);
+    a.send({t:'prof',id:'paladin'});await untilP(a,p=>p.prof2==='paladin');
+    await pause(250);a.send({t:'learn',id:'power_strike',rank:10});await untilP(a,p=>p.skills.power_strike===10);
+    await pause(250);a.send({t:'learn',id:'sacred_guard',rank:1});await untilP(a,p=>p.skills.sacred_guard===1);
+  } finally {a.ws.close();await a.closed();}
 });

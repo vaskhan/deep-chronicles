@@ -9,7 +9,7 @@ void vertex() {
  VERTEX.z += gust * UV.y * UV.y * .065;
  shade = COLOR.rgb;
  float d = distance(CAMERA_POSITION_WORLD, anchor);
- VERTEX *= 1.0 - smoothstep(70.0, 95.0, d);
+ VERTEX *= 1.0 - smoothstep(140.0, 180.0, d);
 }
 void fragment() {
  ALBEDO = shade * mix(.72, 1.12, UV.y);

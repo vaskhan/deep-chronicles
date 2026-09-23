@@ -110,7 +110,7 @@ func ench_value(it: Dictionary, key: String, e: int) -> float:
 func stats(p: Dictionary, buffs: Array = []) -> Dictionary:
 	var c = catalog.CLASSES[p.cls]
 	var a = c.attr; var b = c.base; var g = c.grow; var l = p.lvl - 1
-	var s = {"attr": a, "maxHp": (b.hp + g.hp * l) * (1 + (a.con - 30) * 0.01), "maxMp": (b.mp + g.mp * l) * (1 + (a.men - 30) * 0.01), "patk": (b.patk + g.patk * l) * (1 + (a.str - 30) * 0.01), "matk": (b.matk + g.matk * l) * (1 + (a.int - 30) * 0.01), "pdef": b.pdef + g.pdef * l, "mdef": (b.mdef + g.mdef * l) * (1 + (a.men - 30) * 0.01), "aspd": b.aspd * (1 + (a.dex - 30) * 0.01), "speed": b.speed * (1 + (a.dex - 30) * 0.004), "crit": b.crit + (a.dex - 30) * 0.002, "cast": 1 + (a.wit - 20) * 0.01, "acc": sqrt(a.dex) * 6 + p.lvl, "eva": sqrt(a.dex) * 6 + p.lvl, "range": c.range, "load": 0.0, "cap": round(40 + a.con * 1.2), "regen": 1.0, "sets": []}
+	var s = {"attr": a, "maxHp": (b.hp + g.hp * l) * (1 + (a.con - 30) * 0.01), "maxMp": (b.mp + g.mp * l) * (1 + (a.men - 30) * 0.01), "patk": (b.patk + g.patk * l) * (1 + (a.str - 30) * 0.01), "matk": (b.matk + g.matk * l) * (1 + (a.int - 30) * 0.01), "pdef": b.pdef + g.pdef * l, "mdef": (b.mdef + g.mdef * l) * (1 + (a.men - 30) * 0.01), "aspd": (b.aspd + g.get("aspd", 0.0) * l) * (1 + (a.dex - 30) * 0.01), "speed": b.speed * (1 + (a.dex - 30) * 0.004), "crit": b.crit + (a.dex - 30) * 0.002, "cast": (1 + g.get("cast", 0.0) * l) * (1 + (a.wit - 20) * 0.01), "acc": sqrt(a.dex) * 6 + p.lvl, "eva": sqrt(a.dex) * 6 + p.lvl, "range": c.range, "critPower": b.get("critPower", 1.75), "load": 0.0, "cap": round(40 + a.con * 1.2), "regen": 1.0, "sets": []}
 	for slot in p.equip:
 		var it = catalog.ITEMS.get(p.equip[slot], {})
 		for k in ["patk", "matk", "pdef", "mdef"]: s[k] += ench_value(it, k, int(p.get("enc", {}).get(slot, 0)))
@@ -133,6 +133,16 @@ func stats(p: Dictionary, buffs: Array = []) -> Dictionary:
 	var prof = profession(p)
 	if not prof.is_empty():
 		for key in prof.bonus: s[key] *= prof.bonus[key]
+	var second = profession(p, true)
+	if not second.is_empty() and second.get("parent", "") == p.get("prof", ""):
+		for key in second.bonus: s[key] *= second.bonus[key]
+	for id in skills_of(p):
+		if int(p.get("skills", {}).get(id, 0)) <= 0: continue
+		var passive = skill(p, id)
+		if passive.kind != "passive" or p.lvl < passive.lvl: continue
+		if promotion_required(p,int(passive.lvl)) != "": continue
+		if passive.get("needShield", false) and str(p.equip.get("shield", "")).is_empty(): continue
+		if s.has(passive.stat): s[passive.stat] *= passive.mul
 	s.load = floor(s.load * 10 + 0.5) / 10
 	if s.load > s.cap * 0.7: s.speed *= 0.6; s.regen = 0.5
 	# Зеркало src/stats.js: множитель применяют только эффекты с характеристикой.
@@ -172,16 +182,16 @@ func appearance(p: Dictionary) -> Dictionary:
 	return {"cls": p.cls, "body": armor.get("color", catalog.CLASSES[p.cls].color), "w": weapon.get("color"), "staff": weapon.get("twoHand", false), "ench": p.get("enc", {}).get("weapon", 0), "robe": armor.get("robe", false) or p.cls == "mage", "mat": mat, "gear": gear}
 
 ## Выбранная профессия профиля или пустой словарь.
-func profession(p: Dictionary) -> Dictionary:
-	var id = p.get("prof")
+func profession(p: Dictionary, second = false) -> Dictionary:
+	var id = p.get("prof2" if second else "prof")
 	if id is String and catalog.PROFESSIONS.has(id): return catalog.PROFESSIONS[id]
 	return {}
 
 ## Профессии, доступные классу: id + описание. Порядок — как в общих данных.
-func professions_for(cls: String) -> Array:
+func professions_for(cls: String, parent = "") -> Array:
 	var list = []
 	for id in catalog.PROFESSIONS:
-		if catalog.PROFESSIONS[id].base == cls: list.append({"id": id}.merged(catalog.PROFESSIONS[id]))
+		if catalog.PROFESSIONS[id].base == cls and str(catalog.PROFESSIONS[id].get("parent", "")) == parent: list.append({"id": id}.merged(catalog.PROFESSIONS[id]))
 	return list
 
 ## Умения персонажа: базовые класса плюс умения выбранной профессии.
@@ -189,7 +199,14 @@ func skills_of(p: Dictionary) -> Array:
 	var list: Array = catalog.CLASSES[p.cls].skills.duplicate()
 	var prof = profession(p)
 	if not prof.is_empty(): list.append_array(prof.skills)
+	var second = profession(p, true)
+	if not second.is_empty() and second.get("parent", "") == p.get("prof", ""): list.append_array(second.skills)
 	return list
+
+func promotion_required(p: Dictionary, level: int) -> String:
+	if level >= int(catalog.SECOND_PROF_LVL) and profession(p, true).is_empty(): return "Требуется вторая профессия (40 уровень)"
+	if level >= int(catalog.PROF_LVL) and profession(p).is_empty(): return "Требуется первая профессия (20 уровень)"
+	return ""
 
 func skill(p: Dictionary, id: String) -> Dictionary:
 	var ranks = catalog.UI_RULES.skillRanks[id]

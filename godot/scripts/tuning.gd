@@ -7,7 +7,7 @@ extends Node
 # --- Камера ---
 const CAMERA_FOV = 55.0
 const CAMERA_NEAR = 0.2
-const CAMERA_FAR = 1600.0
+const CAMERA_FAR = 3200.0
 const CAMERA_YAW_START = 0.45
 const CAMERA_PITCH_START = 0.56
 const CAMERA_DISTANCE_START = 21.0
@@ -73,26 +73,26 @@ const LOD_MID_RATIO = 0.3
 const LOD_FAR_RATIO = 0.08
 ## Листва среднего уровня не прореживается ниже этой доли: иначе крона вблизи заметно редеет.
 const LOD_FOLIAGE_MIN_RATIO = 0.3
-## Доля листвы дальнего уровня: крона мелкая на экране, редеющие листья не видны за туманом.
-const LOD_FAR_FOLIAGE_RATIO = 0.04
+## Сохраняем крону вдали: сильное прореживание оголяло верхушки.
+const LOD_FAR_FOLIAGE_RATIO = 0.3
 ## Деревья.
-const LOD_TREE_NEAR_MOBILE = 30.0
-const LOD_TREE_NEAR_PC = 80.0
-const LOD_TREE_FAR_MOBILE = 140.0
-const LOD_TREE_FAR_PC = 220.0
+const LOD_TREE_NEAR_MOBILE = 180.0
+const LOD_TREE_NEAR_PC = 260.0
+const LOD_TREE_FAR_MOBILE = 600.0
+const LOD_TREE_FAR_PC = 900.0
 ## Камни, кусты, папоротники.
-const LOD_PROP_NEAR_MOBILE = 25.0
-const LOD_PROP_NEAR_PC = 60.0
-const LOD_PROP_FAR_MOBILE = 110.0
-const LOD_PROP_FAR_PC = 170.0
+const LOD_PROP_NEAR_MOBILE = 100.0
+const LOD_PROP_NEAR_PC = 140.0
+const LOD_PROP_FAR_MOBILE = 260.0
+const LOD_PROP_FAR_PC = 350.0
 ## Мелкие растения со сканов (папоротник ущелья, 5,6 тыс. треугольников): полный меш только у самой камеры.
-const LOD_SMALL_NEAR_MOBILE = 15.0
-const LOD_SMALL_NEAR_PC = 30.0
-const LOD_SMALL_FAR_MOBILE = 50.0
-const LOD_SMALL_FAR_PC = 80.0
+const LOD_SMALL_NEAR_MOBILE = 75.0
+const LOD_SMALL_NEAR_PC = 75.0
+const LOD_SMALL_FAR_MOBILE = 120.0
+const LOD_SMALL_FAR_PC = 120.0
 ## Дальше этой дистанции подлесок рисуется упрощёнными кустиками травы.
-const UNDERSTORY_LOD_MOBILE = 32.0
-const UNDERSTORY_LOD_PC = 70.0
+const UNDERSTORY_LOD_MOBILE = 160.0
+const UNDERSTORY_LOD_PC = 160.0
 ## Каскады теней солнца (2 или 4) и дальность теней; при двух каскадах первый занимает долю SHADOW_FIRST_SPLIT дальности.
 const SHADOW_SPLITS_MOBILE = 2
 const SHADOW_SPLITS_PC = 4
@@ -101,8 +101,8 @@ const SHADOW_DISTANCE_PC = 160.0
 const SHADOW_FIRST_SPLIT = 0.3
 
 # --- Художественный срез ущелья ---
-const GORGE_CLIFF_RANGE = 520.0
-const GORGE_FERN_RANGE = 95.0
+const GORGE_CLIFF_RANGE = 3200.0
+const GORGE_FERN_RANGE = 180.0
 const GORGE_FERN_COUNT = 1000
 const GORGE_AUDIO_RANGE = 110.0
 const GORGE_AUDIO_GAIN = -9.0
