@@ -21,7 +21,7 @@
     },
     "cliff_spider": {
       "triangles": 2902,
-      "bytes": 866584,
+      "bytes": 866916,
       "rig": "spider",
       "textureMax": 1024
     },
@@ -33,7 +33,7 @@
     }
   },
   "files": {
-    "cliff_spider.glb": "d407b9a5456b5f14196d7d4bf26acd3e707e2aeef1f63b59b04380ccbe792692",
+    "cliff_spider.glb": "a5f6c2ceacac2ab96028f0babce80e6ed9b14ebef277289a78463c7420096d16",
     "cliff_spider_Spider dark chitin.png": "e53688b14794db31efc1838ce5321749632f6525b336610b4536b311cd0aedfe",
     "cliff_spider_Spider moss basalt.png": "bc5656fdfc4ceb04d0b3e2fd81c6c02f84d0f7a2f63b459cb1efceb552c0bc1c",
     "cliff_spider_rock_moss_set_01_diff_1k.jpg": "b1fa645fccc8b59458cf680cab4c1ba41d66d7c2d68c83f3b56a5227d7461856",
@@ -62,7 +62,7 @@
     "outpost_guard_Outpost shield hide.png": "5d11949c51bb6008b056b5d279f780a05875db3d2e07073f951bbbb73c3a1a16",
     "outpost_guard_Outpost worn cloth.png": "18cf4a65eae78491bd0e63c3e3b1810ddbb87e9f9b2ab2af07a8202ca7967ef6",
     "outpost_guard_skeleton_texture.png": "3ff31d82eec0d0a0d84842d2557c294c96a9a791ec4cc823158f530b4b7225af",
-    "stone_guard.glb": "af46848809b6fa381b1955d19a3c98790a76d2b4dd04cc9e6af2a50e8a28259c",
+    "stone_guard.glb": "b31d53a00171cd936fb773bfd5ccd3aed052f7de409ef2a634b9f1430d72531e",
     "stone_guard_rock_moss_set_01_diff_1k.jpg": "b1fa645fccc8b59458cf680cab4c1ba41d66d7c2d68c83f3b56a5227d7461856",
     "stone_guard_rock_moss_set_01_nor_gl_1k.jpg": "9a078330334c2510f7084588d03bc23a7f6222272a7350bc377e5de115351edc",
     "stone_guard_rock_moss_set_01_rough_1k.jpg": "696634b206b854cb54bc537dd9c2a41e6cf25ee78416c63c66efb37f88bc0ebb"

@@ -299,7 +299,9 @@ for clip,seconds in [('idle',3),('walk',1.1),('run',.65),('windup',.7),('attack'
   elif clip in ['attack','cast']:head.rotation_euler.x=-math.sin(t*math.pi)*.3;body.location.z=-math.sin(t*math.pi)*.15
   elif clip=='hit':body.rotation_euler.z=math.sin(t*math.pi)*.09
   else:
-   fall=min(1,t*1.5);arm.pose.bones['root'].rotation_euler.z=fall*math.pi/2;arm.pose.bones['root'].location.y=math.sin(fall*math.pi/2)*1.5
+   fall=min(1,t*1.5);angle=fall*math.pi
+   arm.pose.bones['root'].rotation_euler.z=angle
+   arm.pose.bones['root'].location.y=math.sin(angle)*1.05+(1-math.cos(angle))*.48
    for n,_,_,_ in legs:arm.pose.bones[n+'_lower'].rotation_euler.x=fall*.65
   for p in arm.pose.bones:p.keyframe_insert('rotation_euler',frame=f);p.keyframe_insert('location',frame=f);p.keyframe_insert('scale',frame=f)
  track=arm.animation_data.nla_tracks.new();track.name=clip;track.strips.new(clip,0,action);arm.animation_data.action=None

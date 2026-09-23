@@ -56,6 +56,8 @@ func _run():
      var pos = skeleton.get_bone_global_pose(bone).origin
      check(pos.is_finite() and pos.length()<8,id+": finite pose "+clip)
    actor.animator.seek(anim.length*(.95 if clip=="death" else .3),true);actor.animator.advance(0);actor.animator.pause()
+   if id == "cliff_spider" and clip == "death":
+    check(skeleton.get_bone_global_pose(skeleton.find_bone("root")).basis.y.dot(Vector3.UP) < -.8, "Spider death settles belly-up rather than balancing on one side")
    await create_timer(.25).timeout
    if DisplayServer.get_name() != "headless":
     await RenderingServer.frame_post_draw
