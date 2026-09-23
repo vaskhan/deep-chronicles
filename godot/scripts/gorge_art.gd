@@ -1,6 +1,7 @@
 extends Node3D
 ## Декоративные сканы внутри существующих стен. Проходы и серверный рельеф не меняются.
 const Art = preload("res://scripts/art_assets.gd")
+const Lod = preload("res://scripts/lod.gd")
 var rng = RandomNumberGenerator.new()
 
 func _at(u: float, s: float) -> Vector3:
@@ -20,6 +21,9 @@ func _cliffs():
  var mesh_node=source.find_children("*","MeshInstance3D",true,false)[0]
  var mesh: Mesh=mesh_node.mesh
  var original: StandardMaterial3D=mesh.surface_get_material(0)
+ # Тени скал рисует отдельный узел «только тень» со средним уровнем LOD: силуэт огромного
+ # скана на земле не меняется, а каскады перерисовывают вдвое меньше треугольников.
+ var shadow_mesh=Lod.level(mesh,Tuning.LOD_MID_RATIO)
  var mat=ShaderMaterial.new(); mat.shader=preload("res://shaders/gorge_cliff.gdshader")
  mat.set_shader_parameter("stone",original.albedo_texture)
  mat.set_shader_parameter("stone_normal",original.normal_texture)
@@ -49,6 +53,12 @@ func _cliffs():
   node.visibility_range_end=Tuning.GORGE_CLIFF_RANGE
   node.visibility_range_end_margin=35
   add_child(node)
+  if shadow_mesh != mesh:
+   node.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+   var twin=MeshInstance3D.new(); twin.name=node.name+"_shadow"; twin.mesh=shadow_mesh; twin.material_override=mat
+   twin.transform=node.transform; twin.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+   twin.visibility_range_end=node.visibility_range_end; twin.visibility_range_end_margin=35
+   add_child(twin)
  source.free()
 
 func _ferns():
@@ -60,7 +70,7 @@ func _ferns():
  material.set_shader_parameter("leaf",original.albedo_texture)
  material.set_shader_parameter("leaf_normal",original.normal_texture)
  material.set_shader_parameter("fade_end",Tuning.GORGE_FERN_RANGE)
- var groups: Dictionary={}
+ var transforms: Array=[]
  for i in Tuning.GORGE_FERN_COUNT:
   var cluster=i/16
   var u=fmod(float(cluster)*27.7,186.0)+rng.randf_range(-4,4)
@@ -75,26 +85,14 @@ func _ferns():
   for o in GameData.grid.get(Vector2i(floori(pos.x/24),floori(pos.z/24)),[]):
    if Vector2(pos.x-o.x,pos.z-o.z).length()<o.r+1: blocked=true; break
   if blocked: continue
-  var key=Vector2i(floori(pos.x/32),floori(pos.z/32))
-  if not groups.has(key): groups[key]=[]
   var scale3=Vector3.ONE*rng.randf_range(.35,.85)/maxf(mesh.get_aabb().size.y,.01)
   var basis=Basis(Vector3.UP,rng.randf()*TAU).scaled_local(scale3)
   var box=mesh.get_aabb()
   var offset=Vector3(-box.get_center().x,-box.position.y-.025,-box.get_center().z)
-  groups[key].append(Transform3D(basis,pos+basis*offset))
- for key in groups:
-  var mm=MultiMesh.new(); mm.transform_format=MultiMesh.TRANSFORM_3D
-  mm.mesh=mesh; mm.instance_count=groups[key].size()
-  var origin=Vector3(key.x*32,0,key.y*32)
-  for i in mm.instance_count:
-   var transform: Transform3D=groups[key][i]; transform.origin-=origin
-   mm.set_instance_transform(i,transform)
-  var node=MultiMeshInstance3D.new(); node.name="FernPatch"; node.position=origin
-  node.multimesh=mm; node.material_override=material
-  node.visibility_range_end=Tuning.GORGE_FERN_RANGE
-  node.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-  node.extra_cull_margin=.3
-  add_child(node)
+  transforms.append(Transform3D(basis,pos+basis*offset))
+ # Ячейки 32 м; вдали — импортированный LOD папоротника (lod.gd), шейдер гасит его к GORGE_FERN_RANGE.
+ Lod.place(self,"FernPatch",[{"mesh":mesh}],transforms,Lod.bands("small",Tuning.GORGE_FERN_RANGE),
+  {"cell":32.0,"material":material,"shadow":GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,"cull_margin":.3})
  source.free()
 
 ## Камни с теми же CC0 UV, сгруппированные по ячейкам для отсечения.
@@ -122,30 +120,19 @@ func _boulders():
   var u=rng.randf_range(-10,184); var s=rng.randf_range(-9,32)
   if absf(s-(10-18*smoothstep(110,185,u)+3*sin(u*.04)))<4: continue
   placements.append([_at(u,s),Vector3(rng.randf_range(.6,1.3),rng.randf_range(.12,.28),rng.randf_range(.6,1.3)),rng.randf()*TAU])
- for part in source.find_children("*","MeshInstance3D",true,false):
-  var local=part.transform; var parent=part.get_parent()
-  while parent != source and parent is Node3D:
-   local=parent.transform*local; parent=parent.get_parent()
-  var groups: Dictionary={}
-  for p in placements:
-   var scale3: Vector3=p[1]/box.size
-   var basis=Basis(Vector3.UP,p[2]).scaled_local(scale3)
-   var offset=Vector3(-box.get_center().x,-box.position.y,-box.get_center().z)
-   var pos: Vector3=p[0]-Vector3.UP*p[1].y*.28
-   var transform=Transform3D(basis,pos+basis*offset)*local
-   var key=Vector2i(floori(pos.x/48),floori(pos.z/48))
-   if not groups.has(key): groups[key]=[]
-   groups[key].append(transform)
+ # Плоские кочки ниже полуметра почти не дают тени — им тень не рисуется.
+ var transforms: Array=[]; var hummocks: Array=[]
+ for p in placements:
+  var scale3: Vector3=p[1]/box.size
+  var basis=Basis(Vector3.UP,p[2]).scaled_local(scale3)
+  var offset=Vector3(-box.get_center().x,-box.position.y,-box.get_center().z)
+  var pos: Vector3=p[0]-Vector3.UP*p[1].y*.28
+  (hummocks if p[1].y < .5 else transforms).append(Transform3D(basis,pos+basis*offset))
+ for part in Lod.scene_parts(source):
   var material=boulder_material(part.mesh.surface_get_material(0))
-  for key in groups:
-   var mm=MultiMesh.new(); mm.transform_format=MultiMesh.TRANSFORM_3D; mm.mesh=part.mesh; mm.instance_count=groups[key].size()
-   var origin=Vector3(key.x*48,0,key.y*48)
-   for i in mm.instance_count:
-    var transform: Transform3D=groups[key][i]; transform.origin-=origin; mm.set_instance_transform(i,transform)
-   var node=MultiMeshInstance3D.new(); node.name="BankStoneCluster"; node.position=origin; node.multimesh=mm
-   node.material_override=material
-   node.visibility_range_end=Tuning.GORGE_STONE_RANGE
-   add_child(node)
+  var bands=Lod.bands("prop",Tuning.GORGE_STONE_RANGE)
+  Lod.place(self,"BankStoneCluster",[part],transforms,bands,{"material":material,"shadow_lod":true})
+  Lod.place(self,"MossHummock",[part],hummocks,bands,{"material":material,"shadow":GeometryInstance3D.SHADOW_CASTING_SETTING_OFF})
  source.free()
 
 static func boulder_material(original: StandardMaterial3D) -> ShaderMaterial:

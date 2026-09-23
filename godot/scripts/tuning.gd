@@ -57,12 +57,48 @@ const QUALITY_PC_MSAA = 2
 const QUALITY_MOBILE_RENDER_SCALE = 1.0
 const QUALITY_PC_RENDER_SCALE = 1.0
 ## Порог упрощения мешей (LOD) в пикселях: меньше — детальнее и дороже.
-const QUALITY_MOBILE_LOD_THRESHOLD = 1.0
+const QUALITY_MOBILE_LOD_THRESHOLD = 2.0
 const QUALITY_PC_LOD_THRESHOLD = 0.5
 ## Размер карты теней солнца в пикселях; 0 — как в настройках проекта
 ## (4096 на ПК, 2048 на Android/iOS через переопределение .mobile).
 const QUALITY_MOBILE_SHADOW_SIZE = 0
 const QUALITY_PC_SHADOW_SIZE = 4096
+
+# --- Детализация мира (godot/scripts/lod.gd) и тени солнца ---
+## Повторяющиеся модели собраны в ячейки со стороной LOD_CELL метров; ячейка рисует один
+## уровень по расстоянию от камеры до своего центра. Ближе NEAR — полный меш, до FAR — средний
+## (доля треугольников LOD_MID_RATIO), дальше — дальний (LOD_FAR_RATIO).
+const LOD_CELL = 48.0
+const LOD_MID_RATIO = 0.3
+const LOD_FAR_RATIO = 0.08
+## Листва среднего уровня не прореживается ниже этой доли: иначе крона вблизи заметно редеет.
+const LOD_FOLIAGE_MIN_RATIO = 0.3
+## Доля листвы дальнего уровня: крона мелкая на экране, редеющие листья не видны за туманом.
+const LOD_FAR_FOLIAGE_RATIO = 0.04
+## Деревья.
+const LOD_TREE_NEAR_MOBILE = 30.0
+const LOD_TREE_NEAR_PC = 80.0
+const LOD_TREE_FAR_MOBILE = 140.0
+const LOD_TREE_FAR_PC = 220.0
+## Камни, кусты, папоротники.
+const LOD_PROP_NEAR_MOBILE = 25.0
+const LOD_PROP_NEAR_PC = 60.0
+const LOD_PROP_FAR_MOBILE = 110.0
+const LOD_PROP_FAR_PC = 170.0
+## Мелкие растения со сканов (папоротник ущелья, 5,6 тыс. треугольников): полный меш только у самой камеры.
+const LOD_SMALL_NEAR_MOBILE = 15.0
+const LOD_SMALL_NEAR_PC = 30.0
+const LOD_SMALL_FAR_MOBILE = 50.0
+const LOD_SMALL_FAR_PC = 80.0
+## Дальше этой дистанции подлесок рисуется упрощёнными кустиками травы.
+const UNDERSTORY_LOD_MOBILE = 32.0
+const UNDERSTORY_LOD_PC = 70.0
+## Каскады теней солнца (2 или 4) и дальность теней; при двух каскадах первый занимает долю SHADOW_FIRST_SPLIT дальности.
+const SHADOW_SPLITS_MOBILE = 2
+const SHADOW_SPLITS_PC = 4
+const SHADOW_DISTANCE_MOBILE = 130.0
+const SHADOW_DISTANCE_PC = 160.0
+const SHADOW_FIRST_SPLIT = 0.3
 
 # --- Художественный срез ущелья ---
 const GORGE_CLIFF_RANGE = 520.0
