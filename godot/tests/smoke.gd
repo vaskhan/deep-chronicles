@@ -570,7 +570,13 @@ func _test_mob_telegraph():
 	check(escape != Vector3.ZERO, "telegraph fixture has a collision-free escape corridor")
 	if escape == Vector3.ZERO: return
 	# No fixed delay here: react to the event without consuming half its wind-up.
-	net.send({"t": "dev", "x": live_orc.position.x + escape.x * 2, "z": live_orc.position.z + escape.z * 2, "hp": 500})
+	var dodge_start = live_orc.position + escape * 2
+	net.send({"t": "dev", "x": dodge_start.x, "z": dodge_start.z, "hp": 500})
+	# move-подтверждение вызывает _place и сбрасывает destination/телеграфы.
+	# Оно обязано прийти ДО выбранного замаха и команды бежать.
+	var placed = await wait_for(func(): return Vector2(game.hero.position.x-dodge_start.x,game.hero.position.z-dodge_start.z).length() < .05)
+	check(placed, "dodge fixture receives the server move before observing the next wind-up")
+	if not placed: return
 	# Под нагрузкой клиент может проснуться к концу чужого замаха: такое событие
 	# описывает удар, который игрок физически не успел увидеть. Берём следующий,
 	# у которого на экране ещё остаётся время на реакцию.
@@ -578,15 +584,21 @@ func _test_mob_telegraph():
 	var fresh_warning = false
 	var mob = null
 	var windup_at = 0
+	var warning_cursor = [0,0]
 	for attempt in 3:
 		warning.clear()
 		from_message = received.size()
 		announced = await wait_for(func():
-			for packet in received.slice(from_message):
+			var found = false
+			for packet_index in range(from_message, received.size()):
+				var packet = received[packet_index]
 				if packet.t == "ev":
-					for event in packet.e:
-						if event.k == "mob_windup" and int(event.p) == game.own_id and int(event.m) == orc_id: warning.merge(event, true); return true
-			return false, 10)
+					for event_index in packet.e.size():
+						var event = packet.e[event_index]
+						if event.k == "mob_windup" and int(event.p) == game.own_id and int(event.m) == orc_id:
+							warning.clear(); warning.merge(event, true)
+							warning_cursor[0] = packet_index; warning_cursor[1] = event_index; found = true
+			return found, 10)
 		if not announced: break
 		windup_at = Time.get_ticks_msec()
 		mob = game.mobs.get(int(warning.m))
@@ -605,19 +617,26 @@ func _test_mob_telegraph():
 	game.set_target(mob)
 	check(is_instance_valid(mob) and mob.winding_up and game.combat_fx.telegraphs.has(mob.get_instance_id()), "server wind-up drives the monster pose and the matching ground sector")
 	check(game.game_audio.music.combat_remaining > 0, "a real mob threat switches the local music into combat")
-	# Бежать начинаем сразу: замах длится не больше 0.32 с, а пауза звука и сохранение
+	# Бежать начинаем сразу: окно замаха короткое, а пауза звука и сохранение
 	# PNG в оконном режиме съедают почти всё окно реакции (в headless они бесплатны).
 	# Real client movement, not a developer warp: leave the fixed sector.
 	game.destination = game.hero.position + escape * 14
 	game.has_destination = true
 	await create_timer(0.05).timeout
 	check(game.game_audio.music.duck_db < 0 and game.game_audio.music.cue == "music_battle", "battle theme crossfades and ducks below attack sounds")
-	await _screenshot("mob-windup.png")
+	# Захват без PNG-кодирования: оно блокирует кадры движения на сотни мс.
+	var windup_image: Image = null
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		windup_image = root.get_texture().get_image()
 	var strike = {}
 	check(await wait_for(func():
-		for packet in received.slice(from_message):
+		for packet_index in range(warning_cursor[0], received.size()):
+			var packet = received[packet_index]
 			if packet.t == "ev":
-				for event in packet.e:
+				var first_event = warning_cursor[1]+1 if packet_index == warning_cursor[0] else 0
+				for event_index in range(first_event, packet.e.size()):
+					var event = packet.e[event_index]
 					if event.k == "mob_strike" and int(event.m) == int(warning.m): strike.merge(event, true); return true
 		return false, 3), "server resolves the telegraphed attack")
 	# Диагностика отказа: сервер считает попадание по своей копии позиции игрока.
@@ -631,6 +650,7 @@ func _test_mob_telegraph():
 		"speed": game.stats.get("speed", 0), "elapsed_ms": Time.get_ticks_msec() - windup_at,
 	}))
 	check(not strike.get("landed", true), "running out of the telegraph avoids the actual server hit")
+	if windup_image: windup_image.save_png(artifacts.path_join("mob-windup.png") if not artifacts.is_empty() else "user://native-mob-windup.png")
 	await _screenshot("mob-dodge.png")
 	await _dev({"x": -448, "z": 418, "hp": 500})
 	check(game.combat_fx.telegraphs.is_empty(), "teleport clears all monster warning geometry")
