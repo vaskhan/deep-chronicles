@@ -9,6 +9,13 @@ uniform sampler2D snow : source_color, filter_linear_mipmap_anisotropic, repeat_
 uniform sampler2D forest_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D forest_roughness : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D forest_height : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D rock_face_diff : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D rock_face_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D rock_face_arm : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mossy_rock_diff : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mossy_rock_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mossy_rock_arm : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D dry_ground_01_diff : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 varying vec3 world_pos;
 varying vec3 world_normal;
 void vertex() {
@@ -105,6 +112,42 @@ void fragment() {
  NORMAL_MAP=normal*.5+.5;
  ROUGHNESS=mix(mix(.88,texture(forest_roughness,uv).r,weights.y),.55,gorge*(1.0-tier3)*(1.0-snowy));
  AO=mix(1.0,mix(.88,1.0,texture(forest_height,uv).r),weights.y);
+ // Локальные сканированные слои: за маской нижнего ущелья прежний материал неизменен.
+ float slice=massif*(1.0-smoothstep(480.0,510.0,gf.x));
+ slice*=step(190.0,p.x)*step(p.x,1000.0)*step(70.0,p.y)*step(p.y,1000.0);
+ if (slice>0.001) {
+  vec3 nr=normalize(world_normal);
+  vec3 st=triplanar(rock_face_diff,world_pos,nr,.09);
+  st=mix(vec3(dot(st,vec3(.2126,.7152,.0722))),st,.18)*vec3(.88,.98,1.0);
+  vec3 ms=texture(mossy_rock_diff,p*.24).rgb;
+  vec3 gravel=texture(dry_ground_01_diff,p*.32).rgb;
+  float slope=smoothstep(.18,.65,1.0-nr.y);
+  float river_s=-mix(20.0,13.0,smoothstep(200.0,300.0,gf.x))+3.0*sin(gf.x*.045);
+  float moisture=(1.0-smoothstep(4.0,22.0,abs(gf.y-river_s)))*(1.0-tier3);
+  float moss_cover=smoothstep(.1,.7,macro)*(.7+.3*moisture);
+  vec3 soil=mix(forest_col*vec3(.62,.76,.53),ms*vec3(.5,.72,.4),moss_cover);
+  float bank_distance=abs(gf.y-river_s);
+  float fleck=sin(p.x*1.3+sin(p.y*1.7))*sin(p.y*.9+p.x*.2)*.5+.5;
+  float river_extent=smoothstep(-40.0,-26.0,gf.x)*(1.0-smoothstep(298.0,306.0,gf.x));
+  float bank=(1.0-smoothstep(6.0,11.0+fleck*3.0,bank_distance))*river_extent;
+  float trail_s=10.0-18.0*smoothstep(110.0,185.0,gf.x)+3.0*sin(gf.x*.04);
+  float trail=(1.0-smoothstep(1.3,3.0+fleck,abs(gf.y-trail_s)))*smoothstep(-40.0,-26.0,gf.x)*(1.0-smoothstep(182.0,194.0,gf.x));
+  soil=mix(soil,gravel*vec3(.72,.7,.61),max(bank*.85,trail*.9));
+  float wet_edge=(1.0-smoothstep(4.0,6.8,bank_distance))*river_extent;
+  soil=mix(soil,st*vec3(.24,.32,.29),wet_edge*.8);
+  vec3 stone=st*mix(vec3(.58,.61,.57),vec3(.28,.36,.34),moisture*.65);
+  vec3 local_col=mix(soil,stone,slope);
+  float crest_snow=smoothstep(148.0,178.0,world_pos.y)*smoothstep(.75,.95,nr.y);
+  local_col=mix(local_col,texture(snow,p/4.0).rgb,crest_snow);
+  col=mix(col,local_col,slice);
+  vec3 rock_n=triplanar(rock_face_nor,world_pos,nr,.13)*2.0-1.0;
+  vec3 soil_n=mix(texture(forest_normal,uv).rgb,texture(mossy_rock_nor,p*.24).rgb,moss_cover)*2.0-1.0;
+  NORMAL_MAP=mix(NORMAL_MAP,normalize(mix(soil_n,rock_n,slope))*.5+.5,slice);
+  float r=mix(texture(forest_roughness,uv).r,texture(mossy_rock_arm,p*.24).g,moss_cover);
+  r=mix(r,triplanar(rock_face_arm,world_pos,nr,.13).g,slope);
+  ROUGHNESS=mix(ROUGHNESS,mix(r,.3,moisture*.65),slice);
+  AO=mix(AO,mix(texture(forest_height,uv).r,triplanar(rock_face_arm,world_pos,nr,.13).r,slope),slice);
+ }
  ALBEDO=col;
  SPECULAR=.25;
 }

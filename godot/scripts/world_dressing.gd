@@ -82,7 +82,16 @@ func _chunk(key: Vector2i):
    # Громовое ущелье: на мокрых террасах папоротник и трава, у водопада — редкий папоротник
    # в сырых нишах, на вершине — сухая трава клочьями между камней.
    var tier = str(GameData.gorge_tier(p).get("id","terraces"))
-   if tier == "terraces": kind = "fern" if rng.randf()<.6 else "grass"
+   if tier == "terraces":
+    var g=GameData.world.gorge
+    var delta=Vector2(p.x-g.origin.x,p.z-g.origin.z)
+    var u=delta.dot(Vector2(g.axis.x,g.axis.z))
+    var s=delta.dot(Vector2(g.axis.z,-g.axis.x))-24*sin(u/440.0*PI*1.6)
+    var river=-20+3*sin(u*.045)
+    var trail=10-18*smoothstep(110,185,u)+3*sin(u*.04)
+    if absf(s-river)<7 or absf(s-trail)<3.6: continue
+    if patch<-.04 or rng.randf()>.65: continue
+    kind = "shrub_hazel" if patch>.12 and rng.randf()<.08 else "grass"
    elif tier == "falls":
     if rng.randf()>.45: continue
     kind = "fern" if rng.randf()<.7 else "grass"

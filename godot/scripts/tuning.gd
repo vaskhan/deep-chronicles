@@ -63,3 +63,18 @@ const QUALITY_PC_LOD_THRESHOLD = 0.5
 ## (4096 на ПК, 2048 на Android/iOS через переопределение .mobile).
 const QUALITY_MOBILE_SHADOW_SIZE = 0
 const QUALITY_PC_SHADOW_SIZE = 4096
+
+# --- Художественный срез ущелья ---
+const GORGE_CLIFF_RANGE = 520.0
+const GORGE_FERN_RANGE = 95.0
+const GORGE_FERN_COUNT = 1000
+const GORGE_AUDIO_RANGE = 110.0
+const GORGE_AUDIO_GAIN = -9.0
+const GORGE_SUN_PITCH = -0.8
+const GORGE_SUN_YAW = -2.5
+
+const GORGE_STONE_RANGE = 155.0
+const GORGE_LABEL_RANGE = 32.0
+const GORGE_LABEL_STACK_PX = 24.0
+const GORGE_LABEL_STACK_LEVELS = 3
+const GORGE_LABEL_GAP_PX = 5.0

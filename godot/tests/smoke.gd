@@ -19,6 +19,7 @@ var peer: WebSocketPeer
 var peer_inbox: Array = []
 var peer_id = 0
 var artifacts = ""
+var gorge_measurements: Array = []
 
 func _ready():
 	_run.call_deferred()
@@ -432,6 +433,7 @@ func _run():
 	await _test_timed_effects()
 	await _test_pack()
 	await _test_gorge()
+	if "--gorge-bench" in OS.get_cmdline_user_args(): await _gorge_benchmark_route()
 	# Real screenshot from the rendering backend, when running with a display.
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
@@ -487,7 +489,7 @@ func _test_audio_bank():
 		for stream in variants:
 			loaded += 1
 			if not stream or stream.get_length() <= 0: valid = false
-	check(valid and loaded == 67, "all 67 licensed recordings and music tracks decode as real audio streams")
+	check(valid and loaded == 68, "all 68 licensed recordings and music tracks decode as real audio streams")
 	var limiter_found = false
 	for i in AudioServer.get_bus_effect_count(0):
 		var effect = AudioServer.get_bus_effect(0, i)
@@ -1090,5 +1092,83 @@ func _test_gorge():
 	await _dev({"x": look.x, "z": look.y, "hp": 99999})
 	game.camera_distance = 34; game.camera_pitch = 0.28; game.camera_yaw = atan2(-axis.x, -axis.y)
 	await create_timer(1.0).timeout
+	check(game.game_audio.waterfall.playing and game.game_audio.waterfall.bus == "Ambience", "waterfall recording plays near the falls on the ambience bus")
+	check(gorge.find_child("GorgeArt", false, false) != null, "scanned cliffs and fern patches are built in the gorge")
 	await _screenshot("gorge-falls.png")
+	await _dev({"x": gate.x + 2, "z": gate.z + 2, "hp": 99999})
+	check(await wait_for(func(): return not game.game_audio.waterfall.playing), "teleporting out of the gorge stops the waterfall voice")
 	game.camera_distance = 28; game.camera_pitch = 0.56
+
+## Опциональный замер реального клиента с HUD, серверными мобами и эффектами.
+func _gorge_benchmark(view: String):
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
+	await create_timer(3.0).timeout
+	var frames: Array = []
+	var cpu = 0.0; var gpu = 0.0; var draws = 0.0; var primitives = 0.0
+	var alive_frames = 0; var combat_frames = 0
+	var last = Time.get_ticks_usec()
+	for sample in 180:
+		await process_frame
+		if not game.hero.dead: alive_frames += 1
+		if game.mobs.values().any(func(m): return m.visible and not m.dead and m.position.distance_to(game.hero.position)<12 and (m.winding_up or m.action_until>0)): combat_frames += 1
+		var now = Time.get_ticks_usec()
+		frames.append(float(now-last)/1000.0); last=now
+		cpu += RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid())
+		gpu += RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid())
+		draws += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
+		primitives += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
+	var total = 0.0
+	for ms in frames: total += ms
+	frames.sort()
+	var result = {"view":view,"alive_frames":alive_frames,"combat_frames":combat_frames,"fps":180000.0/total,"median_ms":frames[90],"p95_ms":frames[171],"p99_ms":frames[178],"render_cpu_ms":cpu/180,"gpu_ms":gpu/180 if gpu>0 else null,"draw_calls":draws/180,"primitives":primitives/180,"camera_distance":game.camera_distance,"camera_pitch":game.camera_pitch,"visible_mobs":game.mobs.values().filter(func(m): return m.visible).size()}
+	check(alive_frames==180,"benchmark %s keeps a living hero through all samples"%view)
+	if view=="combat": check(combat_frames>0,"benchmark combat includes actual monster attacks")
+	gorge_measurements.append(result)
+	print("GORGE_GAME_BENCH ",JSON.stringify(result))
+	var file = FileAccess.open(artifacts.path_join("performance-gameplay.json"),FileAccess.WRITE)
+	file.store_string(JSON.stringify({"renderer":RenderingServer.get_current_rendering_method(),"adapter":RenderingServer.get_video_adapter_name(),"resolution":[root.size.x,root.size.y],"vsync":false,"samples":180,"warmup_seconds":3,"scenario":"isolated local server, real HUD and combat; test-only HP refill every 0.2 s; live mobs vary","views":gorge_measurements},"  "))
+
+## Замер идёт ПОСЛЕ проверки маршрута: прогрев не меняет условия smoke боя.
+func _gorge_benchmark_route():
+	Engine.max_fps=0
+	if game.hero.dead:
+		net.send({"t":"respawn"})
+		check(await wait_for(func(): return not game.hero.dead),"benchmark revives the test character before the route")
+	# Продлеваем только изолированную измерительную сессию, не меняя бой и эффекты.
+	var refill=Timer.new(); refill.wait_time=.2
+	refill.timeout.connect(func(): net.send({"t":"dev","hp":99999}))
+	add_child(refill); refill.start()
+	var g=data.world.gorge
+	var axis=Vector2(float(g.axis.x),float(g.axis.z))
+	game.camera_yaw=atan2(-axis.x,-axis.y)
+	var arrival=data.world.teleports.filter(func(t): return t.id=="gorge")[0]
+	await _dev({"x":arrival.x,"z":arrival.z,"hp":99999,"lvl":27})
+	game.camera_distance=30; game.camera_pitch=.42
+	await _gorge_benchmark("arrival")
+	await _screenshot("gorge-game-arrival.png")
+	var elite=_gorge_elite()
+	if elite:
+		await _dev({"x":elite.position.x-axis.x*10,"z":elite.position.z-axis.y*10,"hp":99999})
+		game.set_target(elite); game.camera_distance=16; game.camera_pitch=.42
+		await _gorge_benchmark("elite")
+		await _screenshot("gorge-game-elite.png")
+	game.set_target(null)
+	var spawns=data.world.spawns
+	for i in spawns.size():
+		if spawns[i].get("pack","")!="gorge2": continue
+		await _dev({"x":spawns[i].x-8,"z":spawns[i].z-8,"hp":99999})
+		await wait_for(func(): return game.mobs.has(i+1) and game.mobs[i+1].visible,4)
+		if game.mobs.has(i+1) and not game.mobs[i+1].dead:
+			game.set_target(game.mobs[i+1]); game.attack()
+		game.camera_distance=16; game.camera_pitch=.6
+		await _gorge_benchmark("combat")
+		await _screenshot("gorge-game-combat.png")
+		game._cancel_attack(); game.set_target(null)
+		break
+	var look=Vector2(g.falls.x,g.falls.z)-axis*30+Vector2(axis.y,-axis.x)*25
+	await _dev({"x":look.x,"z":look.y,"hp":99999})
+	game.camera_distance=34; game.camera_pitch=.28
+	await _gorge_benchmark("waterfall")
+	await _screenshot("gorge-game-waterfall.png")
+	refill.queue_free()

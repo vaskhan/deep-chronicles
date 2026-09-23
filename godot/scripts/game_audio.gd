@@ -10,6 +10,7 @@ var voices: Array = []
 var last_played: Dictionary = {}
 var play_counts: Dictionary = {}
 var listener: AudioListener3D
+var waterfall: AudioStreamPlayer3D
 var ambience: AudioStreamPlayer
 var music: Node
 var step_distance = 0.0
@@ -38,6 +39,14 @@ func _ready():
 	ambience = AudioStreamPlayer.new(); ambience.bus = "Ambience"; ambience.volume_db = -2
 	var loop = streams.wind.duplicate(); loop.loop = true
 	ambience.stream = loop; add_child(ambience)
+	waterfall = AudioStreamPlayer3D.new(); waterfall.name = "WaterfallAmbience"
+	waterfall.bus = "Ambience"; waterfall.max_distance = Tuning.GORGE_AUDIO_RANGE
+	waterfall.unit_size = 22.0; waterfall.volume_db = Tuning.GORGE_AUDIO_GAIN
+	var water_loop = streams.waterfall.duplicate(); water_loop.loop = true
+	waterfall.stream = water_loop
+	var falls = GameData.world.get("gorge", {}).get("falls", {})
+	if not falls.is_empty(): waterfall.position = Vector3(falls.x, falls.bottom + 3.0, falls.z)
+	add_child(waterfall)
 	for i in MAX_VOICES:
 		var voice = AudioStreamPlayer3D.new(); voice.bus = "Effects"; voice.max_distance = 55; voice.unit_size = 7
 		voice.max_db = -3; voice.attenuation_filter_cutoff_hz = 9000; add_child(voice); voices.append(voice)
@@ -52,9 +61,12 @@ func set_volume(bus: String, value: float, persist = true):
 
 func follow(hero, camera, dt: float):
 	if not is_instance_valid(hero) or not hero.visible:
-		ambience.stop(); return
+		ambience.stop(); waterfall.stop(); return
 	listener.global_position = hero.global_position + Vector3.UP * 1.7
 	listener.global_rotation = camera.global_rotation; listener.make_current()
+	var near_water = listener.global_position.distance_to(waterfall.global_position) < Tuning.GORGE_AUDIO_RANGE
+	if near_water and not waterfall.playing: waterfall.play()
+	elif not near_water and waterfall.playing: waterfall.stop()
 	var in_town = GameData.world.towns.any(func(t): return Vector2(hero.position.x - t.x, hero.position.z - t.z).length() < t.r)
 	music.follow(dt, in_town, hero.dead)
 	if not ambience.playing: ambience.play()
@@ -101,3 +113,4 @@ func clear():
 	if music: music.clear()
 	for voice in voices: voice.stop()
 	ambience.stop()
+	waterfall.stop()
