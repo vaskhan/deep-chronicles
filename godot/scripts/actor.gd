@@ -289,7 +289,10 @@ func _process(dt):
 		animator.seek(minf(death_elapsed,animator.get_animation("death").length),true)
 	if health_bar:
 		health_bar.visible = label.visible and not dead and (selected or hp < 100 or windup_remaining > 0)
-		health_fill.visible = health_bar.visible; health_fill.mesh.size.x = maxf(0.01, 1.4 * hp / 100.0)
+		health_fill.visible = health_bar.visible
+		# заполнение прижато к левому краю: убывает справа, как в обычной полосе здоровья
+		var fill_w = maxf(0.01, 1.4 * hp / 100.0)
+		health_fill.mesh.size.x = fill_w; health_fill.mesh.center_offset.x = (fill_w - 1.4) * 0.5
 	if label:
 		label.text = display_name + (" · повержен" if dead else "")
 		var plain = rank_color() if not rank.is_empty() else (Color("e7d8ab") if kind == "n" else Color.WHITE)

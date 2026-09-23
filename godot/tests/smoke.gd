@@ -611,6 +611,10 @@ func _test_mob_telegraph():
 			fresh_warning = true; break
 		print("TELEGRAPH_SKIP stale=", snappedf(float(telegraph.age), 0.01) if telegraph else "consumed")
 	check(announced, "an aggressive server mob announces its wind-up before damage")
+	if announced and is_instance_valid(mob) and mob.health_fill:
+		var hf = mob.health_fill.mesh
+		# левый край заполнения совпадает с левым краем рамки при любом здоровье
+		check(absf((hf.center_offset.x - hf.size.x * 0.5) + 0.7) < 0.001, "mob health fill is anchored to the left edge")
 	check(fresh_warning, "dodge starts inside the actual wind-up, excluding afterglow")
 	if not fresh_warning: return
 	if warning.is_empty(): return
