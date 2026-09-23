@@ -35,17 +35,19 @@ rollback() {
   local tag
   tag=$(cat "$backup/image-tag" 2>/dev/null || true)
   if [ -n "$tag" ]; then
-    (cd "$release" && REALMS_TAG="$tag" docker compose up -d --no-build) || true
+    (cd "$release" && REALMS_TAG="$tag" docker compose -p realms up -d --no-build) || true
   fi
   exit 1
 }
 trap rollback ERR
 
-# Статика сайта: новый dist встаёт только вместе с проверенным образом.
-rsync -a --delete "$release/dist/" /opt/realms/dist/
-
 cd "$release"
-REALMS_TAG="${id}" docker compose up -d --no-build
+# Имя проекта постоянное: иначе compose считает каждый каталог релиза новым проектом и
+# пытается создать второй контейнер realms-ws рядом с работающим.
+# Контейнер, созданный под другим именем проекта (первый переезд), убираем перед подъёмом.
+owner=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' realms-ws 2>/dev/null || true)
+if [ -n "$owner" ] && [ "$owner" != realms ]; then docker rm -f realms-ws >/dev/null; fi
+REALMS_TAG="${id}" docker compose -p realms up -d --no-build
 
 # Мир обязан ответить приветствием, иначе откатываемся на прежний образ.
 for attempt in $(seq 1 30); do
@@ -54,6 +56,10 @@ for attempt in $(seq 1 30); do
   [ "$attempt" = 30 ] && { echo "Container is not healthy: $state" >&2; false; }
   sleep 2
 done
+
+# Статика сайта встаёт только после здорового мира: новые клиенты не должны
+# раздаваться, пока работает старый сервер.
+rsync -a --delete "$release/dist/" /opt/realms/dist/
 
 # Освобождаем место: оставляем текущий образ и пять предыдущих сборок.
 docker image ls --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' realms-ws \

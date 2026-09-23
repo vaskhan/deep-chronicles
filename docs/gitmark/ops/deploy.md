@@ -47,8 +47,8 @@ DEPLOY_HOST=... bash deploy/deploy.sh
 отдельный systemd-юнит больше не нужен. Ручные команды на хосте:
 
 ```bash
-cd /opt/realms/releases/<release> && docker compose ps
-docker compose logs -n 100 realms-ws
+cd /opt/realms/releases/<release> && docker compose -p realms ps
+docker compose -p realms logs -n 100 realms-ws
 docker run --rm -v realms-data:/data -v /root/backup:/backup --entrypoint node node:22.23.2-alpine \
   --input-type=module -e "import{DatabaseSync}from'node:sqlite';const d=new DatabaseSync('/data/realms.db',{readOnly:true});d.exec(\"VACUUM INTO '/backup/world.db'\");d.close()"
 ```
@@ -92,6 +92,15 @@ docker run --rm -v realms-data:/data -v /root:/src alpine sh -c 'cp /src/realms-
 сервер сообщил **30 аккаунтов, 225 мобов**, контейнер `healthy`, внешний Godot probe подтвердил TLS
 и все feature-флаги. Старый юнит `realms-ws` остановлен и `disable`, файл `/opt/realms/data`
 сохранён как бэкап вместе с `/root/pre-docker-backup/`.
+
+## Выпуск 24.09.2026 — #5 (мир, бой, 60 уровень)
+
+Релиз `f4c5801d2a17-20260923T225410611Z`: 16/16 шагов проверки. Автоматическое продвижение
+упало на дефекте `promote.sh` — compose без `-p` считал каталог каждого релиза новым проектом и
+пытался создать второй `realms-ws`. Статика при этом уже обновилась, а мир оставался старым; мир
+переведён вручную (`docker rm -f realms-ws` + `docker compose -p realms up`), внешний Godot probe
+подтвердил TLS и новые флаги. `promote.sh` исправлен: постоянное имя проекта `realms`, статика
+обновляется только после здорового контейнера. После запуска: 30 аккаунтов, 588 мобов.
 
 ## Выпуск дропа 18.09.2026
 
