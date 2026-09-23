@@ -2,11 +2,14 @@ extends RefCounted
 ## Пресеты качества графики на одном рендерере Mobile: мобильный (по умолчанию) и ПК.
 ## Числа — в tuning.gd. Тяжёлые возможности Forward+ (SDFGI, объёмный туман, SSR) сюда не входят:
 ## ПК-пресет только поднимает сглаживание, детализацию LOD и карту теней.
-## Мобильный пресет повторяет настройки проекта, поэтому поведение по умолчанию не меняется.
+## Мобильный пресет дешевле по геометрии и теням: порог LOD 2 пикселя, два каскада теней,
+## дальности LOD из tuning.gd (lod.gd, world.gd, world_dressing.gd).
 
 const MOBILE = 0
 const PC = 1
 const NAMES = ["mobile", "pc"]
+## Применённый пресет (до apply — мобильный): мир читает его при сборке — дальности LOD и теней.
+static var current = MOBILE
 
 ## Пресет из флагов запуска (--quality=pc|mobile) или значение по умолчанию.
 static func preset_from_args(args: PackedStringArray, fallback: int) -> int:
@@ -18,6 +21,7 @@ static func preset_from_args(args: PackedStringArray, fallback: int) -> int:
 ## Применить пресет к окну; возвращает применённые значения для журнала и профиля.
 static func apply(viewport: Viewport, preset: int) -> Dictionary:
 	var pc = preset == PC
+	current = PC if pc else MOBILE
 	var values = {
 		"preset": NAMES[PC if pc else MOBILE],
 		"msaa": Tuning.QUALITY_PC_MSAA if pc else Tuning.QUALITY_MOBILE_MSAA,

@@ -1,5 +1,7 @@
 extends Node3D
 const Art = preload("res://scripts/art_assets.gd")
+const Lod = preload("res://scripts/lod.gd")
+const Quality = preload("res://scripts/quality.gd")
 var materials: Dictionary = {}
 var shapes: Dictionary = {}
 var environment: WorldEnvironment
@@ -36,6 +38,12 @@ func _lighting():
 	environment = $WorldEnvironment; sun = $Sun
 	sun_start_rotation = sun.rotation
 	environment.environment = environment.environment.duplicate(true)
+	# Тени по пресету: мобильный — два каскада и короче дальность (каждый каскад заново рисует все тени).
+	var pc = Quality.current == Quality.PC
+	var splits = Tuning.SHADOW_SPLITS_PC if pc else Tuning.SHADOW_SPLITS_MOBILE
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if splits >= 4 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_max_distance = Tuning.SHADOW_DISTANCE_PC if pc else Tuning.SHADOW_DISTANCE_MOBILE
+	if splits < 4: sun.directional_shadow_split_1 = Tuning.SHADOW_FIRST_SPLIT
 
 # Переходы света плавные; подземелье сразу получает тёмный фон неба.
 func set_region(pos: Vector3):
@@ -130,6 +138,7 @@ func _props():
 		mesh.bottom_radius = 0.75 if key == "cone4" else 0.5
 		mesh.top_radius = 0.5 if key == "cyl" else 0.0
 		mesh.radial_segments = 4 if key == "cone4" else (32 if key == "cyl" else 7)
+		mesh.rings = 0 # промежуточные кольца боковой стенки ничего не добавляют к виду
 		shapes[key] = mesh
 	var ico = SphereMesh.new(); ico.radius = 1; ico.height = 2; ico.radial_segments = 8; ico.rings = 4; shapes.ico = ico
 	var groups: Dictionary = {}
@@ -217,55 +226,54 @@ func _models():
 			else: row[0] = "elm_field" if choice < 48 else ("alder_round" if choice < 78 else ("elm_slender" if choice < 94 else "pine_natural"))
 		if row[0] in ["elm_field", "elm_slender", "alder_round", "pine_natural"]:
 			row[5] *= 1.2; row[7] *= 1.2
-		var key = "%s_%s_%s" % [row[0], floori(row[1] / 100), floori(row[3] / 100)]
-		if not groups.has(key): groups[key] = []
-		groups[key].append(row)
-	var sources: Dictionary = {}
-	for rows in groups.values():
-		var id = rows[0][0]
-		var path = ("res://assets/gorge/%s.glb" if id == "moss_boulder" else "res://assets/props/%s.glb") % id
-		if not ResourceLoader.exists(path): continue
-		if not sources.has(id):
-			var source = Art.packed(path).instantiate()
-			var parts: Array = []
-			for mesh in source.find_children("*", "MeshInstance3D", true, false):
-				var local = mesh.transform; var parent = mesh.get_parent()
-				while parent != source and parent is Node3D:
-					local = parent.transform * local; parent = parent.get_parent()
-				var display_mesh = mesh.mesh
-				if id == "moss_boulder":
-					display_mesh = display_mesh.duplicate()
-					for surface in display_mesh.get_surface_count():
-						display_mesh.surface_set_material(surface,preload("res://scripts/gorge_art.gd").boulder_material(display_mesh.surface_get_material(surface)))
-				if id in ["elm_field","elm_slender","alder_round","pine_natural"]:
-					display_mesh = display_mesh.duplicate()
-					for surface in display_mesh.get_surface_count():
-						var original = display_mesh.surface_get_material(surface)
-						if original is StandardMaterial3D and "foliage" in original.resource_name:
-							var leaf = ShaderMaterial.new(); leaf.shader = preload("res://shaders/tree_leaf.gdshader")
-							leaf.set_shader_parameter("leaf_texture", load("res://assets/terrain/pbr/spruce-spray.png" if id == "pine_natural" else "res://assets/terrain/pbr/elm-leaf.png"))
-							display_mesh.surface_set_material(surface, leaf)
-						elif original is StandardMaterial3D and "bark" in original.resource_name.to_lower():
-							var bark = original.duplicate(); bark.albedo_color = Color("695444") if id != "elm_slender" else Color("a3977e")
-							display_mesh.surface_set_material(surface, bark)
-				parts.append({"mesh": display_mesh, "transform": local})
-			sources[id] = {"box": Art.aabb(source), "parts": parts}
-			source.free()
-		var box: AABB = sources[id].box
-		for part in sources[id].parts:
-			var mm = MultiMesh.new(); mm.transform_format = MultiMesh.TRANSFORM_3D
-			mm.mesh = part.mesh; mm.instance_count = rows.size()
-			for i in rows.size():
-				var r = rows[i]
-				var scale_3d = Vector3(r[5] / maxf(box.size.x, .01), r[6] / maxf(box.size.y, .01), r[7] / maxf(box.size.z, .01))
-				var basis = Basis(Vector3.UP, r[4]).scaled_local(scale_3d)
-				var offset = Vector3(-box.get_center().x, -box.position.y, -box.get_center().z)
-				var transform = Transform3D(basis, Vector3(r[1], r[2], r[3]) + basis * offset)
-				mm.set_instance_transform(i, transform * part.transform)
-			var node = MultiMeshInstance3D.new(); node.name = "Art_" + id; node.multimesh = mm
-			node.visibility_range_end = 360 if id in ["oak", "pine", "elm_field", "elm_slender", "alder_round", "pine_natural", "rock_a", "rock_b", "bush", "moss_boulder"] else 800
-			node.visibility_range_end_margin = 30
-			add_child(node)
+		if not groups.has(row[0]): groups[row[0]] = []
+		groups[row[0]].append(row)
+	for id in groups:
+		var rows: Array = groups[id]
+		var source = tree_source(id)
+		if source.is_empty(): continue
+		var box: AABB = source.box
+		var transforms: Array = []
+		for r in rows:
+			var scale_3d = Vector3(r[5] / maxf(box.size.x, .01), r[6] / maxf(box.size.y, .01), r[7] / maxf(box.size.z, .01))
+			var basis = Basis(Vector3.UP, r[4]).scaled_local(scale_3d)
+			var offset = Vector3(-box.get_center().x, -box.position.y, -box.get_center().z)
+			transforms.append(Transform3D(basis, Vector3(r[1], r[2], r[3]) + basis * offset))
+		var tree = id in ["oak", "pine", "elm_field", "elm_slender", "alder_round", "pine_natural"]
+		var small = tree or id in ["rock_a", "rock_b", "bush", "moss_boulder"]
+		var end = 360.0 if small else 800.0
+		Lod.place(self, "Art_" + id, source.parts, transforms, Lod.bands("tree" if tree else "prop", end), {"end_margin": 30.0, "shadow_lod": true})
+
+## Части модели реквизита с материалами мира (листва деревьев, мох камней ущелья); кэш на сборку.
+var _sources: Dictionary = {}
+func tree_source(id: String) -> Dictionary:
+	if _sources.has(id): return _sources[id]
+	var path = ("res://assets/gorge/%s.glb" if id == "moss_boulder" else "res://assets/props/%s.glb") % id
+	if not ResourceLoader.exists(path): return {}
+	var source = Art.packed(path).instantiate()
+	var parts: Array = []
+	for part in Lod.scene_parts(source):
+		var display_mesh: Mesh = part.mesh
+		var foliage = false
+		if id == "moss_boulder":
+			display_mesh = display_mesh.duplicate()
+			for surface in display_mesh.get_surface_count():
+				display_mesh.surface_set_material(surface,preload("res://scripts/gorge_art.gd").boulder_material(display_mesh.surface_get_material(surface)))
+		if id in ["elm_field","elm_slender","alder_round","pine_natural"]:
+			display_mesh = display_mesh.duplicate()
+			for surface in display_mesh.get_surface_count():
+				var original = display_mesh.surface_get_material(surface)
+				if original is StandardMaterial3D and "foliage" in original.resource_name:
+					var leaf = ShaderMaterial.new(); leaf.shader = preload("res://shaders/tree_leaf.gdshader")
+					leaf.set_shader_parameter("leaf_texture", load("res://assets/terrain/pbr/spruce-spray.png" if id == "pine_natural" else "res://assets/terrain/pbr/elm-leaf.png"))
+					display_mesh.surface_set_material(surface, leaf); foliage = true
+				elif original is StandardMaterial3D and "bark" in original.resource_name.to_lower():
+					var bark = original.duplicate(); bark.albedo_color = Color("695444") if id != "elm_slender" else Color("a3977e")
+					display_mesh.surface_set_material(surface, bark)
+		parts.append({"mesh": display_mesh, "transform": part.transform, "foliage": foliage})
+	_sources[id] = {"box": Art.aabb(source), "parts": parts}
+	source.free()
+	return _sources[id]
 
 func _watchfires():
 	# A few warm pools guide the route out of the cold town; range limits mobile cost.

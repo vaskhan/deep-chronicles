@@ -1,11 +1,13 @@
 extends Node3D
 ## Рынок и сквер: расстановка и препятствия приходят из общего каталога мира.
 const Art = preload("res://scripts/art_assets.gd")
+const Lod = preload("res://scripts/lod.gd")
 var materials: Dictionary = {}
 var groups: Dictionary = {}
 var origin = Vector3.ZERO
 var orientation = Basis.IDENTITY
 var architecture: RefCounted
+var tree_transforms: Array = []
 
 func build():
 	_material("wood", Color("76523b"))
@@ -70,12 +72,94 @@ func build():
 				_model("bush",Vector3(0,.4,0),Vector3(2.5,1,1.5))
 			"cart": _cart()
 			"well": _well()
+	# Статика города сливается в один меш на материал и ячейку 100 м: сотни мелких MultiMesh
+	# (по одному на размер бруска) давали ~900 draw calls. Вымпелы и паруса качает шейдер
+	# по локальной вершине и позиции экземпляра — они остаются MultiMesh.
+	var merged: Dictionary = {}
 	for group in groups.values():
-		var mm = MultiMesh.new(); mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = group.mesh; mm.instance_count = group.transforms.size()
-		for i in mm.instance_count: mm.set_instance_transform(i, group.transforms[i])
-		var instance = MultiMeshInstance3D.new(); instance.multimesh = mm; instance.material_override = group.material; instance.position = group.anchor
-		instance.visibility_range_end = 650; instance.visibility_range_end_margin = 20; add_child(instance)
+		if group.material == materials.pennant:
+			var mm = MultiMesh.new(); mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = group.mesh; mm.instance_count = group.transforms.size()
+			for i in mm.instance_count: mm.set_instance_transform(i, group.transforms[i])
+			var instance = MultiMeshInstance3D.new(); instance.multimesh = mm; instance.material_override = group.material; instance.position = group.anchor
+			instance.visibility_range_end = 650; instance.visibility_range_end_margin = 20; add_child(instance)
+			continue
+		# Плоское у земли (мостовая, газоны, инкрустации) и мелочь (фрукты, цветы) тени не дают
+		# заметной — их каскады теней не перерисовывают.
+		var casters = []; var quiet = []
+		var bounds: AABB = group.mesh.get_aabb()
+		for t in group.transforms:
+			var box: AABB = t * bounds
+			var flat = box.size.y < .3 and _low(box, group.anchor)
+			var tiny = maxf(box.size.x, maxf(box.size.y, box.size.z)) < .35
+			(quiet if flat or tiny else casters).append(t)
+		for pack in [[casters, true], [quiet, false]]:
+			if pack[0].is_empty(): continue
+			var key = "%d%s%s" % [group.material.get_instance_id(), group.anchor, pack[1]]
+			if not merged.has(key): merged[key] = {"material": group.material, "anchor": group.anchor, "shadow": pack[1], "parts": []}
+			merged[key].parts.append({"mesh": group.mesh, "transforms": pack[0]})
+	for batch in merged.values():
+		var node = MeshInstance3D.new(); node.name = "TownStatic_%d" % get_child_count(); node.mesh = _merge(batch.parts)
+		node.material_override = batch.material; node.position = batch.anchor
+		if not batch.shadow: node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		node.visibility_range_end = 650; node.visibility_range_end_margin = 20; add_child(node)
+	if not tree_transforms.is_empty():
+		var source = get_parent().tree_source("elm_field")
+		Lod.place(self, "TownTree", source.parts, tree_transforms, Lod.bands("tree", 650.0), {"end_margin": 20.0, "shadow_lod": true})
+
+## Лежит ли плоская деталь у земли: верх не выше полуметра над рельефом под её центром.
+func _low(box: AABB, anchor: Vector3) -> bool:
+	var centre = box.get_center() + anchor
+	return box.end.y + anchor.y - GameData.height_at(centre.x, centre.z) < .5
+
+## Один статический меш из групп {mesh, transforms}. Нормали — обратной транспонированной
+## матрицей (бруски масштабируются неравномерно); у мешей без нормалей — нормаль грани.
+func _merge(parts: Array) -> ArrayMesh:
+	var vertices = PackedVector3Array(); var normals = PackedVector3Array(); var uvs = PackedVector2Array()
+	var indices = PackedInt32Array()
+	for group in parts:
+		for surface in group.mesh.get_surface_count():
+			var arrays = group.mesh.surface_get_arrays(surface)
+			var source: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var source_normals = arrays[Mesh.ARRAY_NORMAL]
+			var source_uvs = arrays[Mesh.ARRAY_TEX_UV]
+			var source_index = arrays[Mesh.ARRAY_INDEX]
+			if source_index == null or source_index.is_empty():
+				source_index = PackedInt32Array(range(source.size()))
+			var has_normals = source_normals != null and source_normals.size() == source.size()
+			for t in group.transforms:
+				var transform: Transform3D = t
+				var base = vertices.size()
+				var placed: PackedVector3Array = transform * source
+				vertices.append_array(placed)
+				if source_uvs != null and source_uvs.size() == source.size(): uvs.append_array(source_uvs)
+				else:
+					var blank = PackedVector2Array(); blank.resize(source.size()); uvs.append_array(blank)
+				var flip = transform.basis.determinant() < 0.0
+				if has_normals:
+					var turned: PackedVector3Array = Transform3D(transform.basis.inverse().transposed(), Vector3.ZERO) * source_normals
+					for i in turned.size():
+						var n = turned[i]
+						turned[i] = n.normalized() if n.length_squared() > 1e-12 else Vector3.UP
+					normals.append_array(turned)
+				else:
+					var flat = PackedVector3Array(); flat.resize(source.size()); flat.fill(Vector3.UP)
+					for i in range(0, source_index.size() - 2, 3):
+						var a = placed[source_index[i]]; var b = placed[source_index[i + 1]]; var c = placed[source_index[i + 2]]
+						var face = (c - a).cross(b - a)
+						if face.length_squared() > 1e-12:
+							for k in 3: flat[source_index[i + k]] = face.normalized()
+					normals.append_array(flat)
+				for i in range(0, source_index.size() - 2, 3):
+					if flip: indices.append_array([base + source_index[i], base + source_index[i + 2], base + source_index[i + 1]])
+					else: indices.append_array([base + source_index[i], base + source_index[i + 1], base + source_index[i + 2]])
+	var arrays = []; arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices; arrays[Mesh.ARRAY_NORMAL] = normals; arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	# Сжатые атрибуты (16-битные позиции в пределах ячейки, октаэдрические нормали): слитые
+	# бруски иначе заметно прибавляют к видеопамяти по сравнению с инстансингом.
+	var mesh = ArrayMesh.new(); mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Mesh.ARRAY_FLAG_COMPRESS_ATTRIBUTES)
+	return mesh
 
 func _plan_basis(data: Dictionary, angle = 0.0) -> Basis:
 	var s = float(data.get("scale",1.0))
@@ -99,7 +183,7 @@ func _box(pos: Vector3, size: Vector3, id: String, angle = 0.0):
 	_part(mesh, pos, id, "box" + str(size), Basis(Vector3.RIGHT, angle))
 
 func _cylinder(pos: Vector3, radius: float, height: float, id: String):
-	var mesh = CylinderMesh.new(); mesh.top_radius = radius; mesh.bottom_radius = radius; mesh.height = height; mesh.radial_segments = 12
+	var mesh = CylinderMesh.new(); mesh.top_radius = radius; mesh.bottom_radius = radius; mesh.height = height; mesh.radial_segments = 12; mesh.rings = 0
 	_part(mesh, pos, id, "cylinder%s,%s" % [radius,height])
 
 func _stall(color: String):
@@ -140,18 +224,10 @@ func _planter():
 
 func _tree():
 	_cylinder(Vector3(0,.18,0),2,.36,"stone"); _cylinder(Vector3(0,.37,0),1.8,.04,"soil")
-	var tree = Art.packed("res://assets/props/elm_field.glb").instantiate()
-	for node in tree.find_children("*", "MeshInstance3D", true, false):
-		var original = node.mesh.surface_get_material(0)
-		if original is StandardMaterial3D and "foliage" in original.resource_name:
-			var leaf = ShaderMaterial.new(); leaf.shader = preload("res://shaders/tree_leaf.gdshader")
-			leaf.set_shader_parameter("leaf_texture", load("res://assets/terrain/pbr/elm-leaf.png")); node.material_override = leaf
-		elif original is StandardMaterial3D:
-			var bark = original.duplicate(); bark.albedo_color = Color("695444"); node.material_override = bark
-	var bounds = Art.aabb(tree); var factor = 10.0 / maxf(.1,bounds.size.y)
-	tree.scale = Vector3.ONE * factor
-	tree.position = origin + Vector3(-bounds.get_center().x*factor, .4-bounds.position.y*factor, -bounds.get_center().z*factor)
-	add_child(tree)
+	# Сама крона — общий с лесом вяз с уровнями детализации (lod.gd), без отдельной копии сцены.
+	var source = get_parent().tree_source("elm_field")
+	var bounds: AABB = source.box; var factor = 10.0 / maxf(.1,bounds.size.y)
+	tree_transforms.append(Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * factor), origin + Vector3(-bounds.get_center().x*factor, .4-bounds.position.y*factor, -bounds.get_center().z*factor)))
 
 func _lamp():
 	_cylinder(Vector3(0,1.9,0),.095,3.8,"iron")
@@ -259,7 +335,7 @@ func _cart():
 	for x in [-1.25,1.25]:
 		for y in [1.15,1.5]: _box(Vector3(x,y,0),Vector3(.12,.25,3.5),"wood")
 		for z in [-1.2,1.2]:
-			var wheel = CylinderMesh.new(); wheel.top_radius = .58; wheel.bottom_radius = .58; wheel.height = .14; wheel.radial_segments = 16
+			var wheel = CylinderMesh.new(); wheel.top_radius = .58; wheel.bottom_radius = .58; wheel.height = .14; wheel.radial_segments = 16; wheel.rings = 0
 			_part(wheel,Vector3(x*1.2,.6,z),"wood","wheel",Basis(Vector3.BACK,PI/2))
 			var rim = TorusMesh.new(); rim.inner_radius = .51; rim.outer_radius = .59; rim.rings = 20; rim.ring_segments = 6
 			_part(rim,Vector3(x*1.2,.6,z),"iron","rim",Basis(Vector3.BACK,PI/2))

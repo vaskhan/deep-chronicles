@@ -10,6 +10,7 @@ var material: ShaderMaterial
 var patches = FastNoiseLite.new()
 var tree_grid: Dictionary = {}
 var shrubs: Dictionary = {}
+var lod_split = 40.0
 
 func _ready():
  patches.seed=34821; patches.frequency=.022; patches.fractal_octaves=3
@@ -26,6 +27,14 @@ func _ready():
  meshes.gold = _flowers(Color("f3c64b"))
  meshes.blue = _flowers(Color("859fea"))
  meshes.pink = _flowers(Color("d779a2"))
+ # Дальние участки — упрощённые кустики того же цвета и размера (в 3–5 раз меньше треугольников).
+ meshes.grass_far = _tuft(Color("709744"), false, true)
+ meshes.dry_far = _tuft(Color("b7a366"), false, true)
+ meshes.fern_far = _tuft(Color("3b8256"), true, true)
+ meshes.gold_far = _flowers(Color("f3c64b"), true)
+ meshes.blue_far = _flowers(Color("859fea"), true)
+ meshes.pink_far = _flowers(Color("d779a2"), true)
+ lod_split = Tuning.UNDERSTORY_LOD_PC if preload("res://scripts/quality.gd").current == 1 else Tuning.UNDERSTORY_LOD_MOBILE
  _load_shrubs()
  _gardens()
 
@@ -118,15 +127,18 @@ func _batch(parent: Node3D, kind: String, transforms: Array):
    var placed: Array=[]
    for transform in transforms: placed.append(transform*part.transform)
    _make_batch(parent,part.mesh,part.material,placed)
- else: _make_batch(parent,meshes[kind],material,transforms)
+ else:
+  _make_batch(parent,meshes[kind],material,transforms,0.0,lod_split)
+  _make_batch(parent,meshes[kind+"_far"],material,transforms,lod_split,190.0)
 
-func _make_batch(parent: Node3D, mesh: Mesh, mat: Material, transforms: Array):
+## begin/end — дальности по центру участка; ближний и дальний уровни делят их без зазора.
+func _make_batch(parent: Node3D, mesh: Mesh, mat: Material, transforms: Array, begin := 0.0, end := 190.0):
  var mm = MultiMesh.new(); mm.transform_format = MultiMesh.TRANSFORM_3D
  mm.mesh = mesh; mm.instance_count = transforms.size()
  for i in transforms.size(): mm.set_instance_transform(i,transforms[i])
  var node = MultiMeshInstance3D.new(); node.multimesh=mm; node.material_override=mat
  node.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
- node.visibility_range_end=190; node.extra_cull_margin=2.0
+ node.visibility_range_begin=begin; node.visibility_range_end=end; node.extra_cull_margin=2.0
  parent.add_child(node)
 
 func _load_shrubs():
@@ -176,26 +188,29 @@ func _triangle(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, color: Color
  _vertex(st,b,Vector2(1,tip*.6),color)
  _vertex(st,c,Vector2(.5,tip),color.lightened(.08))
 
-func _tuft(color: Color, fern: bool) -> ArrayMesh:
+func _tuft(color: Color, fern: bool, low := false) -> ArrayMesh:
  var st=SurfaceTool.new(); st.begin(Mesh.PRIMITIVE_TRIANGLES)
  var rng=RandomNumberGenerator.new(); rng.seed=731 if fern else 123
- for blade in (6 if fern else 24):
+ # Дальний вариант: вдвое меньше и шире травинки, два сегмента вместо пяти, меньше листочков.
+ var segments = 2 if low else 5
+ for blade in (6 if fern else (12 if low else 24)):
   var angle=blade*2.399+rng.randf()*.7
   var dir=Vector3(cos(angle),0,sin(angle)); var across=Vector3(-dir.z,0,dir.x)
   var base=dir*rng.randf_range(.03,.5)
   var height=rng.randf_range(.3,.75)*(1.35 if fern else 1.0)
-  var width=.014 if fern else rng.randf_range(.012,.031)
+  var width=.014 if fern else rng.randf_range(.012,.031)*(1.6 if low else 1.0)
   var c=color.darkened(rng.randf_range(0,.23))
-  for segment in 5:
-   var t=segment/5.0; var u=(segment+1)/5.0
+  for segment in segments:
+   var t=float(segment)/segments; var u=float(segment+1)/segments
    var a=base+dir*height*t*t*.75+Vector3.UP*height*sin(t*1.4)
    var b=base+dir*height*u*u*.75+Vector3.UP*height*sin(u*1.4)
    var aw=across*width*(1-t); var bw=across*width*(1-u)
    _vertex(st,a-aw,Vector2(0,t),c); _vertex(st,a+aw,Vector2(1,t),c); _vertex(st,b+bw,Vector2(1,u),c)
    _vertex(st,a-aw,Vector2(0,t),c); _vertex(st,b+bw,Vector2(1,u),c); _vertex(st,b-bw,Vector2(0,u),c)
   if fern:
-   for j in 9:
-    var t=(j+1)/11.0
+   var leaflets=4 if low else 9
+   for j in leaflets:
+    var t=(j+1)/(leaflets+2.0)
     var center=base+dir*height*t*t*.75+Vector3.UP*height*sin(t*1.4)
     var leaf_size=sin(t*PI)*height*.32
     for sign_value in [-1,1]:
@@ -205,19 +220,20 @@ func _tuft(color: Color, fern: bool) -> ArrayMesh:
      _triangle(st,center,end,mid+dir*.035,c,t)
  st.generate_normals(); return st.commit()
 
-func _flowers(color: Color) -> ArrayMesh:
+func _flowers(color: Color, low := false) -> ArrayMesh:
  var st=SurfaceTool.new(); st.begin(Mesh.PRIMITIVE_TRIANGLES)
  for f in 3:
   var angle=f*2.399; var base=Vector3(cos(angle)*.31,0,sin(angle)*.31)
   var top=base+Vector3(.07,.32+f*.055,.04)
   _triangle(st,base-Vector3(.008,0,0),base+Vector3(.008,0,0),top,Color("385b2b"))
-  for petal in 8:
-   var a=petal*TAU/8; var d=Vector3(cos(a),0,sin(a)); var side=Vector3(-d.z,0,d.x)
+  var petals=4 if low else 8
+  for petal in petals:
+   var a=petal*TAU/petals; var d=Vector3(cos(a),0,sin(a)); var side=Vector3(-d.z,0,d.x)
    var mid=top+d*.085+Vector3.UP*.012
    var tip=top+d*.14+Vector3.UP*.037
    _triangle(st,top,mid-side*.035,tip,color)
    _triangle(st,top,tip,mid+side*.035,color)
-   _triangle(st,top+Vector3.UP*.015,top+d*.035+Vector3.UP*.019,top+d.rotated(Vector3.UP,TAU/8)*.035+Vector3.UP*.019,Color("bd8a26"))
+   if not low: _triangle(st,top+Vector3.UP*.015,top+d*.035+Vector3.UP*.019,top+d.rotated(Vector3.UP,TAU/8)*.035+Vector3.UP*.019,Color("bd8a26"))
   for side in [-1,1]:
    var stem=base+Vector3(0,.14,0)
    _triangle(st,stem,stem+Vector3(side*.15,.07,.018),stem+Vector3(side*.07,.075,-.025),Color("426b30"))
