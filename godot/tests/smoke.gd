@@ -361,7 +361,7 @@ func _run():
 	check(await wait_for(func(): return peer_inbox.any(func(m): return m.t == "authok")), "second player authenticates")
 	for m in peer_inbox:
 		if m.t == "authok": peer_id = int(m.id)
-	await _dev({"x": -448, "z": 418})
+	await _dev({"x": -428, "z": 410})
 	check(await wait_for(func(): return game.players.has(peer_id) and game.players[peer_id].visible), "native multiplayer renders a remote player")
 	peer.send_text(JSON.stringify({"t": "dev", "lvl": 10, "sp": 1000, "hp": 30}))
 	await create_timer(0.2).timeout
@@ -382,7 +382,9 @@ func _run():
 		await _dev({"x": pelt_drop.position.x - 6, "z": pelt_drop.position.z})
 		await create_timer(0.2).timeout
 		game.pick(game.camera.unproject_position(pelt_drop.position + pelt_drop.label.position))
-		check(await wait_for(func(): return _bag("pelt") >= 0 and not game.ground_loot.has(drop_id)), "click approaches a distant ground item and it enters the authoritative inventory")
+		var picked = await wait_for(func(): return _bag("pelt") >= 0 and not game.ground_loot.has(drop_id))
+		if not picked: print("DIAG_PICKUP ", JSON.stringify({"hero": str(game.hero.position), "drop": str(pelt_drop.position) if is_instance_valid(pelt_drop) else "gone", "pending": game.pending_pickup, "has_destination": game.has_destination, "on_ground": game.ground_loot.has(drop_id), "in_bag": _bag("pelt"), "moving": game.hero.moving}))
+		check(picked, "click approaches a distant ground item and it enters the authoritative inventory")
 		peer_inbox.clear()
 		check(await wait_for(func(): return peer_inbox.any(func(m): return m.t == "snap" and not m.get("g", []).any(func(d): return d.id == drop_id))), "pickup disappears from both clients")
 	game.hud.show_window("inventory")
@@ -556,14 +558,18 @@ func _test_audio_bank():
 		AudioServer.remove_bus_effect(0, index)
 
 func _test_locomotion():
-	await _dev({"x": -448, "z": 418})
+	await _dev({"x": -428, "z": 410})
 	var start = game.hero.position
 	var direction = Vector3.ZERO
+	# Свободной должна быть вся дорога, а не только конечная точка: дома и фундаменты
+	# гавани стоят поперёк части направлений, и герой честно упирается в них на полпути.
 	for i in 16:
 		var trial = Vector3(sin(i * TAU / 16), 0, cos(i * TAU / 16))
-		var candidate = start + trial * 16
-		if data.move(candidate, Vector3.ZERO, 0.01).distance_to(candidate) < 0.1:
-			direction = trial; break
+		var clear_path = true
+		for step in range(1, 33):
+			var point = start + trial * step * 0.5
+			if data.move(point, Vector3.ZERO, 0.01).distance_to(point) > 0.05: clear_path = false; break
+		if clear_path: direction = trial; break
 	game.destination = start + direction * 16; game.has_destination = true
 	check(await wait_for(func(): return game.hero.moving and game.hero.last_clip == "run"), "actual click movement selects the full-body running clip")
 	await create_timer(0.2).timeout
@@ -574,7 +580,9 @@ func _test_locomotion():
 	await create_timer(0.11).timeout
 	check(not pose.is_equal_approx(skeleton.get_bone_global_pose(bone)), "the running skeleton moves its feet between real rendered frames")
 	await _screenshot("motion-running.png")
-	check(await wait_for(func(): return not game.has_destination), "hero reaches the clicked point with the slower server-compatible speed")
+	var arrived = await wait_for(func(): return not game.has_destination)
+	if not arrived: print("DIAG_LOCOMOTION ", JSON.stringify({"start": str(start), "hero": str(game.hero.position), "destination": str(game.destination), "moving": game.hero.moving, "left": snappedf(game.hero.position.distance_to(game.destination), 0.01), "attacking": game.attacking}))
+	check(arrived, "hero reaches the clicked point with the slower server-compatible speed")
 	await create_timer(0.2).timeout
 	var steps = game.game_audio.play_counts.get("step_concrete", 0)
 	check(steps > 0, "distance-driven recorded stone footsteps accompany the run")
@@ -693,7 +701,7 @@ func _test_mob_telegraph():
 	check(not strike.get("landed", true), "running out of the telegraph avoids the actual server hit")
 	if windup_image: windup_image.save_png(artifacts.path_join("mob-windup.png") if not artifacts.is_empty() else "user://native-mob-windup.png")
 	await _screenshot("mob-dodge.png")
-	await _dev({"x": -448, "z": 418, "hp": 500})
+	await _dev({"x": -428, "z": 410, "hp": 500})
 	check(game.combat_fx.telegraphs.is_empty(), "teleport clears all monster warning geometry")
 
 func _bag(id: String) -> int:
@@ -770,6 +778,9 @@ func _test_profession():
 	check(data.stats(game.profile).patk > before_passive, "learned passive changes native stats")
 	game.hud.skills_filter = "active"
 	await _dev({"lvl": 40, "sp": 100000})
+	# Сервер принимает выбор профессии не чаще раза в секунду (PROF_CD): в headless тест доходит
+	# сюда быстрее, чем игрок набирает 20 уровней, и второй выбор отклонялся как повтор.
+	await create_timer(1.1).timeout
 	game.hud.show_window("profession"); await process_frame
 	_click("prof", "paladin")
 	check(await wait_for(func(): return game.profile.get("prof2", "") == "paladin"), "second promotion is selected on the server at level 40")
@@ -998,8 +1009,9 @@ func _test_starter_hunt():
 	await create_timer(0.3).timeout; await _screenshot("starter-hunt.png")
 
 func _ranked_mob():
+	# Тела лежат после смерти и остаются видимыми: аура положена только живой элите.
 	for mob in game.mobs.values():
-		if mob.visible and not mob.rank.is_empty(): return mob
+		if mob.visible and not mob.dead and not mob.rank.is_empty(): return mob
 	return null
 
 ## Значки эффектов у цели: сервер накладывает урон со временем и ослабление, клиент их рисует.
@@ -1048,6 +1060,7 @@ func _test_elite():
 	game.set_target(elite)
 	game.camera_distance = 14; game.camera_pitch = 0.6
 	await create_timer(0.6).timeout
+	if not elite.rank_aura.visible: print("DIAG_AURA ", JSON.stringify({"dead": elite.dead, "visible": elite.visible, "attacking": game.attacking, "hero_lvl": game.profile.get("lvl", 0), "hp": elite.get("hp_ratio") if "hp_ratio" in elite else null}))
 	check(elite.rank_aura.visible, "aura is drawn while the elite is alive")
 	await _screenshot("elite-mob.png")
 	game.set_target(null)
