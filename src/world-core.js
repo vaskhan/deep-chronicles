@@ -1,7 +1,8 @@
+import { TEMPLE_BARRIERS, TEMPLE_FLOOR_TRIANGLES } from './town-temple-geometry.js';
 import { SHOP_FLOOR_TRIANGLES } from './town-shop-floor.js';
 import { HOUSE_BARRIERS } from './town-house-geometry.js';
 import { harborLandscapeHeight } from './harbor-landscape.js';
-import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight, HARBOR_PIERS, HARBOR_PLATFORMS } from './town-layout.js';
+import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight, HARBOR_PIERS, HARBOR_STAIRS, HARBOR_LANDINGS, HARBOR_PLATFORMS } from './town-layout.js';
 import { GORGE, GORGE_TIERS, GORGE_ARRIVAL, FALLS, POOL, SUMMIT_YARD, gorgeHeight, inGorge, gorgeLocal, gorgeWorld, gorgeObstacles, gorgeSpawns, halfWidth, floorAt, riverS, tierAt } from './gorge.js';
 // Ядро мира без three.js: рельеф, зоны, расстановка построек, препятствия, спавны.
 // Формы передаются наружу через «эмиттер» B — клиент строит из них меши, сервер берёт пустышку.
@@ -109,7 +110,6 @@ function buildHarborWalls(t,layout,B,heightAt) {
     }
   }
   for(let x=39;x<=110;x+=2.5)if(x<57||x>75)addObs(t.x+x,t.z-44,1.4);
-  for(const x of [51,81])for(const z of [-59,-72,-87])addObs(t.x+x,t.z+z,.65);
   // Ограждение края воды с проёмами к трём причалам.
   for(let z=-24;z<=105;z+=2)if(![25,50,75].some(p=>Math.abs(z-p)<4))addObs(t.x+114,t.z+z,.9);
 }
@@ -171,8 +171,13 @@ function buildTownPlan(t, B, npcs, heightAt) {
   for (const g of layout.gates) for (const o of gateObstacles(g)) addObs(t.x+o.x,t.z+o.z,o.r);
   // Храм на собственной террасе, а не на общей оси всех домов.
   const tx=t.x+layout.temple.x,tz=t.z+layout.temple.z,ty=heightAt(tx,tz);
-  B.use('brick'); B.add('box',0xeeeae0,tx,ty+7,tz,0,16,14,12);
-  B.use('roof'); B.add('cone4',0xc8a040,tx,ty+19,tz,0,16,10,12);addObs(tx,tz,9);
+  if(layout.temple.interior) {
+    const factor=layout.temple.modelScale/t.scale;
+    for(const [x,z] of TEMPLE_BARRIERS)addObs(tx+x*factor,tz+z*factor,.08*factor);
+  } else {
+    B.use('brick'); B.add('box',0xeeeae0,tx,ty+7,tz,0,16,14,12);
+    B.use('roof'); B.add('cone4',0xc8a040,tx,ty+19,tz,0,16,10,12);addObs(tx,tz,9);
+  }
   for(const hall of layout.civic)for(const o of shopObstacles(hall))addObs(t.x+o.x,t.z+o.z,o.r);
   for (const item of layout.decor) addObs(t.x + item.x, t.z + item.z, item.r);
   for (const shop of layout.shops) for (const o of shopObstacles(shop)) addObs(t.x+o.x,t.z+o.z,o.r);
@@ -186,7 +191,7 @@ function buildTownPlan(t, B, npcs, heightAt) {
       x:t.x+generalShop.x+generalShop.interior.sellerX*generalShop.modelScale/t.scale,
       z:t.z+generalShop.z-7+generalShop.interior.generalSellerZ*generalShop.modelScale/t.scale}
       : {x:t.x-20.5,z:t.z+7}), color: 0xd09030 });
-  npcs.push({ id: t.id + ':priest', town: t.id, role: 'priest', name: 'Жрец', x: tx, z: tz + 13, color: 0xf0e8d0 });
+  npcs.push({ id: t.id + ':priest', town: t.id, role: 'priest', name: 'Жрец', x: tx, z: tz + (layout.temple.interior?-3*layout.temple.modelScale/t.scale:13), color: 0xf0e8d0 });
   for (const shop of layout.shops) npcs.push({id:t.id+':'+shop.id,town:t.id,role:'merchant',shop:shop.id,name:shop.name,rotation:shop.frontage?-Math.PI/2:0,x:t.x+shop.x+(shop.frontage?shop.interior.sellerX*shop.modelScale/.8:0),z:t.z+shop.z+(shop.frontage?-7:2),color:0xc4a479});
   // Стражи стоят у настоящих входов.
   layout.gates.forEach((g,i)=>{const c=Math.cos(g.rotation),s=Math.sin(g.rotation);
@@ -429,8 +434,10 @@ export function buildProps(B = nullEmitter) {
   const placed=(key)=>TOWNS.flatMap(t=>(townLayout(t.id)[key]||[]).map(v=>({...v,town:t.id,scale:t.scale,x:t.x+(v.x||0)*t.scale,z:t.z+(v.z||0)*t.scale,...(v.points?{points:v.points.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])}:{})})));
   const harbor=TOWNS[0];
   const townPiers=HARBOR_PIERS.map(p=>({x0:harbor.x+p.x0*harbor.scale,x1:harbor.x+p.x1*harbor.scale,z:harbor.z+p.z*harbor.scale,halfWidth:p.halfWidth*harbor.scale,y:p.y}));
-  const townFloors=HARBOR_PLATFORMS.filter(b=>b.frontage).map(b=>({x:harbor.x+b.x*harbor.scale,z:harbor.z+(b.z-7)*harbor.scale,w:b.w*harbor.scale,d:b.d*harbor.scale,modelScale:b.modelScale,y:b.groundY+.08}));
-  props = {shopFloorTriangles:SHOP_FLOOR_TRIANGLES,townFloors,townPiers,npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
+  const townStairs=HARBOR_STAIRS.map(s=>({x:harbor.x+s.x*harbor.scale,halfWidth:s.halfWidth*harbor.scale,z0:harbor.z+s.z0*harbor.scale,z1:harbor.z+s.z1*harbor.scale,y:s.y}));
+  const townLandings=HARBOR_LANDINGS.map(s=>({x:harbor.x+s.x*harbor.scale,halfWidth:s.halfWidth*harbor.scale,z0:harbor.z+s.z0*harbor.scale,z1:harbor.z+s.z1*harbor.scale,y:s.y}));
+  const townFloors=HARBOR_PLATFORMS.filter(b=>b.frontage||b.id==='temple').map(b=>({x:harbor.x+b.x*harbor.scale,z:harbor.z+(b.z-(b.frontage?7:0))*harbor.scale,w:b.w*harbor.scale,d:b.d*harbor.scale,modelScale:b.modelScale,y:b.groundY+.08,floorOffset:b.id==='temple'?0:.13175,triangles:b.id==='temple'?'templeFloorTriangles':'shopFloorTriangles'}));
+  props = {townLandings,townStairs,templeFloorTriangles:TEMPLE_FLOOR_TRIANGLES,shopFloorTriangles:SHOP_FLOOR_TRIANGLES,townFloors,townPiers,npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({...townLayout(t.id).temple,town:t.id,scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
   return props;
 }
 

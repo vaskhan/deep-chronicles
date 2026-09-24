@@ -19,6 +19,17 @@ func _run():
     assert(camera.position.y<hero.position.y+4.4)
     assert(main.camera_distance==40) # outdoor zoom preference survives indoors
     checks+=1
+ for temple in data.world.townTemples:
+  if not temple.get("interior",false):continue
+  for z in [6,3,0,-3]:
+   hero.position=data.position_at(temple.x,temple.z+z*temple.modelScale)
+   for direction in 8:
+    main.camera_yaw=direction*TAU/8;main.camera_distance=40;main._update_camera(.016)
+    assert(absf(camera.position.x-temple.x)<=2.6*temple.modelScale-.59)
+    assert(absf(camera.position.z-temple.z)<=7.3*temple.modelScale-.59)
+    assert(camera.position.y<hero.position.y+4.4)
+    assert(main.camera_distance==40)
+    checks+=1
  hero.position=data.position_at(-430,400);main.initial_camera=true;main._update_camera(.016)
  assert(camera.position.distance_to(hero.position)>35)
  print("SHOP_CAMERA_OK checks=",checks+1)

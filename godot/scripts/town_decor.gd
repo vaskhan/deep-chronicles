@@ -52,6 +52,8 @@ func build():
 	for house in GameData.world.get("townHouses", []):
 		origin = GameData.position_at(house.x,house.z); orientation = _plan_basis(house,house.rotation)
 		architecture.house(house)
+	for temple in GameData.world.get("townTemples", []):
+		if temple.get("interior",false): _temple(temple)
 	for road in GameData.world.get("townRoads", []):
 		if road.has("points"): _road(road); continue
 		origin = GameData.position_at(road.x, road.z); orientation = Basis.IDENTITY
@@ -286,12 +288,15 @@ func _shop_frontage(shop: Dictionary):
 	if not ResourceLoader.exists(path):
 		# Defensive fallback for a damaged installation; the full kit ships in assets/town/houses.
 		var fallback=shop.duplicate();fallback.frontage=false;_shop(fallback);return
-	var shell=Art.packed(path).instantiate()
+	var shell=Art.packed(path).instantiate();shell.name="Building_"+shop.id
 	var factor=float(shop.modelScale)
 	shell.scale=Vector3.ONE*factor
 	shell.position=origin+orientation*Vector3(0,0,-7)+Vector3.UP*(.08-.13175*factor)
 	add_child(shell)
 	for part in shell.find_children("*","MeshInstance3D",true,false):
+		# The source kit's weapon-shop signs belong only on the weapons shop.
+		if shop.id != "weapons" and (part.name.begins_with("interior_B_fsign") or part.name.begins_with("interior_B_sign")):
+			part.hide()
 		for surface in part.mesh.get_surface_count():
 			var source=part.get_active_material(surface)
 			if source is BaseMaterial3D:
@@ -430,6 +435,8 @@ func _road(road: Dictionary):
 			var on_pier = false
 			for pier in GameData.world.get("townPiers", []):
 				if middle.x >= pier.x0 and middle.x <= pier.x1 and absf(middle.y-pier.z) <= pier.halfWidth: on_pier = true
+			for step in GameData.world.get("townStairs",[])+GameData.world.get("townLandings",[]):
+				if absf(middle.x-step.x)<=step.halfWidth and middle.y>=step.z0 and middle.y<=step.z1:on_pier=true
 			if on_pier: continue
 			for k in [0,2,1,1,2,3]:
 				var v = strip[k]; vertices.append(GameData.position_at(v.x,v.y)+Vector3.UP*.012)
@@ -446,14 +453,22 @@ func _temple_terrace():
 		if x > 56 and x < 76: continue
 		_box(Vector3(x,8,-44),Vector3(3,7.4,1.4),"stone")
 		_box(Vector3(x,12,-44),Vector3(3.1,.5,1.8),"trim")
-	for z in range(-40,-55,-2):
-		var y = GameData.height_at(origin.x+66*orientation.x.length(),origin.z+z*orientation.z.length())
-		_box(Vector3(66,y-.17,z),Vector3(11,.4,2),"stone")
-	for x in [51,81]:
-		for z in [-59,-72,-87]:
-			_cylinder(Vector3(x,15,z),.55,6,"stone")
-			_box(Vector3(x,18.3,z),Vector3(1.6,.6,1.6),"cream")
-		_box(Vector3(x,18.8,-73),Vector3(1.6,.65,31),"stone")
+	var saved_origin=origin;var saved_orientation=orientation
+	origin=Vector3.ZERO;orientation=Basis.IDENTITY
+	for landing in GameData.world.get("townLandings",[]):
+		_box(Vector3(landing.x,landing.y-.4,(landing.z0+landing.z1)*.5),Vector3(landing.halfWidth*2,.8,landing.z1-landing.z0),"stone")
+	for step in GameData.world.get("townStairs",[]):
+		_box(Vector3(step.x,step.y-.5,(step.z0+step.z1)*.5),Vector3(step.halfWidth*2,1,step.z1-step.z0),"stone")
+	origin=saved_origin;orientation=saved_orientation
+
+func _temple(temple: Dictionary):
+	var model=Art.packed("res://assets/town/houses/temple_complete.glb").instantiate();model.name="HarborTemple"
+	model.scale=Vector3.ONE*temple.modelScale
+	model.position=Vector3(temple.x,GameData.terrain_height_at(temple.x,temple.z)+.08,temple.z)
+	add_child(model)
+	for z in [-8,4,12]:
+		var light=OmniLight3D.new();light.position=model.position+Vector3(0,5,z)
+		light.light_color=Color("ffe0b6");light.light_energy=1.0;light.omni_range=12;add_child(light)
 
 func _hall(hall: Dictionary):
 	_shop_frontage(hall)

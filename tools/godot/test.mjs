@@ -10,6 +10,10 @@ const binary = built ? path.join(root, process.platform === 'win32' ? 'godot/bui
 if (!built) {
   await run(process.execPath, ['tools/godot/export.mjs']);
   await run(binary, ['--headless', '--path', 'godot', '--editor', '--import', '--quit']);
+  // Run geometric regressions before the network smoke test, also in CI.
+  for (const name of ['harbor_assets','shop_access','temple_access','temple_stairs','hero_detail','shop_camera','shop_signs']) {
+    await geometryTest(name);
+  }
 }
 const probe = net.createServer();
 await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
@@ -47,4 +51,19 @@ try {
   godot?.kill(); server.kill();
   await new Promise(resolve => server.exitCode !== null ? resolve() : server.once('exit', resolve));
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+async function geometryTest(name) {
+  const child = spawn(binary, ['--headless', '--path', 'godot', '--script', `res://tests/${name}.gd`], {cwd: root, stdio: ['ignore','pipe','pipe']});
+  let output = '';
+  for (const stream of [child.stdout,child.stderr]) stream.on('data', chunk => {output += chunk; process.stdout.write(chunk);});
+  await new Promise((resolve,reject) => {
+    const timer = setTimeout(() => {child.kill(); reject(new Error(`Geometry test timed out: ${name}`));},60000);
+    child.on('error',error => {clearTimeout(timer);reject(error);});
+    child.on('exit',code => {
+      clearTimeout(timer);
+      if(code!==0 || /SCRIPT ERROR:|ERROR:|WARNING:/.test(output) || !output.includes(`${name.toUpperCase()}_OK`)) reject(new Error(`Geometry test failed: ${name}`));
+      else resolve();
+    });
+  });
 }

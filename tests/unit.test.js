@@ -373,7 +373,9 @@ test('порт и храм: поверхность движения совпад
     assert.ok(Math.abs(heightAt(wx,wz)-pier.y)<.01,`настил ${x},${pier.z}`);
     assert.ok(Math.abs(presentationHeightAt(wx,wz)-pier.y)<.01,'клиентская сетка причала');
   }
-  assert.equal(heightAt(-430+66*TOWNS[0].scale,400-76*TOWNS[0].scale),12);
+  const templeX=-430+66*TOWNS[0].scale,templeZ=400-76*TOWNS[0].scale;
+  assert.equal(heightAt(templeX,templeZ,false),12,'земля под храмом');
+  assert.equal(heightAt(templeX,templeZ),12.11,'пол храма на 11 см выше земли');
   assert.ok(heightAt(-430+140*TOWNS[0].scale,400+10*TOWNS[0].scale)<-6.5,'вода должна закрывать дно');
 });
 

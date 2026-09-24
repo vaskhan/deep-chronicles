@@ -26,16 +26,20 @@ func color(value) -> Color:
 func height_at(x: float, z: float) -> float:
 	for pier in world.get("townPiers", []):
 		if x >= pier.x0 and x <= pier.x1 and absf(z-pier.z) <= pier.halfWidth: return pier.y
+	for step in world.get("townStairs",[]):
+		if absf(x-step.x)<=step.halfWidth and z>=step.z0 and z<=step.z1:return step.y
 	var height=terrain_height_at(x,z)
+	for landing in world.get("townLandings",[]):
+		if absf(x-landing.x)<=landing.halfWidth and z>=landing.z0 and z<=landing.z1:height=maxf(height,landing.y)
 	for floor in world.get("townFloors",[]):
 		if absf(x-floor.x)>floor.w*.5 or absf(z-floor.z)>floor.d*.5:continue
 		var px=(x-floor.x)/floor.modelScale;var pz=(z-floor.z)/floor.modelScale
-		for tri in world.get("shopFloorTriangles",[]):
+		for tri in world.get(floor.get("triangles","shopFloorTriangles"),[]):
 			var d=(tri[3]-tri[5])*(tri[0]-tri[4])+(tri[4]-tri[2])*(tri[1]-tri[5])
 			if absf(d)<.00000001:continue
 			var u=((tri[3]-tri[5])*(px-tri[4])+(tri[4]-tri[2])*(pz-tri[5]))/d
 			var v=((tri[5]-tri[1])*(px-tri[4])+(tri[0]-tri[4])*(pz-tri[5]))/d
-			if u>=-.00001 and v>=-.00001 and u+v<=1.00001:height=maxf(height,floor.y+(tri[6]-.13175)*floor.modelScale)
+			if u>=-.00001 and v>=-.00001 and u+v<=1.00001:height=maxf(height,floor.y+(tri[6]-floor.get("floorOffset",.13175))*floor.modelScale)
 	return height
 
 func terrain_height_at(x: float, z: float) -> float:

@@ -1,3 +1,4 @@
+import { TEMPLE_FLOOR_TRIANGLES } from './town-temple-geometry.js';
 import { SHOP_FLOOR_TRIANGLES } from './town-shop-floor.js';
 import { SHOP_BARRIERS } from './town-shop-geometry.js';
 import { houseDimensions } from './town-house-kit.js';
@@ -86,11 +87,21 @@ TOWN_DECOR.push({kind:'well',x:45,z:-12,r:2,rotation:0});
 
 // Светлая Гавань: отдельный мастер-план. Каменный Брод сохраняет прежнюю схему.
 export const HARBOR_PIERS = [25,50,75].map(z=>({x0:105,x1:155,z,halfWidth:2.9,y:-2.75}));
+// One shared description supplies the visible stair treads and movement heights.
+const STAIR_RUN={x:66,halfWidth:5.5,bottomZ:-38,topZ:-56,bottomY:7,topY:12,count:32};
+export const HARBOR_STAIRS=Array.from({length:STAIR_RUN.count},(_,i)=>{
+ const s=STAIR_RUN,depth=(s.bottomZ-s.topZ)/s.count;
+ return {x:s.x,halfWidth:s.halfWidth,z0:s.bottomZ-(i+1)*depth,z1:s.bottomZ-i*depth,y:s.bottomY+(i+1)*(s.topY-s.bottomY)/s.count};
+});
+export const HARBOR_LANDINGS=[
+ {x:STAIR_RUN.x,halfWidth:STAIR_RUN.halfWidth,z0:STAIR_RUN.bottomZ,z1:STAIR_RUN.bottomZ+3,y:STAIR_RUN.bottomY},
+ {x:STAIR_RUN.x,halfWidth:STAIR_RUN.halfWidth,z0:STAIR_RUN.topZ-3,z1:STAIR_RUN.topZ,y:STAIR_RUN.topY},
+];
 const harbor = {
-  temple:{x:66,z:-76},
+  temple:{id:'temple',name:'Храм Света',x:66,z:-84,modelScale:3.0,w:40,d:80,interior:true},
   outline:[[-119,-75],[-62,-115],[32,-120],[102,-114],[119,-50],[110,90],[55,110],[-30,108],[-111,78],[-130,20]],
   gates:[{x:-127.7,z:0,rotation:-1.686},{x:-5,z:108.59,rotation:.024},{x:-8,z:-117.87,rotation:-3.088}],
-  shops:[{...TOWN_SHOPS[0],frontage:true,...houseDimensions("SI_SH02",3.6),x:-55,z:-16},{...TOWN_SHOPS[1],frontage:true,...houseDimensions("SI_SH02",3.6),x:-55,z:22},{...TOWN_SHOPS[2],frontage:true,...houseDimensions("SI_SH02",3.6),x:-96,z:32}],
+  shops:[{...TOWN_SHOPS[0],frontage:true,...houseDimensions("SI_SH02"),x:-55,z:-16},{...TOWN_SHOPS[1],frontage:true,...houseDimensions("SI_SH02"),x:-55,z:22},{...TOWN_SHOPS[2],frontage:true,...houseDimensions("SI_SH02"),x:-96,z:32}],
   houses:[], roads:[], decor:TOWN_DECOR.filter(d=>['lamp','barrels','cart'].includes(d.kind)).map(d=>d.kind==='cart'?{...d,x:-36,z:-11}:d.kind==='barrels'?{...d,x:-31,z:d.z===-1?-8:d.z}:d),
   civic:[{id:'forge',name:'Кузнечный двор',x:-92,z:73,w:18,d:14,h:11},{id:'guild',name:'Дом гильдий',x:34,z:79,w:22,d:16,h:10},{id:'warehouse',name:'Портовый склад',x:82,z:72,w:20,d:13,h:12}],
 };
@@ -105,12 +116,12 @@ road('Портовая улица',7,[[4,34],[32,37],[55,45],[79,51],[109,50],[1
 road('Старый город',5,[[-108,5],[-113,-16],[-109,-45],[-101,-62],[-77,-69],[-52,-65],[-29,-58],[-12,-68],[-8,-92],[-8,-117.87],[-10,-160]]);
 road('Улица пекарей',4,[[-101,-62],[-88,-92],[-65,-96],[-39,-90],[-8,-92]]);
 road('Северный проход',4,[[-8,-92],[10,-84],[20,-61],[22,-42],[24,-19]]);
-road('Лавочный переулок',4,[[-53.32,-10],[-65,-3],[-78,1],[-75.5,13],[-75.5,35],[-88,45],[-91,47],[-59,48]]);
+road('Лавочный переулок',4,[[-53.32,-10],[-65,-3],[-78,1],[-75.7,13],[-75.2,20],[-75.2,35],[-88,45],[-91,47],[-59,48]]);
 road('Набережная',6,[[109,-5],[109,25],[109,50],[109,75],[95,85],[77,98],[50,101],[25,96],[-1,93]]);
 for(const s of harbor.shops){
  const door=[s.x+.48*s.modelScale/.8,s.z-7+2.6*s.modelScale/.8];
  const next=[door[0],door[1]+5];
- const street=s.id==='weapons'?[-65,-3]:s.id==='clothes'?[-75.5,35]:[-88,45];
+ const street=s.id==='weapons'?[-65,-3]:s.id==='clothes'?[-75.2,35]:[-88,45];
  road('Вход: '+s.name,2.4,[door,next,street]);
 }
 for(const hall of harbor.civic){
@@ -206,7 +217,7 @@ for(let z=-103;z<=96;z+=5)for(let x=-113;x<=90;x+=5){
  const [a,b]=best,angle=Math.atan2(b[1]-a[1],a[0]-b[0]);
  for(const model of ['SI_H04','SI_H02','SI_H01'])frontage(x,z,model,angle);
 }
-export const HARBOR_PLATFORMS = [...harbor.houses,...harbor.shops,...harbor.civic].map(b=>({...b,groundY:harborTerrain(b.x,b.z,4)}));
+export const HARBOR_PLATFORMS = [...harbor.houses,...harbor.shops,...harbor.civic,harbor.temple].map(b=>({...b,groundY:harborTerrain(b.x,b.z,4)}));
 export function townLayout(id) {
   return id==='harbor'?harbor:{temple:{x:0,z:-26},outline:null,gates:TOWN_GATES,shops:TOWN_SHOPS,houses:TOWN_HOUSES,roads:TOWN_ROADS,decor:TOWN_DECOR,civic:[]};
 }
@@ -230,14 +241,22 @@ export function harborHeight(x,z,base,walkable=true) {
     if(weight>best){best=weight;level=b.groundY;}
   }
   h+=(level-h)*best;
-  if(walkable)for(const b of HARBOR_PLATFORMS.filter(p=>p.frontage)) {
-    const factor=b.modelScale/.8,px=(x-b.x)/factor,pz=(z-(b.z-7))/factor;
-    if(Math.abs(px)>5||Math.abs(pz)>4)continue;
-    for(const [ax,az,bx,bz,cx,cz,y] of SHOP_FLOOR_TRIANGLES){
+  // Keep the terrain below the stone treads, including the 4m terrain grid interpolation.
+  const stairs=STAIR_RUN;
+  if(Math.abs(x-stairs.x)<=12&&z>=stairs.topZ-3&&z<=stairs.bottomZ+3) {
+    const u=Math.max(0,Math.min(1,(stairs.bottomZ-z)/(stairs.bottomZ-stairs.topZ)));
+    h=Math.min(h,stairs.bottomY+(stairs.topY-stairs.bottomY)*u-.8);
+  }
+  if(walkable)for(const landing of HARBOR_LANDINGS)if(Math.abs(x-landing.x)<=landing.halfWidth&&z>=landing.z0&&z<=landing.z1)h=Math.max(h,landing.y);
+  if(walkable)for(const step of HARBOR_STAIRS)if(Math.abs(x-step.x)<=step.halfWidth&&z>=step.z0&&z<=step.z1)return step.y;
+  if(walkable)for(const b of HARBOR_PLATFORMS.filter(p=>p.frontage||p.id==='temple')) {
+    const factor=b.modelScale/.8,px=(x-b.x)/factor,pz=(z-(b.z-(b.frontage?7:0)))/factor;
+    if(Math.abs(px)>5||Math.abs(pz)>(b.id==='temple'?9:4))continue;
+    for(const [ax,az,bx,bz,cx,cz,y] of (b.id==='temple'?TEMPLE_FLOOR_TRIANGLES:SHOP_FLOOR_TRIANGLES)){
       const d=(bz-cz)*(ax-cx)+(cx-bx)*(az-cz);
       if(Math.abs(d)<1e-8)continue;
       const u=((bz-cz)*(px-cx)+(cx-bx)*(pz-cz))/d,v=((cz-az)*(px-cx)+(ax-cx)*(pz-cz))/d;
-      if(u>=-.00001&&v>=-.00001&&u+v<=1.00001)h=Math.max(h,b.groundY+.08+(y-.13175)*b.modelScale);
+      if(u>=-.00001&&v>=-.00001&&u+v<=1.00001)h=Math.max(h,b.groundY+.08+(y-(b.id==='temple'?0:.13175))*b.modelScale);
     }
   }
   // Плоский настил причалов — часть общей поверхности движения.

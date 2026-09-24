@@ -16,6 +16,23 @@ func _run():
    if Vector2(pos.x-target.x,pos.z-target.z).length()>.15:
     push_error("Shop entrance/aisle blocked: "+shop.id);quit(1);return
    checks+=1
+ # Both visible entrances must be usable with the real player capsule.
+ for shop in data.world.townShops+data.world.townCivic:
+  if not shop.get("frontage",false):continue
+  var f=float(shop.modelScale)
+  var center=Vector3(shop.x,0,shop.z-7*shop.scale)
+  var start=data.position_at(center.x-3.45*f,center.z+2.25*f)
+  var finish=data.position_at(center.x-2.35*f,center.z+.35*f)
+  for endpoints in [[start,finish],[finish,start]]:
+   var pos: Vector3=endpoints[0]
+   var target: Vector3=endpoints[1]
+   for i in 200:
+    var direction=target-pos;direction.y=0
+    if direction.length()<.05:break
+    pos=data.move(pos,direction.normalized(),minf(.1,direction.length()))
+   if Vector2(pos.x-target.x,pos.z-target.z).length()>.15:
+    push_error("Secondary shop doorway blocked: "+shop.id+" at "+str(pos));quit(1);return
+   checks+=1
  var model=load("res://assets/town/houses/merchant_complete.glb").instantiate()
  var scale_factor=float(data.world.townShops.filter(func(s):return s.get("frontage",false))[0].modelScale)
  model.scale=Vector3.ONE*scale_factor;root.add_child(model)
@@ -38,6 +55,17 @@ func _run():
    if clearance<2.7:
     push_error("Shop doorway headroom insufficient: "+str(clearance));quit(1);return
    checks+=1
+ # Measure the second arched opening across the player's shoulder width too.
+ for i in 23:
+  var u=float(i)/22
+  for lateral in [-.55,0,.55]:
+   var from=Vector3((-3.45+1.1*u)*scale_factor+lateral*.866,floor_y+.15,(2.25-1.9*u)*scale_factor+lateral*.5)
+   var hit=root.world_3d.direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from,from+Vector3.UP*8))
+   if hit.is_empty():continue
+   var clearance=hit.position.y-floor_y
+   if clearance<2.7:
+    push_error("Secondary shop entrance too low: "+str(clearance));quit(1);return
+   lowest=minf(lowest,clearance);roof_hits+=1;checks+=1
  if roof_hits<3:
   push_error("Doorway geometry was not measured");quit(1);return
  # Ground sits 8 cm below the interior floor; the source steps meet this ground.

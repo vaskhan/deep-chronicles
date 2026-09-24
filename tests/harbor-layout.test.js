@@ -47,7 +47,7 @@ test('All three pier decks have exact walkable height up to both edges, independ
 test('Shipped harbor kit is self-contained and production code does not depend on local_assets',async()=>{
  const fs=await import('node:fs');
  const {HOUSE_KIT}=await import('../src/town-house-kit.js');
- for(const id of [...Object.keys(HOUSE_KIT),'merchant_complete']){
+ for(const id of [...Object.keys(HOUSE_KIT),'merchant_complete','temple_complete']){
   const bytes=fs.readFileSync(new URL(`../godot/assets/town/houses/${id}.glb`,import.meta.url));
   assert.equal(bytes.toString('ascii',0,4),'glTF');
   const gltf=JSON.parse(bytes.toString('utf8',20,20+bytes.readUInt32LE(12)));
@@ -160,4 +160,27 @@ test('Visible gaps between residential footprints admit the player capsule',()=>
   assert.equal(blockedAt(x,z,.6),null,`invisible obstacle between ${houses[i].model} and ${houses[j].model}`);checked++;
  }
  assert.ok(checked>=2,'measure several actual alleys, not only the main streets');
+});
+
+test('Both visible shop entrances admit the real player capsule in every public building',()=>{
+ const world=buildProps();
+ for(const b of [...world.townShops,...world.townCivic].filter(b=>b.frontage)){
+  for(let i=0;i<=60;i++){
+   const u=i/60,x=b.x+(-3.45+1.1*u)*b.modelScale,z=b.z-7*b.scale+(2.25-1.9*u)*b.modelScale;
+   assert.equal(blockedAt(x,z,.6),null,`${b.id}: secondary entrance ${i}`);
+  }
+ }
+});
+
+test('Harbor temple has a continuous accessible route from outside to its priest',async()=>{
+ const {heightAt}=await import('../src/world-core.js'),world=buildProps();
+ const t=world.townTemples.find(t=>t.interior),priest=world.npcs.find(n=>n.id==='harbor:priest');
+ assert.ok(t);assert.ok(priest.z<t.z,'priest belongs inside the nave');
+ let previous=heightAt(t.x,t.z+9*t.modelScale);
+ for(let z=9;z>=-2;z-=.05){
+  const pz=t.z+z*t.modelScale,h=heightAt(t.x,pz);
+  assert.equal(blockedAt(t.x,pz,.6),null,`temple route ${z}`);
+  assert.ok(Math.abs(h-previous)<.2,`temple step ${z}: ${h-previous}`);previous=h;
+ }
+ assert.ok(Math.hypot(priest.x-t.x,priest.z-(t.z-2*t.modelScale))<8);
 });

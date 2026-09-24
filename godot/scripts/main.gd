@@ -479,6 +479,12 @@ func _update_camera(dt):
 		var half = (Vector2(shop.w,shop.d)-Vector2.ONE*2.4)*shop.scale*.5
 		if absf(hero.position.x-centre.x)<half.x and absf(hero.position.z-centre.y)<half.y:
 			room={"centre":centre,"half":half};break
+	for temple in GameData.world.get("townTemples",[]):
+		if not temple.get("interior",false):continue
+		var centre=Vector2(temple.x,temple.z)
+		var half=Vector2(2.6,7.3)*temple.modelScale
+		if absf(hero.position.x-centre.x)<half.x and absf(hero.position.z-centre.y)<half.y:
+			room={"centre":centre,"half":half};break
 	var distance = camera_distance if room.is_empty() else minf(camera_distance,Tuning.CAMERA_INDOOR_DISTANCE)
 	var pitch = camera_pitch if room.is_empty() else Tuning.CAMERA_INDOOR_PITCH
 	var offset = Vector3(sin(camera_yaw) * cos(pitch), sin(pitch), cos(camera_yaw) * cos(pitch)) * distance
