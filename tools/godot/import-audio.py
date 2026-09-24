@@ -1,4 +1,4 @@
-"""Restore the curated CC0 audio bank using pinned archives; no API keys/tools needed."""
+"""Restore downloadable audio from pinned archives and verify bundled recordings."""
 import hashlib, io, json, pathlib, struct, urllib.request, urllib.parse, wave, zipfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BANK = ROOT / 'godot/assets/audio'
@@ -23,6 +23,7 @@ def restore(manifest):
     cache = ROOT / '.native-run/audio-packs'; cache.mkdir(parents=True, exist_ok=True)
     archives = {}
     for key, source in manifest['sources'].items():
+        if source.get('bundled'): continue
         cached = cache / (key + (pathlib.PurePosixPath(urllib.parse.urlparse(source['download']).path).suffix if source.get('direct') else '.zip'))
         if not cached.exists():
             with urllib.request.urlopen(source['download'], timeout=60) as response:
@@ -31,6 +32,11 @@ def restore(manifest):
         if hashlib.sha256(raw).hexdigest() != source['sha256']: raise ValueError('Source hash mismatch: ' + key)
         archives[key] = raw if source.get('direct') else zipfile.ZipFile(io.BytesIO(raw))
     for name, entry in manifest['files'].items():
+        if manifest['sources'][entry['source']].get('bundled'):
+            target = BANK / name
+            if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != entry['sha256']:
+                raise ValueError('Restore bundled audio from Git: ' + name)
+            continue
         source = archives[entry['source']]
         raw = source if isinstance(source, bytes) else source.read(entry['member'])
         if entry.get('convert') == 'mono-pcm16-peak-6db': raw = pcm16(raw)

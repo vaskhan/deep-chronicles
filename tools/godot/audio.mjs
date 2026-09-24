@@ -1,4 +1,4 @@
-// Curated licensed recordings. Normal verification is offline; --fetch restores pinned sources.
+// Audio recordings with explicit provenance. Normal verification is offline; --fetch restores pinned sources.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -21,7 +21,7 @@ for (const [name, cue] of Object.entries(manifest.cues)) {
   if (!cue.variants.length || !Number.isFinite(cue.gain_db)) throw Error(`Invalid cue: ${name}`);
   for (const file of cue.variants) if (!manifest.files[file.replace('res://assets/audio/', '')]) throw Error(`Untracked cue: ${file}`);
 }
-console.log(`AUDIO_OK ${Object.keys(manifest.files).length} pinned licensed samples, ${Object.keys(manifest.cues).length} cues, offline hashes verified`);
+console.log(`AUDIO_OK ${Object.keys(manifest.files).length} pinned samples, ${Object.keys(manifest.cues).length} cues, offline hashes verified`);
 
 if (process.argv.includes('--analyze')) {
   const measured = {};

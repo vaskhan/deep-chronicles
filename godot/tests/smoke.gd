@@ -526,14 +526,22 @@ func _test_combat_presentation():
 
 func _test_audio_bank():
 	var audio = game.game_audio
-	check(audio.music.cue == "music_town" and audio.music.players[audio.music.current_voice].playing, "town has an independently mixed authored music track")
+	check(audio.music.cue == "music_town_harbor" and audio.music.players[audio.music.current_voice].playing, "harbor has its own independently mixed music track")
+	check(audio.music.tracks.music_town_harbor != audio.music.tracks.music_town_ford, "town themes use different streams")
+	check(audio.music.tracks.music_town_harbor.loop and audio.music.tracks.music_town_ford.loop, "both town themes loop")
+	audio.music.follow(.1, true, false, "ford")
+	check(audio.music.cue == "music_town_ford" and audio.music.players[audio.music.current_voice].playing, "entering ford selects its own theme")
+	var voice = audio.music.current_voice
+	audio.music.follow(.1, true, false, "ford")
+	check(audio.music.current_voice == voice, "staying in a town does not restart its theme")
+	audio.music.follow(.1, true, false, "harbor")
 	var loaded = 0
 	var valid = true
 	for variants in audio.variants.values():
 		for stream in variants:
 			loaded += 1
 			if not stream or stream.get_length() <= 0: valid = false
-	check(valid and loaded == 68, "all 68 licensed recordings and music tracks decode as real audio streams")
+	check(valid and loaded == 70, "all 70 recordings and music tracks decode as real audio streams")
 	var limiter_found = false
 	for i in AudioServer.get_bus_effect_count(0):
 		var effect = AudioServer.get_bus_effect(0, i)

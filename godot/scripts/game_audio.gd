@@ -67,8 +67,11 @@ func follow(hero, camera, dt: float):
 	var near_water = listener.global_position.distance_to(waterfall.global_position) < Tuning.GORGE_AUDIO_RANGE
 	if near_water and not waterfall.playing: waterfall.play()
 	elif not near_water and waterfall.playing: waterfall.stop()
-	var in_town = GameData.world.towns.any(func(t): return Vector2(hero.position.x - t.x, hero.position.z - t.z).length() < t.r)
-	music.follow(dt, in_town, hero.dead)
+	var town_id = ""
+	for town in GameData.world.towns:
+		if Vector2(hero.position.x - town.x, hero.position.z - town.z).length() < town.r:
+			town_id = str(town.id); break
+	music.follow(dt, not town_id.is_empty(), hero.dead, town_id)
 	if not ambience.playing: ambience.play()
 	# Шаги зависят от реального пути: препятствие, каст и телепорт не
 	# создают звук. Длина шага общая с анимацией бега.

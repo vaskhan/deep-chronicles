@@ -11,9 +11,20 @@ var duck_remaining = 0.0
 var duck_db = 0.0
 
 func setup(bank: Dictionary):
-	for id in ["music_town", "music_explore", "music_battle"]:
+	for id in bank.cues:
+		if not str(id).begins_with("music_"): continue
 		var stream = load(bank.cues[id].variants[0]).duplicate(); stream.loop = true
 		tracks[id] = stream; gains[id] = float(bank.cues[id].gain_db)
+	# Optional personal town music stays outside the shipped asset bank.
+	if "--test-mode" not in OS.get_cmdline_user_args():
+		for town in GameData.world.towns:
+			var path = "user://music/" + str(town.id) + ".ogg"
+			if not FileAccess.file_exists(path): continue
+			var custom = AudioStreamOggVorbis.load_from_file(path)
+			if custom == null: continue
+			custom.loop = true
+			var id = "music_town_" + str(town.id)
+			tracks[id] = custom; gains[id] = gains["music_town"]
 	for i in 2:
 		var player = AudioStreamPlayer.new(); player.bus = "Music"; player.volume_db = -60
 		add_child(player); players.append(player)
@@ -21,10 +32,11 @@ func setup(bank: Dictionary):
 func combat():
 	combat_remaining = 6.0; duck_remaining = 0.65
 
-func follow(dt: float, in_town: bool, dead: bool):
+func follow(dt: float, in_town: bool, dead: bool, town_id: String = ""):
 	combat_remaining = maxf(0, combat_remaining - dt)
 	duck_remaining = maxf(0, duck_remaining - dt)
 	var wanted = "music_battle" if combat_remaining > 0 and not dead and not in_town else ("music_town" if in_town else "music_explore")
+	if wanted == "music_town" and tracks.has("music_town_" + town_id): wanted = "music_town_" + town_id
 	if wanted != cue:
 		current_voice = 1 - current_voice
 		var next = players[current_voice]
