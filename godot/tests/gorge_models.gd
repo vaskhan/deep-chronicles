@@ -3,7 +3,7 @@ extends SceneTree
 const Art = preload("res://scripts/art_assets.gd")
 var failures = 0
 var tested_clips = 0
-var output = "/tmp/gorge-models"
+var output = "user://gorge-models"
 var before = false
 func check(ok: bool, message: String):
  if not ok:
@@ -17,7 +17,10 @@ func _run():
  if before:
   for pair in [["fang_warrior","orc",3.3,"d0a27a"],["fang_shaman","orc",3.0,"b884a8"],["stone_guard","golem",4.6,"a9bcc6"]]:
    Art.manifest().actors[pair[0]] = {"base":pair[1],"height":pair[2],"tint":pair[3]}
- DirAccess.make_dir_recursive_absolute(output)
+ var output_error = DirAccess.make_dir_recursive_absolute(output)
+ if output_error != OK:
+  push_error("Cannot create model review directory: " + output + " (" + error_string(output_error) + ")")
+  quit(1); return
  root.size = Vector2i(1280,800)
  var scene = Node3D.new(); root.add_child(scene)
  var env = WorldEnvironment.new(); env.environment = load("res://resources/daylight.tres"); scene.add_child(env)
