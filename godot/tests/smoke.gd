@@ -321,10 +321,13 @@ func _run():
 		var coins_before = int(game.profile.coins)
 		game.use_skill("power_strike")
 		check(await wait_for(func(): return game.hero.winding_up), "physical skill starts its own windup")
-		check(await wait_for(func(): return not game.hero.winding_up), "physical skill reaches its impact")
-		check(game.attacking and game.pending_skill.is_empty(), "warrior skill resumes ordinary attack mode")
+		# Check the accepted continuation while the target is still alive: a critical
+		# skill can kill this low-level mob, correctly clearing attack mode at impact.
+		check(game.attacking and game.pending_skill.is_empty(), "warrior skill enables ordinary attack continuation")
 		game.use_skill("power_strike")
 		check(game.attacking and game.pending_skill.is_empty(), "cooldown click preserves an already active attack")
+		check(await wait_for(func(): return not game.hero.winding_up), "physical skill reaches its impact")
+		check(not game.attacking if mob.dead else game.attacking, "skill impact stops attacking a corpse and retains attack mode for a survivor")
 		# The server continues normal attacks after skill recovery without another F.
 		var killed = await wait_for(func(): return game.profile.get("kills", 0) > 0, 12)
 		if not killed:
