@@ -11,7 +11,7 @@ if (!built) {
   await run(process.execPath, ['tools/godot/export.mjs']);
   await run(binary, ['--headless', '--path', 'godot', '--editor', '--import', '--quit']);
   // Run geometric regressions before the network smoke test, also in CI.
-  for (const name of ['harbor_assets','shop_access','temple_access','temple_stairs','hero_detail','shop_camera','shop_signs']) {
+  for (const name of ['harbor_assets','shop_access','temple_access','temple_stairs','hero_detail','shop_camera','shop_signs','combat_flow']) {
     await geometryTest(name);
   }
 }

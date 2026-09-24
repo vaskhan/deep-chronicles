@@ -58,7 +58,7 @@ static func actor(id: String) -> Node3D:
 		var player = AnimationPlayer.new(); player.name = "AnimationPlayer"; result.add_child(player)
 		var library = AnimationLibrary.new()
 		var clips = {"idle": "Idle", "walk": "Walk", "run": "Jog_Fwd", "attack": "Sword_Attack", "attack_alt": "Sword_Attack", "cast": "Spell_Simple_Idle", "cast_enter": "Spell_Simple_Enter", "release": "Spell_Simple_Shoot", "hit": "Hit_Chest", "death": "Death01"}
-		if anim_id in ["warrior", "warrior_chain"]: clips.idle = "Idle"; clips.attack_alt = "Sword_Attack"
+		if anim_id in ["warrior", "warrior_chain"]: clips.idle = "Idle"; clips.attack_alt = "Sword_Attack"; clips.combat_idle = "Sword_Idle"
 		if anim_id in ["mage", "gatekeeper", "priest", "wraith", "lich"]: clips.idle = "Spell_Simple_Idle"
 		if anim_id == "mage": clips.attack = "Sword_Attack"; clips.attack_alt = "Sword_Attack"
 		if anim_id == "merchant": clips.idle = "Idle_Talking"
@@ -71,7 +71,7 @@ static func actor(id: String) -> Node3D:
 			clips.attack = "Punch_Cross"; clips.attack_alt = "Punch_Jab"
 		for key in clips:
 			var clip = canonical_clips[clips[key]].duplicate()
-			clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "walk", "run", "cast"] else Animation.LOOP_NONE
+			clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "combat_idle", "walk", "run", "cast"] else Animation.LOOP_NONE
 			if anim_id in ["warrior", "warrior_chain"]:
 				_close_weapon_hand(clip, result.find_child("Skeleton3D", true, false))
 			library.add_animation(key, clip)
@@ -84,7 +84,7 @@ static func actor(id: String) -> Node3D:
 				var source_name = entry.clips[key]
 				if not player.has_animation(source_name): continue
 				var clip = player.get_animation(source_name).duplicate()
-				clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "walk", "run", "cast"] else Animation.LOOP_NONE
+				clip.loop_mode = Animation.LOOP_LINEAR if key in ["idle", "combat_idle", "walk", "run", "cast"] else Animation.LOOP_NONE
 				library.add_animation(key, clip)
 			for key in player.get_animation_library_list(): player.remove_animation_library(key)
 			player.add_animation_library("", library)

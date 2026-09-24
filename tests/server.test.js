@@ -719,11 +719,8 @@ test('пати делит реальные XP/SP, защищает группо�
     const {HUNTING_CAMPS}=await import('../src/world-core.js');
     const camp=HUNTING_CAMPS.find(c=>c.id==='east_rabbits');
     await at(a,camp.x,camp.z);await at(b,camp.x,camp.z+1);await at(outsider,camp.x,camp.z+2);
-    let mob;
-    for(let i=0;i<40&&!mob;i++) {const s=await a.wait('snap');mob=s.m.filter(r=>!(r[5]&8)&&Math.hypot(r[1]-camp.x,r[3]-camp.z)<25).sort((x,y)=>Math.hypot(x[1]-camp.x,x[3]-camp.z)-Math.hypot(y[1]-camp.x,y[3]-camp.z))[0];}
-    assert.ok(mob);await at(a,mob[1]+1,mob[3]+1);await at(b,mob[1]+2,mob[3]+2);
-    a.send({t:'atk',kind:'m',id:mob[0]});
-    const killed=(await untilEv(a,/"k":"kill"/)).find(e=>e.k==='kill');
+    // Follow the moving target, as a real client does; a stationary test can lose melee range.
+    const killed=await huntAt(a,camp.x,camp.z,b);
     const shared=(await untilEv(b,/"k":"kill"/)).find(e=>e.k==='kill');
     const {MOBS}=await import('../src/data.js'); const {spForKill}=await import('../src/progression.js');
     assert.equal(killed.xp+shared.xp,MOBS[killed.mob].xp);assert.equal(killed.sp+shared.sp,spForKill(MOBS[killed.mob].xp));
@@ -1340,8 +1337,7 @@ test('physical skill has a wind-up and cannot overlap the next ordinary swing', 
     assert.ok(mob);
     await at(a, mob[1] + .8, mob[3] + .8);
     a.send({ t: 'atk', id: mob[0], kind: 'm', hold: true });
-    a.send({ t: 'skill', id: 'power_strike' });
-    a.send({ t: 'atk', id: mob[0], kind: 'm' });
+    a.send({ t: 'skill', id: 'power_strike' }); // No second attack command: the skill resumes it.
     await pause(2900);
     const own = events.filter(e => e.by == null || e.by === auth.id);
     const start = own.find(e => e.k === 'skill_start');
@@ -1377,32 +1373,65 @@ test('mage staff attack is melee and single-shot; spells enforce their individua
   } finally { mage.ws.close(); target.ws.close(); await Promise.all([mage.closed(), target.closed()]); }
 });
 
-test('warrior and mage skills never enable autoattack, including cooldown and mana rejection', async () => {
+test('warrior skills resume autoattack; rejected commands and mage spells do not start it', async () => {
   for (const cls of ['warrior','mage']) {
-    const a=client(); await a.open(); await a.wait('hi');
+    const a=client(), b=client(); await Promise.all([a.open(),b.open()]);
     const events=[];
-    a.ws.on('message',raw=>{ const m=JSON.parse(raw); if(m.t==='ev') events.push(...m.e); });
+    a.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.t==='ev')events.push(...m.e);});
     try {
-      a.send({t:'register',name:`Manual_${cls}`,pass:'test-password',cls}); const auth=await a.wait('authok');
-      await at(a,-620,400);
-      const snap=await a.wait('snap');
-      const mob=snap.m.find(r=>!(r[5]&8)&&Math.hypot(r[1]+620,r[3]-400)<22);
-      assert.ok(mob); await at(a,mob[1]+.8,mob[3]+.8);
-      a.send({t:'atk',id:mob[0],kind:'m',hold:true});
+      a.send({t:'register',name:`Flow_${cls}`,pass:'test-password',cls});const auth=await a.wait('authok');
+      b.send({t:'register',name:`FlowT_${cls}`,pass:'test-password',cls:'warrior'});const victim=await b.wait('authok');
+      b.send({t:'dev',lvl:20,hp:9999});await pause(150);
+      await at(a,-700,-500);await at(b,-700,-498);
       const skill=cls==='warrior'?'power_strike':'fire_bolt';
-      a.send({t:'skill',id:skill});
+      a.send({t:'atk',id:victim.id,kind:'p',hold:true});a.send({t:'skill',id:skill});
       await untilEv(a,new RegExp(`"k":"cast_fx","id":"${skill}"`));
-      a.send({t:'skill',id:skill}); // Skill cooldown: no fallback attack.
-      await pause(2200);
-      if (cls==='warrior') await pause(2300);
-      a.send({t:'dev',mp:0}); await pause(150);
-      a.send({t:'skill',id:skill});
-      await untilEv(a,/Недостаточно маны/);
-      await pause(1000);
-      const own=events.filter(e=>e.by==null||e.by===auth.id);
-      assert.equal(own.filter(e=>e.k==='cast_fx'&&e.id===skill).length,1,cls+' casts once');
-      assert.equal(own.filter(e=>e.k==='attack_start'||e.k==='attack_release').length,0,cls+' requires explicit F for a normal attack');
-    } finally {a.ws.close();await a.closed();}
+      await pause(1900);
+      const own=()=>events.filter(e=>e.by==null||e.by===auth.id);
+      assert.equal(own().filter(e=>e.k==='cast_fx'&&e.id===skill).length,1);
+      assert.equal(own().some(e=>e.k==='attack_start'),cls==='warrior',cls+' continuation policy');
+      // Explicit stop must still work; failed commands may not re-enable it.
+      a.send({t:'atk',id:null});await pause(150);
+      a.send({t:'atk',id:victim.id,kind:'p',hold:true});
+      const stopped=events.length;
+      a.send({t:'dev',mp:0});await pause(150);a.send({t:'skill',id:skill});
+      await pause(5000); // cover the full action lock and the old skill cooldown
+      a.send({t:'dev',mp:0});await pause(150);a.send({t:'skill',id:skill});await untilEv(a,/Недостаточно маны/);await pause(800);
+      assert.equal(events.slice(stopped).filter(e=>(e.by==null||e.by===auth.id)&&e.k==='attack_start').length,0,'rejection never starts a fallback attack');
+    } finally {a.ws.close();b.ws.close();await Promise.all([a.closed(),b.closed()]);}
+  }
+});
+
+// Use a stationary player target: wandering monsters make interruption timing nondeterministic.
+test('ready warrior skill interrupts both normal windup and recovery without a ghost hit', async () => {
+  for(const phase of ['windup','recovery']) {
+    const a=client(),b=client();await Promise.all([a.open(),b.open()]);
+    const events=[];
+    a.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.t==='ev')for(const e of m.e)events.push({...e,time:Date.now()});});
+    let auth;
+    const waitEvent=async(kind,from=0)=>{
+      const deadline=Date.now()+5000;
+      while(Date.now()<deadline){const e=events.slice(from).find(e=>e.k===kind&&(e.by==null||e.by===auth.id));if(e)return e;await pause(10);}
+      throw Error('missing combat event '+kind+' during '+phase);
+    };
+    try {
+      a.send({t:'register',name:`Cut_${phase}`,pass:'test-password',cls:'warrior'});auth=await a.wait('authok');
+      b.send({t:'register',name:`CutT_${phase}`,pass:'test-password',cls:'warrior'});const target=await b.wait('authok');
+      b.send({t:'dev',lvl:20,hp:9999});await pause(150);
+      await at(a,-700,-500);await at(b,-700,-498);
+      a.send({t:'atk',id:target.id,kind:'p'});const normal=await waitEvent('attack_start');
+      if(phase==='recovery')await waitEvent('attack_release');
+      const sent=Date.now(),begin=events.length;
+      a.send({t:'skill',id:'power_strike'});const skill=await waitEvent('skill_start',begin);
+      assert.ok(skill.time-sent<350,`skill should begin promptly, took ${skill.time-sent}ms`);
+      assert.ok(skill.time-normal.time<normal.t*1000-100,'not deferred until the ordinary animation finishes');
+      assert.equal(skill.autoAttack,true,'server confirms continuation');
+      const impact=await waitEvent('cast_fx',begin);
+      assert.ok(impact.time-skill.time>=skill.windup*1000-150,'the skill retains its own windup');
+      assert.equal(events.slice(begin).filter(e=>e.k==='attack_release'&&(e.by==null||e.by===auth.id)).length,0,'interrupted swing cannot deliver a delayed hit');
+      const next=await waitEvent('attack_start',begin);
+      assert.ok(next.time-skill.time>=skill.t*1000-150,'ordinary attack resumes only after skill recovery');
+    } finally {a.ws.close();b.ws.close();await Promise.all([a.closed(),b.closed()]);}
   }
 });
 

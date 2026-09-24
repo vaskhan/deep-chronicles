@@ -9,7 +9,7 @@ func run():
  decor._temple_terrace()
  var treads=[]
  for group in decor.groups.values():
-  if not group.mesh is BoxMesh or absf(group.mesh.size.y-1)>.001:continue
+  if not group.mesh is BoxMesh or absf(group.mesh.size.z-.45)>.001:continue
   for transform in group.transforms:
    var pose:Transform3D=transform;pose.origin+=group.anchor
    var body=StaticBody3D.new();root.add_child(body);body.transform=pose
@@ -21,7 +21,7 @@ func run():
  var checks=0
  for tread in treads:
   var center:Vector3=tread.get_center();var top:float=tread.end.y
-  for offset in [-3.7,0,3.7]:
+  for offset in [-4.39,-3.7,0,3.7,4.39]:
    for dz in [-.18,0,.18]:
     var p=Vector3(center.x+offset,top+.2,center.z+dz)
     var hit=root.world_3d.direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(p,p-Vector3.UP*.5))
@@ -29,6 +29,8 @@ func run():
      push_error("Stair tread and walking height disagree: "+str(p));quit(1);return
     if data.terrain_height_at(p.x,p.z)>top+.015:
      push_error("Terrain protrudes through temple stairs: "+str(p));quit(1);return
+    if tread.position.y>data.terrain_height_at(p.x,p.z)-.15:
+     push_error("Stair masonry floats above the ground: "+str(p));quit(1);return
     checks+=1
  var stairs=data.world.townStairs
  var first=stairs[0];var last=stairs[-1]

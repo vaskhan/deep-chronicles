@@ -17,8 +17,8 @@ func run():
  for arg in OS.get_cmdline_user_args():
   if arg.begins_with("--output="):out=arg.trim_prefix("--output=")
  DirAccess.make_dir_recursive_absolute(out)
- for view in [["stairs",stair_mid+Vector3(9,5,12),stair_mid+Vector3(0,2,-4)],["city",center+Vector3(38,26,48),center+Vector3(0,9,0)],["entrance",door+Vector3(4,3,12),door+Vector3(0,2.3,0)],["interior",center+Vector3(0,3,10),center+Vector3(0,3,-9)]]:
-  if view[0]=="stairs":actor.position=stair_mid
+ for view in [["stairs_side",stair_mid+Vector3(7,2,6),stair_mid+Vector3(0,-.5,0)],["stairs",stair_mid+Vector3(9,5,12),stair_mid+Vector3(0,2,-4)],["city",center+Vector3(38,26,48),center+Vector3(0,9,0)],["entrance",door+Vector3(4,3,12),door+Vector3(0,2.3,0)],["interior",center+Vector3(0,3,10),center+Vector3(0,3,-9)]]:
+  if view[0] in ["stairs","stairs_side"]:actor.position=stair_mid
   elif view[0]=="entrance":actor.position=door
   elif view[0]=="interior":actor.position=data.position_at(temple.x,temple.z+6)
   camera.position=view[1];camera.look_at(view[2]);world.set_region(center)

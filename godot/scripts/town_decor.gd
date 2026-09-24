@@ -456,10 +456,23 @@ func _temple_terrace():
 	var saved_origin=origin;var saved_orientation=orientation
 	origin=Vector3.ZERO;orientation=Basis.IDENTITY
 	for landing in GameData.world.get("townLandings",[]):
-		_box(Vector3(landing.x,landing.y-.4,(landing.z0+landing.z1)*.5),Vector3(landing.halfWidth*2,.8,landing.z1-landing.z0),"stone")
+		_stair_block(landing)
 	for step in GameData.world.get("townStairs",[]):
-		_box(Vector3(step.x,step.y-.5,(step.z0+step.z1)*.5),Vector3(step.halfWidth*2,1,step.z1-step.z0),"stone")
+		_stair_block(step)
 	origin=saved_origin;orientation=saved_orientation
+
+func _stair_block(step: Dictionary):
+	# Every tread/landing is a solid masonry block reaching below the visible terrain.
+	# Sample the whole footprint: a centre-only support still floats along the slope edges.
+	var bottom=float(step.y)
+	var across=maxi(1,ceili(step.halfWidth*4))
+	var along=maxi(1,ceili((step.z1-step.z0)*2))
+	for ix in range(across+1):
+		for iz in range(along+1):
+			var x=lerpf(step.x-step.halfWidth,step.x+step.halfWidth,float(ix)/across)
+			var z=lerpf(step.z0,step.z1,float(iz)/along)
+			bottom=minf(bottom,GameData.terrain_height_at(x,z)-.4)
+	_box(Vector3(step.x,(step.y+bottom)*.5,(step.z0+step.z1)*.5),Vector3(step.halfWidth*2,step.y-bottom,step.z1-step.z0),"stone")
 
 func _temple(temple: Dictionary):
 	var model=Art.packed("res://assets/town/houses/temple_complete.glb").instantiate();model.name="HarborTemple"

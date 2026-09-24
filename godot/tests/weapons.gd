@@ -14,19 +14,19 @@ func _run():
 	var mat = StandardMaterial3D.new(); mat.albedo_color = Color("83907e"); plane.material_override = mat; scene.add_child(plane)
 	var actors: Array = []
 	for row in 3:
-		for col in 6:
+		for col in 7:
 			var id = ["warrior", "mage", "warrior_chain"][row]
-			var actor = Actor.new(); actor.kind = "self"; scene.add_child(actor); actor.setup(id, id + " · " + ["idle", "walk", "run", "attack", "attack_alt", "cast_enter"][col])
-			actor.position = Vector3((col - 2.5) * 3.2, 0, row * 4.0); actor.rotation.y = -0.3
+			var actor = Actor.new(); actor.kind = "self"; scene.add_child(actor); actor.setup(id, id + " · " + ["idle", "walk", "run", "attack", "attack_alt", "cast_enter", "combat_idle" if id != "mage" else "idle"][col])
+			actor.position = Vector3((col - 3.0) * 3.2, 0, row * 4.0); actor.rotation.y = -0.3
 			actor.apply_look({"w": 0xbbccd8, "staff": id == "mage", "gear": {}, "ench": 4})
-			actor.set_process(false); actor.animator.play(["idle", "walk", "run", "attack", "attack_alt", "cast_enter"][col], 0); actor.animator.seek([0.4, 0.2, 0.22, 0.6, 0.2, 0.25][col], true); actor.animator.pause()
+			actor.set_process(false); actor.animator.play(["idle", "walk", "run", "attack", "attack_alt", "cast_enter", "combat_idle" if id != "mage" else "idle"][col], 0); actor.animator.seek([0.4, 0.2, 0.22, 0.6, 0.2, 0.25, 0.4][col], true); actor.animator.pause()
 			actors.append(actor)
 	if "--reference" in OS.get_cmdline_user_args():
 		for actor in actors: actor.hide()
 		var reference = load("res://generated/anims/AnimationLibrary_Godot_Standard.nofingers.gltf").instantiate()
 		scene.add_child(reference); reference.scale = Vector3.ONE * 2
 		var anim = reference.find_child("AnimationPlayer", true, false); anim.play("Sword_Idle"); anim.seek(0.4, true); anim.pause()
-	var camera = Camera3D.new(); scene.add_child(camera); camera.position = Vector3(-1, 7, -24); camera.look_at(Vector3(0, 1, 1.8)); camera.fov = 43; camera.current = true
+	var camera = Camera3D.new(); scene.add_child(camera); camera.position = Vector3(-1, 8, -28); camera.look_at(Vector3(0, 1, 1.8)); camera.fov = 43; camera.current = true
 	await create_timer(0.5).timeout
 	for actor in actors:
 		var skeleton = actor.model.find_child("Skeleton3D", true, false)
@@ -45,7 +45,7 @@ func _run():
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png(output)
 		print("WEAPONS ", ProjectSettings.globalize_path(output))
-	print("WEAPON_TEST_RESULT checks=18 failures=", failures)
+	print("WEAPON_TEST_RESULT checks=21 failures=", failures)
 	quit(0 if failures == 0 else 1)
 
 ## Check against skinned hand geometry, not just the attachment's own origin.

@@ -60,7 +60,7 @@ export function newActor(id, name, P) {
     id, name, P, movement: { at: Date.now(), credit: 0, fresh: true },
     x: P.x, y: heightAt(P.x, P.z), z: P.z, r: 0,
     target: null,        // { m: mobId } | { p: playerId }
-    attacking: false, actionUntil: 0, atkTimer: 0, swing: null, queuedSkill: null, cds: {}, effects: [], cast: null,
+    attacking: false, actionKind: '', actionUntil: 0, atkTimer: 0, swing: null, queuedSkill: null, cds: {}, effects: [], cast: null,
     dead: P.dead === true || P.hp === 0, dirty: true, out: [],
     hitBy: new Map(), karma: 0, pk: 0, flagUntil: 0, profAt: 0,
   };
@@ -267,7 +267,7 @@ export function skillError(a, id, now, ignoreBusy = false) {
   if (sk.kind === 'passive') return 'Пассивное умение действует постоянно';
   if (promotionError(a.P,sk.lvl)) return promotionError(a.P,sk.lvl);
   if (a.dead || (a.cast && !ignoreBusy)) return 'Сейчас нельзя';
-  if (!ignoreBusy && (a.actionUntil || 0) > now) return 'Дождитесь завершения предыдущего действия';
+  if (!ignoreBusy && a.actionKind !== 'attack' && (a.actionUntil || 0) > now) return 'Дождитесь завершения предыдущего действия';
   if (!skillsOf(a.P).includes(id)) return 'Это умение не вашего класса';
   if (!a.P.skills[id]) return 'Сначала изучите умение за SP в карточке навыков';
   if (a.P.lvl < sk.lvl) return `${sk.name}: нужен уровень ${sk.lvl}`;

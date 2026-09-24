@@ -18,6 +18,7 @@ var corpse_opacity = 1.0
 var model_rest_y = 0.0
 var moving = false
 var casting = false
+var combat_active = false
 var attack_time = 0.0
 var radius = 0.6
 var seen = 0
@@ -215,6 +216,7 @@ func snapshot(row: Array, timestamp: float):
 	if is_instance_valid(stone_ward):
 		stone_ward.visible = effects.any(func(effect): return effect.size() >= 3 and effect[0] == "stone_guard:guard" and float(effect[2]) > 0)
 	var flags = int(row[5]); moving = (flags & 1) != 0; casting = (flags & 4) != 0
+	combat_active = kind == "p" and (flags & 16) != 0
 	var attack_flag = (flags & 2) != 0
 	if attack_flag and not previous_attack_flag and action_until <= 0 and windup_remaining <= 0: play_action("attack")
 	previous_attack_flag = attack_flag
@@ -267,7 +269,8 @@ func _process(dt):
 		action_until = 0; attack_time = 0
 	var run_threshold = 2.7 if model.has_meta("gait_run_speed") else 5.0
 	var locomotion = "run" if motion_speed > run_threshold and animator and animator.has_animation("run") else "walk"
-	var clip = "cast" if casting or cast_remaining > 0 else (locomotion if moving and motion_speed > 0.2 else "idle")
+	var resting = "combat_idle" if combat_active and animator and animator.has_animation("combat_idle") else "idle"
+	var clip = "cast" if casting or cast_remaining > 0 else (locomotion if moving and motion_speed > 0.2 else resting)
 	if action_until > 0: clip = action_clip
 	elif attack_time > 0 and not casting: clip = "attack"
 	if dead: clip = "death" if animator and animator.has_animation("death") else "idle"
@@ -394,6 +397,7 @@ func receive_hit():
 	if action_until <= 0 and not moving and not casting and not winding_up: play_action("hit", 0.22)
 
 func begin_cast(id: String, duration: float):
+	windup_remaining = 0; winding_up = false; attack_time = 0; action_until = 0
 	cast_skill = id; cast_remaining = duration
 	play_action("cast_enter", minf(0.25, duration * 0.4))
 
@@ -402,6 +406,7 @@ func release_cast():
 	play_action("release", 0.42)
 
 func cancel_presentation():
+	combat_active = false
 	cast_remaining = 0; cast_skill = ""; casting = false; action_until = 0; attack_time = 0
 	windup_remaining = 0; winding_up = false; hit_recoil = 0; motion_speed = 0; have_motion_sample = false; external_motion_sample = false; moving = false
 	if animator: animator.speed_scale = 1.0

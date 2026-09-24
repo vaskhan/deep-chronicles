@@ -27,6 +27,12 @@ test('weapon and skill actions have wind-up, recovery, and one shared lock', () 
   a.actionUntil = 1000 + timing.cooldown * 1000;
   assert.match(skillError(a, 'power_strike', 1001), /предыдущего действия/);
   assert.equal(skillError(a, 'power_strike', a.actionUntil), null);
+  a.actionKind = 'attack';
+  assert.equal(skillError(a, 'power_strike', 1001), null, 'a ready skill may interrupt an ordinary attack');
+  a.cds.power_strike = 5000;
+  assert.match(skillError(a, 'power_strike', 1001), /не готово/, 'preemption cannot bypass the skill cooldown');
+  a.cds.power_strike = 0; a.P.mp = 0;
+  assert.match(skillError(a, 'power_strike', 1001), /маны/, 'preemption cannot bypass mana');
   for (const mob of Object.values(MOBS)) assert.ok(MOB_ATK_CD(mob) - mobAttack(mob).duration >= 1.2);
 });
 

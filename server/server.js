@@ -512,8 +512,8 @@ function damageActor(a, v, atk, mul, school, critChance, now) {
 }
 
 function onSkill(p, a, id, now) {
-  // One pending command; revalidate target/resources when the current action ends.
-  if (a.cast || (a.actionUntil || 0) > now) {
+  // A skill preempts a normal swing/recovery, but never another skill's action lock.
+  if (a.cast || (a.actionKind !== 'attack' && (a.actionUntil || 0) > now)) {
     const err = PL.skillError(a, id, now, true);
     if (err) return PL.say(a, err, 'bad');
     a.queuedSkill = { id, target: a.target ? { ...a.target } : null };
@@ -530,15 +530,17 @@ function onSkill(p, a, id, now) {
   a.P.mp -= sk.mp; a.cds[id] = now + sk.cd * 1000; a.dirty = true;
   a.out.push({ k: 'cd', id, cd: sk.cd });
   const timing = skillActionTiming(sk, s);
-  a.swing = null; a.attacking = false;
+  a.swing = null; a.queuedSkill = null;
+  a.attacking = a.P.cls === 'warrior' && (a.attacking || (['dmg','aoe'].includes(sk.kind) && alive(targetPos(a.target))));
+  a.actionKind = 'skill';
   a.actionUntil = now + timing.cooldown * 1000;
-  a.atkTimer = Math.max(a.atkTimer, timing.cooldown);
+  a.atkTimer = timing.cooldown;
   a.cast = { id, t: timing.windup, target: a.target ? { ...a.target } : null };
-  a.out.push({ k: 'action_cd', t: timing.cooldown });
+  a.out.push({ k: 'action_cd', t: timing.cooldown, kind: a.actionKind });
   if (sk.school === 'p') {
-    pushNear(a, { k: 'skill_start', id, t: timing.cooldown, windup: timing.windup });
+    pushNear(a, { k: 'skill_start', id, t: timing.cooldown, windup: timing.windup, autoAttack: a.attacking });
   } else {
-    a.out.push({ k: 'cast', id, t: timing.windup });
+    a.out.push({ k: 'cast', id, t: timing.windup, autoAttack: a.attacking });
     pushNear(a, { k: 'cast_start', id, t: timing.windup }, true);
   }
 }
@@ -553,7 +555,7 @@ function applySkill(a, id, ref, now) {
     if (ref.m != null) { const r = calcDmg(atk, mobPdef(t, now) * (sk.school === 'm' ? 0.8 : 1), sk.mul, crit, Math.random, 0.2, s.critPower); damageMob(a, t, r.d, r.crit, now); }
     else damageActor(a, t, atk, sk.mul, sk.school, crit, now);
     skillEffects(a, ref, sk, id, atk, now);
-    // Casting does not opt the player into normal attacks.
+    // Warrior autoattack resumes after the skill recovery, if the target survives.
   } else if (sk.kind === 'heal') {
     // Часть возвращается сразу, часть — лечением со временем: лечение стало растянутым.
     const amt = Math.round(s.maxHp * sk.amount);
@@ -604,9 +606,9 @@ function autoAttack(a, dt, now) {
   if (!a.swing) {
     if (a.atkTimer > 0 || (a.actionUntil || 0) > now) return;
     const timing = heroAttackTiming(s.aspd);
-    a.atkTimer = timing.cooldown;
+    a.atkTimer = timing.cooldown; a.actionKind = 'attack';
     a.actionUntil = now + timing.cooldown * 1000;
-    a.out.push({ k: 'action_cd', t: timing.cooldown });
+    a.out.push({ k: 'action_cd', t: timing.cooldown, kind: a.actionKind });
     const windup = timing.windup;
     a.swing = { target: targetKey, remaining: windup };
     pushNear(a, { k: 'attack_start', t: timing.duration, windup, to: { ...a.target } });
@@ -792,7 +794,7 @@ function broadcastTo(p, list, now) {
   for (const q of list) {
     if (q === a || flatDist(a, q) > VIEW) continue;
     if (!p.known.has(q.id)) { p.known.add(q.id); send(p, { t: 'look', id: q.id, name: q.name, look: q.look }); }
-    const row = [q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~8) | (q.dead ? 8 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)];
+    const row = [q.id, +q.x.toFixed(2), +q.y.toFixed(2), +q.z.toFixed(2), +q.r.toFixed(2), (q.anim & ~24) | (q.dead ? 8 : 0) | (q.attacking && !q.dead ? 16 : 0), Math.round((q.P.hp / PL.statsOf(q, now).maxHp) * 100), status(q)];
     // девятый столбец появляется только у игроков с активными эффектами
     if (q.effects.length) row.push(snapshotEffects(q.effects, now));
     o.push(row);

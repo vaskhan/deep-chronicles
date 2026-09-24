@@ -322,10 +322,10 @@ func _run():
 		game.use_skill("power_strike")
 		check(await wait_for(func(): return game.hero.winding_up), "physical skill starts its own windup")
 		check(await wait_for(func(): return not game.hero.winding_up), "physical skill reaches its impact")
-		check(not game.attacking and game.pending_skill.is_empty(), "skill does not enable ordinary attack mode")
+		check(game.attacking and game.pending_skill.is_empty(), "warrior skill resumes ordinary attack mode")
 		game.use_skill("power_strike")
-		check(not game.attacking and game.pending_skill.is_empty(), "cooldown click does not enable attacks or approach")
-		game.attack() # Explicit F resumes ordinary attacks after the skill.
+		check(game.attacking and game.pending_skill.is_empty(), "cooldown click preserves an already active attack")
+		# The server continues normal attacks after skill recovery without another F.
 		var killed = await wait_for(func(): return game.profile.get("kills", 0) > 0, 12)
 		if not killed:
 			print("Combat diagnostics: player=", game.hero.position, " mob=", mob.position, " hp=", mob.hp, " visible=", mob.visible, " attacking=", game.attacking)

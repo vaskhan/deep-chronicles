@@ -239,13 +239,13 @@ func _event(e: Dictionary):
 		"cd": cooldowns[e.id] = Time.get_ticks_msec() + float(e.cd) * 1000
 		"action_cd":
 			action_ready_at = Time.get_ticks_msec() + int(float(e.t) * 1000)
-			cooldowns["_action"] = action_ready_at
+			cooldowns["_action"] = 0 if e.get("kind", "") == "attack" else action_ready_at
 		"skill_start":
 			if is_instance_valid(source):
 				source.begin_attack(float(e.t), float(e.windup))
 				combat_fx.swing(source, GameData.color(GameData.catalog.SKILLS[e.id].color), true)
 			if source == hero:
-				cast_time = float(e.windup); has_destination = false
+				cast_time = float(e.windup); has_destination = false; attacking = bool(e.get("autoAttack",false))
 				hud.cast_duration = cast_time; hud.cast_name = GameData.catalog.SKILLS[e.id].name
 		"attack_start":
 			if is_instance_valid(source):
@@ -312,7 +312,7 @@ func _event(e: Dictionary):
 				source.begin_cast(str(e.get("id", "")), float(e.t))
 				combat_fx.begin_cast(source, GameData.color(sk.get("color", 0xa4c6ff)), float(e.t)); game_audio.play_at("charge", source.position)
 				if source == hero:
-					cast_time = float(e.t); has_destination = false
+					cast_time = float(e.t); has_destination = false; attacking = bool(e.get("autoAttack",false))
 					hud.cast_duration = cast_time; hud.cast_name = sk.get("name", "Возвращение")
 		"buff":
 			var sk = GameData.catalog.SKILLS[e.id]
@@ -381,6 +381,7 @@ func _process(dt):
 	var before_motion = hero.position
 	if Network.authed and not hero.dead and cast_time <= 0: _move_hero(dt)
 	hero.measure_motion(before_motion,frame_dt)
+	hero.combat_active = attacking and is_instance_valid(target) and not target.dead and not hero.dead
 	var time = Time.get_unix_time_from_system() * 1000 - clock_offset - 150
 	for actor in mobs.values() + players.values():
 		if Time.get_ticks_msec() - actor.seen > 1500: actor.hide()
@@ -537,10 +538,7 @@ func attack():
 	Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind})
 
 func use_skill(id: String):
-	# A skill is a single command, never an implicit normal-attack mode.
-	attacking = false; pending_skill = ""; has_destination = false
-	if is_instance_valid(target) and target.kind in ["m", "p"]:
-		Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind, "hold": true})
+	# Validate first: a rejected skill must not stop or start ordinary attacks.
 	if not GameData.catalog.SKILLS.has(id) or int(profile.get("skills", {}).get(id, 0)) <= 0:
 		hud.log_line("Умение ещё не изучено."); return
 	if float(cooldowns.get(id, 0)) > Time.get_ticks_msec():
@@ -553,6 +551,7 @@ func use_skill(id: String):
 		hud.log_line(promotion); return
 	if float(profile.get("mp", 0)) < float(sk.mp):
 		hud.log_line("Недостаточно маны."); return
+	pending_skill = ""; has_destination = false
 	if sk.kind == "dmg":
 		if not is_instance_valid(target) or target.dead or target.kind == "n":
 			hud.log_line("Выберите живую цель."); return
@@ -563,6 +562,8 @@ func use_skill(id: String):
 			pending_skill = id; return
 		hero.rotation.y = atan2(target.position.x - hero.position.x, target.position.z - hero.position.z)
 	if not movement_path.is_empty(): _send_position()
+	if not attacking and is_instance_valid(target) and target.kind in ["m", "p"]:
+		Network.send({"t": "atk", "id": target.entity_id, "kind": target.kind, "hold": true})
 	Network.send({"t": "skill", "id": id})
 
 func next_target():
