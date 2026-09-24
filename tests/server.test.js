@@ -1283,12 +1283,19 @@ test('полная сумка и сбой записи: подбор и поку
   } finally { a.ws.close(); await a.closed(); }
 });
 
-test('SIGTERM записывает несохранённый прогресс перед выходом', async () => {
+for (const shutdownMode of (process.platform === 'win32' ? ['ipc'] : ['signal', 'ipc'])) {
+test(`SIGTERM handler saves unsaved progress before exit (${shutdownMode})`, { timeout: 20000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realms-term-')), db = path.join(dir, 'term.db');
   const boot = async () => {
     const probe = net.createServer(); await new Promise((r) => probe.listen(0, '127.0.0.1', r));
     const port = probe.address().port; await new Promise((r) => probe.close(r));
-    const proc = spawn('node', ['--no-warnings', 'server/server.js'], { env: { ...process.env, PORT: String(port), DB: db, DEV_CMD: '1', AUTH_TRIES: '1000', SAVE_EVERY_MS: '600000' }, stdio: 'pipe' });
+    // Windows kill(SIGTERM) bypasses JS handlers. The test-only launcher invokes
+    // the same installed handler through IPC; the production server is unchanged.
+    const launcher = "await import('./server/server.js'); process.on('message', m => { if (m === 'test-sigterm') process.emit('SIGTERM'); });";
+    const argv = shutdownMode === 'ipc'
+      ? ['--no-warnings', '--input-type=module', '--eval', launcher]
+      : ['--no-warnings', 'server/server.js'];
+    const proc = spawn(process.execPath, argv, { env: { ...process.env, PORT: String(port), DB: db, DEV_CMD: '1', AUTH_TRIES: '1000', SAVE_EVERY_MS: '600000' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let text = ''; for (const s of [proc.stdout, proc.stderr]) s.on('data', (c) => { text += c; });
     await new Promise((r) => proc.stdout.once('data', r));
     return { port, proc, log: () => text };
@@ -1301,8 +1308,10 @@ test('SIGTERM записывает несохранённый прогресс �
     // опыт и монеты меняются только в памяти: периодическая запись отложена на 10 минут
     a.send({ t: 'dev', xp: 50, coins: 4321 });
     await untilP(a, (p) => p.coins === 4321 && p.xp >= 50);
-    s1.proc.kill('SIGTERM');
-    const code = await new Promise((r) => (s1.proc.exitCode !== null ? r(s1.proc.exitCode) : s1.proc.once('exit', r)));
+    const stopped = new Promise((r) => s1.proc.once('exit', r));
+    if (shutdownMode === 'ipc') s1.proc.send('test-sigterm');
+    else s1.proc.kill('SIGTERM');
+    const code = await stopped;
     assert.equal(code, 0);
     s2 = await boot();
     const b = client(s2.port); await b.open();
@@ -1312,10 +1321,14 @@ test('SIGTERM записывает несохранённый прогресс �
     b.ws.close(); await b.closed();
     assert.doesNotMatch(s1.log() + s2.log(), /SERVER_FAULT|SAVE_FAIL/);
   } finally {
-    for (const s of [s1, s2]) if (s && s.proc.exitCode === null) { s.proc.kill(); await new Promise((r) => s.proc.once('exit', r)); }
+    for (const s of [s1, s2]) if (s && s.proc.exitCode === null && s.proc.signalCode === null) {
+      const stopped = new Promise((r) => s.proc.once('exit', r));
+      s.proc.kill(); await stopped;
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+}
 
 test('physical skill has a wind-up and cannot overlap the next ordinary swing', async () => {
   const a = client(); await a.open(); await a.wait('hi');
