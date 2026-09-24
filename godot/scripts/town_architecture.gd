@@ -114,7 +114,7 @@ var _house_cache: Dictionary = {}
 func _local_house(data: Dictionary) -> bool:
 	var names = ["SI_H01", "SI_H02", "SI_H03", "SI_H04", "SI_SH01", "SI_SH02", "SI_SH03"]
 	var id: String = str(data.get("model", names[posmod(int(data.x * 3 + data.z * 7), names.size())]))
-	var path = "res://local_assets/l2-houses/%s.glb" % id
+	var path = "res://assets/town/houses/%s.glb" % id
 	if not ResourceLoader.exists(path): return false
 	if not _house_cache.has(id):
 		var source = load(path).instantiate()

@@ -43,3 +43,20 @@ test('All three pier decks have exact walkable height up to both edges, independ
  }
  for(const p of townPiers)assert.ok(heightAt(p.x1-1,p.z,false)<p.y-5,'sea floor stays below the deck');
 });
+
+test('Shipped harbor kit is self-contained and production code does not depend on local_assets',async()=>{
+ const fs=await import('node:fs');
+ const {HOUSE_KIT}=await import('../src/town-house-kit.js');
+ for(const id of [...Object.keys(HOUSE_KIT),'merchant_complete']){
+  const bytes=fs.readFileSync(new URL(`../godot/assets/town/houses/${id}.glb`,import.meta.url));
+  assert.equal(bytes.toString('ascii',0,4),'glTF');
+  const gltf=JSON.parse(bytes.toString('utf8',20,20+bytes.readUInt32LE(12)));
+  assert.ok(gltf.meshes.length>0);assert.ok(gltf.images.length>0);
+  for(const resource of [...gltf.buffers,...gltf.images])assert.ok(!resource.uri||resource.uri.startsWith('data:'),`${id}: external dependency ${resource.uri}`);
+ }
+ for(const file of ['town_architecture.gd','town_decor.gd']){
+  const code=fs.readFileSync(new URL(`../godot/scripts/${file}`,import.meta.url),'utf8');
+  assert.ok(code.includes('res://assets/town/houses/'));
+  assert.ok(!code.includes('res://local_assets/'));
+ }
+});

@@ -282,9 +282,9 @@ func _shop(shop: Dictionary):
 	_barrel(Vector3(3.5,0,-.3))
 
 func _shop_frontage(shop: Dictionary):
-	var path="res://local_assets/l2-houses/merchant_complete.glb"
+	var path="res://assets/town/houses/merchant_complete.glb"
 	if not ResourceLoader.exists(path):
-		# The complete local kit is excluded from distribution; keep a usable fallback.
+		# Defensive fallback for a damaged installation; the full kit ships in assets/town/houses.
 		var fallback=shop.duplicate();fallback.frontage=false;_shop(fallback);return
 	var shell=Art.packed(path).instantiate()
 	var factor=float(shop.modelScale)
