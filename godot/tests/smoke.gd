@@ -244,7 +244,9 @@ func _run():
 	await create_timer(0.2).timeout
 	check(game.hero.position.distance_to(before_slide) > 2, "native player slides around the fountain")
 	check(received.filter(func(m): return m.t == "fix").size() == fixes_before_slide, "server accepts curved native movement around obstacles")
-	await _dev({"x": -450.5, "z": 407, "coins": 10000, "lvl": 8})
+	var general_vendor=data.world.npcs.filter(func(n):return n.id=="harbor:shop")[0]
+	var general_building=data.world.townShops.filter(func(s):return s.town=="harbor" and s.id==general_vendor.building)[0]
+	await _dev({"x":general_building.x+general_building.interior.customerX*general_building.modelScale,"z":general_vendor.z,"coins":10000,"lvl":8})
 	game.hud.show_window("shop")
 	_click("buy", "sword_long")
 	check(await wait_for(func(): return _bag("sword_long") >= 0), "shop purchase is server-authoritative")
@@ -452,7 +454,7 @@ func _run():
 	game._action("equip", _bag("sword_long"))
 	check(await wait_for(func(): return game.hero.weapon_node.get_meta("weapon_kind") == "warrior"), "mage equipping a sword changes the actual weapon model")
 	check(game.hero.weapon_node.to_global(game.hero.weapon_node.get_meta("handle_center")).distance_to(game.hero.weapon_node.get_parent().global_position) < 0.001, "weapon handle stays exactly on the palm grip")
-	await _dev({"x": -450.5, "z": 407, "coins": 1000, "item": "pelt", "n": 20})
+	await _dev({"x":general_building.x+general_building.interior.customerX*general_building.modelScale,"z":general_vendor.z,"coins": 1000, "item": "pelt", "n": 20})
 	await _dev({"item": "bone", "n": 20})
 	game.hud.show_window("craft"); _click("craft", "staff_oak")
 	check(await wait_for(func(): return _bag("staff_oak") >= 0 and game.profile.coins == 700 and _bag("pelt") < 0 and _bag("bone") < 0), "native crafting spends exact resources on the actual server")

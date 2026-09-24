@@ -84,7 +84,7 @@ func _draw():
 		var p = point(road.x,road.z); var width = Vector2(road.w,road.d)/extent*size
 		draw_rect(Rect2(p-width*.5,width),Color("b5aa87"))
 	for shop in GameData.world.get("townShops", []):
-		var p = point(shop.x,shop.z-3*shop.scale); var width = Vector2(10,18)*shop.scale/extent*size
+		var p = point(shop.x,shop.z-7*shop.scale); var width = Vector2(shop.get("w",10),shop.get("d",18))*shop.scale/extent*size
 		draw_rect(Rect2(p-width*.5,width),Color("715549"))
 	for house in GameData.world.get("townHouses", []):
 		var corners = PackedVector2Array()
@@ -119,6 +119,7 @@ func _draw():
 			draw_rect(Rect2(p-sz*.5,sz),Color("827087"))
 	for n in GameData.world.npcs:
 		if n.role == "guard": continue
+		if n.role == "merchant" and (n.has("building") or n.has("shop") and n.id != "harbor:smith"): continue
 		var p = point(n.x,n.z)
 		var color = {"merchant":Color("e9c471"),"gatekeeper":Color("85dfea"),"priest":Color("e1c9f7")}.get(n.role,Color.WHITE)
 		draw_circle(p,4,color)
@@ -148,6 +149,7 @@ func _draw():
 		draw_circle(marker, 3, Color("ff5353") if entry.status == 2 else (Color("d99aff") if entry.status == 1 else Color("89bbff")))
 	if target_position != Vector3.INF:
 		draw_arc(point(target_position.x, target_position.z), 6, 0, TAU, 16, Color("ffe188"), 1.5, true)
+	_draw_shops(font)
 	var player=point(player_position.x,player_position.z)
 	draw_circle(player,7,Color("23352e"));draw_circle(player,4,Color("91ffe1"))
 	if compact:draw_string(font,Vector2(size.x*.5-4,14),"С",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("eee0b9"))
@@ -172,6 +174,37 @@ func _draw_gorge(font: Font):
 		elif not city_focus: draw_string(font, p + Vector2(8, 4), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8e2cf"))
 	if not compact and not city_focus: draw_string(font, falls + Vector2(9, -6), "Водопад", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("dff6ff"))
 
+func shop_entrance(shop: Dictionary) -> Vector2:
+	if shop.get("frontage",false):
+		return Vector2(shop.x+.48*shop.modelScale,shop.z-7*shop.scale+2.6*shop.modelScale)
+	return Vector2(shop.x,shop.z+3*shop.scale)
+
+func _draw_shops(font: Font):
+	if not compact and not city_focus: return
+	var visible_shops: Array = []
+	var symbols = {"weapons":"sword_long","clothes":"armor_cloth","alchemy":"potion_hp"}
+	for shop in GameData.world.get("townShops",[]):
+		var entrance=shop_entrance(shop);var p=point(entrance.x,entrance.y)
+		if not Rect2(Vector2.ZERO,size).has_point(p): continue
+		visible_shops.append(shop)
+		var number=["weapons","clothes","alchemy"].find(shop.id)+1
+		var half=8.0 if compact else 12.0
+		draw_rect(Rect2(p-Vector2.ONE*(half+2),Vector2.ONE*(half+2)*2),Color("292b30"))
+		draw_rect(Rect2(p-Vector2.ONE*(half+2),Vector2.ONE*(half+2)*2),Color("efd28a"),false,1.5)
+		var icon=GameData.icon(symbols[shop.id])
+		if icon:draw_texture_rect(icon,Rect2(p-Vector2.ONE*half,Vector2.ONE*half*2),false)
+		draw_circle(p+Vector2(half,half),6,Color("233d59"))
+		draw_string(font,p+Vector2(half-3,half+4),str(number),HORIZONTAL_ALIGNMENT_LEFT,-1,11,Color.WHITE)
+	if not compact and not visible_shops.is_empty():
+		var left=size.x-215.0
+		draw_rect(Rect2(left,43,205,29+visible_shops.size()*23),Color(.086,.137,.16,.94))
+		draw_string(font,Vector2(left+9,61),"Магазины · входы",HORIZONTAL_ALIGNMENT_LEFT,-1,14,Color("efd28a"))
+		for i in visible_shops.size():
+			var shop=visible_shops[i]
+			var number=["weapons","clothes","alchemy"].find(shop.id)+1
+			var title="Одежда и припасы" if shop.id=="clothes" and shop.town=="harbor" else shop.name
+			draw_string(font,Vector2(left+9,84+i*23),str(number)+"  "+title,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("fff0cc"))
+
 func change_zoom(factor: float):
 	zoom = clampf(zoom * factor, 0.5, 8.0)
 	Settings.write_value("map", "zoom", zoom); zoom_changed.emit(zoom); queue_redraw()
@@ -179,6 +212,10 @@ func change_zoom(factor: float):
 func _gui_input(event):
 	if event is InputEventMouseMotion:
 		tooltip_text = ""
+		for shop in GameData.world.get("townShops",[]):
+			var door=shop_entrance(shop)
+			if point(door.x,door.y).distance_to(event.position)<16:
+				tooltip_text=shop.name+" — вход с улицы";return
 		for npc in GameData.world.npcs:
 			if npc.role != "guard" and point(npc.x,npc.z).distance_to(event.position) < 10: tooltip_text = npc.name; break
 	if not compact: return

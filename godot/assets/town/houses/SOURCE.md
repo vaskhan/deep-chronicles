@@ -6,9 +6,10 @@ source-game installation is required to import or export the game.
 
 Provenance: converted Lineage II architecture and interior resources (NCsoft),
 assembled from the local 17_25 reference scene. House bodies and roofs were combined;
-the merchant building includes its floor and interior props, with the entrance
-adjusted for the game's character clearance. These are modified source-game assets,
+the merchant building includes its floor and interior props, with the original vertical door jambs and arched head restored.
+Uniform building scale provides the game's character clearance. These are modified source-game assets,
 not original project artwork and not covered by the project's code license.
 
 SI_H01–SI_H04 and SI_SH01–SI_SH03: complete exterior buildings.
-merchant_complete.glb: complete enterable merchant building.
+merchant_complete.glb: complete enterable merchant building. Front facade stonework
+UVs are reprojected continuously across the doorway to remove triangle stretching.

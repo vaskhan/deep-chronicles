@@ -47,7 +47,7 @@ func build():
 		origin = GameData.position_at(gate.x,gate.z); orientation = _plan_basis(gate,gate.rotation)
 		_gate()
 	for hall in GameData.world.get("townCivic", []):
-		origin = GameData.position_at(hall.x,hall.z); orientation = _plan_basis(hall)
+		origin = Vector3(hall.x,GameData.terrain_height_at(hall.x,hall.z),hall.z); orientation = _plan_basis(hall)
 		_hall(hall)
 	for house in GameData.world.get("townHouses", []):
 		origin = GameData.position_at(house.x,house.z); orientation = _plan_basis(house,house.rotation)
@@ -57,7 +57,7 @@ func build():
 		origin = GameData.position_at(road.x, road.z); orientation = Basis.IDENTITY
 		_box(Vector3(0,.05,0),Vector3(road.w,.08,road.d),"stone")
 	for shop in GameData.world.get("townShops", []):
-		origin = GameData.position_at(shop.x, shop.z); orientation = _plan_basis(shop)
+		origin = Vector3(shop.x,GameData.terrain_height_at(shop.x,shop.z),shop.z); orientation = _plan_basis(shop)
 		_shop(shop)
 	for item in GameData.world.get("townDecor", []):
 		origin = GameData.position_at(item.x, item.z)
@@ -289,7 +289,7 @@ func _shop_frontage(shop: Dictionary):
 	var shell=Art.packed(path).instantiate()
 	var factor=float(shop.modelScale)
 	shell.scale=Vector3.ONE*factor
-	shell.position=origin+orientation*Vector3(0,0,-7)+Vector3.UP*(.08-.11175*factor)
+	shell.position=origin+orientation*Vector3(0,0,-7)+Vector3.UP*(.08-.13175*factor)
 	add_child(shell)
 	for part in shell.find_children("*","MeshInstance3D",true,false):
 		for surface in part.mesh.get_surface_count():
@@ -298,11 +298,27 @@ func _shop_frontage(shop: Dictionary):
 				var material=source.duplicate();material.cull_mode=BaseMaterial3D.CULL_DISABLED
 				material.texture_filter=BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 				part.set_surface_override_material(surface,material)
+	if not materials.has("shop_counter"):
+		_material("shop_counter",Color.WHITE,"res://assets/town/houses/merchant_complete_interior_B_wood01.png")
+	var counter_origin=origin;var counter_orientation=orientation
+	origin=GameData.position_at(shop.x,shop.z-7*shop.scale);orientation=Basis.IDENTITY
+	var layout: Dictionary=shop.interior
+	if shop.get("counter",true):
+		_box(Vector3(layout.counterX*factor,.64,layout.counterZ*factor),Vector3(.36*factor,1.2,layout.counterDepth*factor),"shop_counter")
+		_box(Vector3(layout.counterX*factor,1.28,layout.counterZ*factor),Vector3(.45*factor,.12,layout.counterDepth*factor+.2),"shop_counter")
+	origin=counter_origin;orientation=counter_orientation
 	var light=OmniLight3D.new();light.position=shell.position+Vector3(0,3.0,0)
 	light.light_color=Color("ffdcad");light.light_energy=1.3;light.omni_range=13;add_child(light)
-	var sign=Label3D.new();sign.text=shop.name;sign.font_size=44;sign.pixel_size=.011
+	var sign=Label3D.new();sign.text=("Одежда и припасы" if shop.id=="clothes" else shop.name)+"\nВход";sign.font_size=44;sign.pixel_size=.009
 	sign.modulate=Color("fff0cc");sign.outline_size=6
-	sign.position=shell.position+Vector3(.65,3.25,4.5);sign.visibility_range_end=70;add_child(sign)
+	sign.position=shell.position+Vector3(.48*factor,1.25*factor,3.75*factor)
+	sign.billboard=BaseMaterial3D.BILLBOARD_ENABLED;sign.visibility_range_end=Tuning.LABEL_RANGE_NPC;add_child(sign)
+	var saved_origin=origin;var saved_orientation=orientation
+	origin=GameData.position_at(shop.x+.48*factor,shop.z-7*shop.scale+2.6*factor);orientation=Basis.IDENTITY
+	_box(Vector3(0,.005,1),Vector3(2.4,.01,2.3),"stone")
+	for side in [-1,1]:
+		_box(Vector3(side*1.45,2.7,.5),Vector3(.28,.42,.28),"glow")
+	origin=saved_origin;orientation=saved_orientation
 
 func _ring(inner: float, outer: float, y: float, material: String):
 	var ring = TorusMesh.new(); ring.inner_radius = inner; ring.outer_radius = outer; ring.rings = 64; ring.ring_segments = 6
@@ -416,7 +432,7 @@ func _road(road: Dictionary):
 				if middle.x >= pier.x0 and middle.x <= pier.x1 and absf(middle.y-pier.z) <= pier.halfWidth: on_pier = true
 			if on_pier: continue
 			for k in [0,2,1,1,2,3]:
-				var v = strip[k]; vertices.append(GameData.position_at(v.x,v.y)+Vector3.UP*.065)
+				var v = strip[k]; vertices.append(GameData.position_at(v.x,v.y)+Vector3.UP*.012)
 				uv.append(Vector2(k%2,0))
 		distance += a.distance_to(b)
 	_surface(vertices,"dirt_road",uv)
@@ -440,13 +456,7 @@ func _temple_terrace():
 		_box(Vector3(x,18.8,-73),Vector3(1.6,.65,31),"stone")
 
 func _hall(hall: Dictionary):
-	var w = float(hall.w); var d = float(hall.d); var h = float(hall.h)
-	architecture.house({"model":"SI_SH02","modelScale":1.6,"town":hall.get("town", ""),"x":hall.x,"z":hall.z,"w":w,"d":d,"h":h,"roof":"blue","variant":2 if hall.id == "guild" else 0})
-	var label = Label3D.new(); label.text = hall.name; label.font_size = 40; label.pixel_size = .018
-	label.position = origin + orientation*Vector3(0,5.3,d*.5+.3); label.modulate = Color("f6e2ac"); label.visibility_range_end = 90; add_child(label)
-	if hall.id == "forge":
-		_box(Vector3(-w*.36,h+3,0),Vector3(2.2,9,2.2),"stone")
-		_barrel(Vector3(w*.35,0,d*.55))
+	_shop_frontage(hall)
 
 func _harbor():
 	# Деревянные причалы лежат на той же отметке, что и поверхность движения.

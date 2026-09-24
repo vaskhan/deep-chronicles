@@ -473,7 +473,7 @@ func _move_hero(dt):
 func _update_camera(dt):
 	var aim = hero.position + Vector3.UP * 1.4
 	var room: Dictionary = {}
-	for shop in GameData.world.get("townShops",[]):
+	for shop in GameData.world.get("townShops",[])+GameData.world.get("townCivic",[]):
 		if not shop.get("frontage",false): continue
 		var centre = Vector2(shop.x,shop.z-7*shop.scale)
 		var half = (Vector2(shop.w,shop.d)-Vector2.ONE*2.4)*shop.scale*.5
@@ -502,6 +502,9 @@ func _update_camera(dt):
 			if blocked:break
 			safe=point
 		if safe.distance_to(aim)>.1:desired=safe
+		# Collision tracing can stop beside the hero, outside the camera margin.
+		desired.x=clampf(desired.x,room.centre.x-extent.x,room.centre.x+extent.x)
+		desired.z=clampf(desired.z,room.centre.y-extent.y,room.centre.y+extent.y)
 	camera.position = desired if initial_camera or not room.is_empty() else camera.position.lerp(desired, 1 - exp(-dt * 12))
 	initial_camera = false; camera.look_at(aim)
 

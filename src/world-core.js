@@ -1,5 +1,7 @@
+import { SHOP_FLOOR_TRIANGLES } from './town-shop-floor.js';
+import { HOUSE_BARRIERS } from './town-house-geometry.js';
 import { harborLandscapeHeight } from './harbor-landscape.js';
-import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight, HARBOR_PIERS } from './town-layout.js';
+import { TOWN_DECOR, TOWN_SHOPS, TOWN_ROADS, TOWN_HOUSES, TOWN_GATES, gateObstacles, shopObstacles, townLayout, harborHeight, HARBOR_PIERS, HARBOR_PLATFORMS } from './town-layout.js';
 import { GORGE, GORGE_TIERS, GORGE_ARRIVAL, FALLS, POOL, SUMMIT_YARD, gorgeHeight, inGorge, gorgeLocal, gorgeWorld, gorgeObstacles, gorgeSpawns, halfWidth, floorAt, riverS, tierAt } from './gorge.js';
 // Ядро мира без three.js: рельеф, зоны, расстановка построек, препятствия, спавны.
 // Формы передаются наружу через «эмиттер» B — клиент строит из них меши, сервер берёт пустышку.
@@ -161,26 +163,39 @@ function buildTownPlan(t, B, npcs, heightAt) {
     B.use('house'); B.add('box', t.color, x, y+h/2, z, rotation, w,h,d);
     B.use(house.roof==='red'?'roof_red':'roof_blue');
     B.add('cone4',0x8a3a2a,x,y+h+w*.25,z,rotation,w*.95,w*.5,d*.95);
-    buildingObstacles(x,z,w,d,rotation);
+    if(house.model && HOUSE_BARRIERS[house.model]) {
+      const c=Math.cos(rotation),s=Math.sin(rotation),factor=house.modelScale/t.scale;
+      for(const [px,pz] of HOUSE_BARRIERS[house.model])addObs(x+(c*px+s*pz)*factor,z+(-s*px+c*pz)*factor,.03*factor);
+    } else buildingObstacles(x,z,w,d,rotation);
   }
   for (const g of layout.gates) for (const o of gateObstacles(g)) addObs(t.x+o.x,t.z+o.z,o.r);
   // Храм на собственной террасе, а не на общей оси всех домов.
   const tx=t.x+layout.temple.x,tz=t.z+layout.temple.z,ty=heightAt(tx,tz);
   B.use('brick'); B.add('box',0xeeeae0,tx,ty+7,tz,0,16,14,12);
   B.use('roof'); B.add('cone4',0xc8a040,tx,ty+19,tz,0,16,10,12);addObs(tx,tz,9);
-  for(const hall of layout.civic) buildingObstacles(t.x+hall.x,t.z+hall.z,hall.w,hall.d);
+  for(const hall of layout.civic)for(const o of shopObstacles(hall))addObs(t.x+o.x,t.z+o.z,o.r);
   for (const item of layout.decor) addObs(t.x + item.x, t.z + item.z, item.r);
   for (const shop of layout.shops) for (const o of shopObstacles(shop)) addObs(t.x+o.x,t.z+o.z,o.r);
   // NPC
   npcs.push({ id: t.id + ':gk', town: t.id, role: 'gatekeeper', name: 'Хранитель врат', x: t.x + 12, z: t.z + 10, color: 0x9040d0 });
-  npcs.push({ id: t.id + ':shop', town: t.id, role: 'merchant', name: 'Рыночный торговец', x: t.x - 20.5, z: t.z + 7, color: 0xd09030 });
+  // Keep the general catalogue (no shop filter), but seat its seller inside the
+  // clothing shop at a separate counter position rather than on the old square.
+  const generalShop = layout.shops.find(shop=>shop.id==='clothes' && shop.frontage);
+  npcs.push({ id: t.id + ':shop', town: t.id, role: 'merchant', name: 'Рыночный торговец',
+    ...(generalShop ? {building:generalShop.id,rotation:-Math.PI/2,
+      x:t.x+generalShop.x+generalShop.interior.sellerX*generalShop.modelScale/t.scale,
+      z:t.z+generalShop.z-7+generalShop.interior.generalSellerZ*generalShop.modelScale/t.scale}
+      : {x:t.x-20.5,z:t.z+7}), color: 0xd09030 });
   npcs.push({ id: t.id + ':priest', town: t.id, role: 'priest', name: 'Жрец', x: tx, z: tz + 13, color: 0xf0e8d0 });
-  for (const shop of layout.shops) npcs.push({id:t.id+':'+shop.id,town:t.id,role:'merchant',shop:shop.id,name:shop.name,rotation:shop.frontage?-Math.PI/2:0,x:t.x+shop.x+(shop.frontage?3.9*shop.modelScale/.8:0),z:t.z+shop.z+(shop.frontage?-7:2),color:0xc4a479});
+  for (const shop of layout.shops) npcs.push({id:t.id+':'+shop.id,town:t.id,role:'merchant',shop:shop.id,name:shop.name,rotation:shop.frontage?-Math.PI/2:0,x:t.x+shop.x+(shop.frontage?shop.interior.sellerX*shop.modelScale/.8:0),z:t.z+shop.z+(shop.frontage?-7:2),color:0xc4a479});
   // Стражи стоят у настоящих входов.
   layout.gates.forEach((g,i)=>{const c=Math.cos(g.rotation),s=Math.sin(g.rotation);
     for(const k of [-1,1])npcs.push({id:`${t.id}:guard${i}${k}`,town:t.id,role:'guard',name:'Страж',x:t.x+g.x+s*8+c*k*5,z:t.z+g.z+c*8-s*k*5,color:0x8090a0});
   });
-  if(t.id==='harbor')npcs.push({id:'harbor:smith',town:t.id,role:'merchant',shop:'weapons',name:'Кузнец',x:t.x-74,z:t.z+84,color:0x9e7954});
+  if(t.id==='harbor'){
+    const forge=layout.civic.find(b=>b.id==='forge');
+    npcs.push({id:'harbor:smith',town:t.id,role:'merchant',shop:'weapons',building:'forge',rotation:-Math.PI/2,name:'Кузнец',x:t.x+forge.x+forge.interior.sellerX*forge.modelScale/t.scale,z:t.z+forge.z-7,color:0x9e7954});
+  }
   // врата телепорта — светящееся кольцо
   B.use('stone'); B.add('cyl', 0x6a5aa0, t.x + 18, y + 0.3, t.z + 16, 0, 6, 0.6, 6);
 }
@@ -414,7 +429,8 @@ export function buildProps(B = nullEmitter) {
   const placed=(key)=>TOWNS.flatMap(t=>(townLayout(t.id)[key]||[]).map(v=>({...v,town:t.id,scale:t.scale,x:t.x+(v.x||0)*t.scale,z:t.z+(v.z||0)*t.scale,...(v.points?{points:v.points.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])}:{})})));
   const harbor=TOWNS[0];
   const townPiers=HARBOR_PIERS.map(p=>({x0:harbor.x+p.x0*harbor.scale,x1:harbor.x+p.x1*harbor.scale,z:harbor.z+p.z*harbor.scale,halfWidth:p.halfWidth*harbor.scale,y:p.y}));
-  props = {townPiers,npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
+  const townFloors=HARBOR_PLATFORMS.filter(b=>b.frontage).map(b=>({x:harbor.x+b.x*harbor.scale,z:harbor.z+(b.z-7)*harbor.scale,w:b.w*harbor.scale,d:b.d*harbor.scale,modelScale:b.modelScale,y:b.groundY+.08}));
+  props = {shopFloorTriangles:SHOP_FLOOR_TRIANGLES,townFloors,townPiers,npcs,spawns,huntingCamps:HUNTING_CAMPS,gorge:gorgeOutline(),townGates:placed('gates'),townHouses:placed('houses'),townShops:placed('shops'),townRoads:placed('roads').map(r=>({...r,...(r.width?{width:r.width*r.scale}:{w:r.w*r.scale,d:r.d*r.scale})})),townDecor:placed('decor'),townCivic:placed('civic'),townOutlines:TOWNS.filter(t=>townLayout(t.id).outline).map(t=>({town:t.id,points:townLayout(t.id).outline.map(([x,z])=>[t.x+x*t.scale,t.z+z*t.scale])})),townTemples:TOWNS.map(t=>({scale:t.scale,x:t.x+townLayout(t.id).temple.x*t.scale,z:t.z+townLayout(t.id).temple.z*t.scale}))};
   return props;
 }
 

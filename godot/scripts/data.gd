@@ -26,7 +26,17 @@ func color(value) -> Color:
 func height_at(x: float, z: float) -> float:
 	for pier in world.get("townPiers", []):
 		if x >= pier.x0 and x <= pier.x1 and absf(z-pier.z) <= pier.halfWidth: return pier.y
-	return terrain_height_at(x,z)
+	var height=terrain_height_at(x,z)
+	for floor in world.get("townFloors",[]):
+		if absf(x-floor.x)>floor.w*.5 or absf(z-floor.z)>floor.d*.5:continue
+		var px=(x-floor.x)/floor.modelScale;var pz=(z-floor.z)/floor.modelScale
+		for tri in world.get("shopFloorTriangles",[]):
+			var d=(tri[3]-tri[5])*(tri[0]-tri[4])+(tri[4]-tri[2])*(tri[1]-tri[5])
+			if absf(d)<.00000001:continue
+			var u=((tri[3]-tri[5])*(px-tri[4])+(tri[4]-tri[2])*(pz-tri[5]))/d
+			var v=((tri[5]-tri[1])*(px-tri[4])+(tri[0]-tri[4])*(pz-tri[5]))/d
+			if u>=-.00001 and v>=-.00001 and u+v<=1.00001:height=maxf(height,floor.y+(tri[6]-.13175)*floor.modelScale)
+	return height
 
 func terrain_height_at(x: float, z: float) -> float:
 	if x > 2100: return 0.0

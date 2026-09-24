@@ -6,7 +6,7 @@ func _run():
  var camera=Camera3D.new();root.add_child(camera);main.camera=camera
  var data=root.get_node("GameData")
  var checks=0
- for shop in data.world.townShops:
+ for shop in data.world.townShops+data.world.townCivic:
   if not shop.get("frontage",false):continue
   var centre=Vector2(shop.x,shop.z-7*shop.scale)
   var half=(Vector2(shop.w,shop.d)-Vector2.ONE*2.4)*shop.scale*.5

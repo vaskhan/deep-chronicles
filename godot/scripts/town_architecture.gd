@@ -145,7 +145,7 @@ func _local_house(data: Dictionary) -> bool:
 			var point: Vector3 = b.origin+b.orientation*Vector3((float(ix)/6-.5)*floor_width,0,(float(iz)/6-.5)*floor_depth)
 			lowest = minf(lowest,GameData.terrain_height_at(point.x,point.z))
 	var depth = maxf(.24,b.origin.y-lowest+.2)
-	b._box(Vector3(0,(.24-depth)*.5,0),Vector3(floor_width,depth+.24,floor_depth),"masonry")
+	b._box(Vector3(0,(.02-depth)*.5,0),Vector3(floor_width,depth+.02,floor_depth),"masonry")
 	var entry = _house_cache[id]
 	var box: AABB = entry.box
 	# Preserve source proportions: one scale for all three model axes.

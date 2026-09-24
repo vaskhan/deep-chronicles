@@ -4,6 +4,7 @@ import { sliceGeometry, pivotOf, RIG } from '../src/glb.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as THREE from 'three';
+import {buildProps} from '../src/world-core.js';
 import { CLASSES, SKILLS, ITEMS, MOBS, SHOP, xpToNext, MAX_LEVEL } from '../src/data.js';
 import { buildWorld, heightAt, zoneAt, obstacles, TOWNS, TELEPORTS, ZONES, DUNGEON, dungeonCells, dungeonWalls, CRYPT } from '../src/world.js';
 
@@ -340,15 +341,23 @@ test('городские магазины и NPC доступны от площ�
     const seen=new Set(['0,8']), queue=[[0,8]];
     for(let i=0;i<queue.length;i++) {
       const [x,z]=queue[i];
-      for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      // Half-metre sampling resolves doorways between the old one-metre grid columns.
+      for(const [dx,dz] of [[.5,0],[-.5,0],[0,.5],[0,-.5]]) {
         const nx=x+dx,nz=z+dz,key=`${nx},${nz}`;
         if(Math.abs(nx)>town.r+8||Math.abs(nz)>town.r+8||seen.has(key))continue;
-        if(local.some(o=>Math.hypot(town.x+nx-o.x,town.z+nz-o.z)<o.r+.8))continue;
+        // Match the actual player capsule used by GameData.move (radius 0.6m).
+        if(local.some(o=>Math.hypot(town.x+nx-o.x,town.z+nz-o.z)<o.r+.6))continue;
         seen.add(key);queue.push([nx,nz]);
       }
     }
-    for(const npc of world.npcs.filter(n=>n.town===town.id&&n.role!=='guard'))
-      assert.ok(queue.some(([x,z])=>Math.hypot(town.x+x-npc.x,town.z+z-npc.z)<2.5),npc.id+' недоступен от площади');
+    for(const npc of world.npcs.filter(n=>n.town===town.id&&n.role!=='guard')) {
+      const indoor=[...buildProps().townShops,...buildProps().townCivic].find(s=>s.town===town.id&&s.frontage&&s.id===(npc.building||npc.shop));
+      // A seller behind a full-sized counter must be within the real talk range (8m).
+      // Also require the indoor customer aisle itself to be reachable from the square.
+      const range=indoor?8:2.5;
+      assert.ok(queue.some(([x,z])=>Math.hypot(town.x+x-npc.x,town.z+z-npc.z)<range),npc.id+' недоступен от площади');
+      if(indoor)assert.ok(queue.some(([x,z])=>Math.hypot(town.x+x-(indoor.x+indoor.interior.customerX*indoor.modelScale),town.z+z-npc.z)<1.4),npc.id+' проход внутри магазина недоступен');
+    }
     if(town.id==='harbor')for(const [tx,tz] of [[150,25],[150,50],[150,75],[-156,-3],[-7,-153],[-3,151]])
       assert.ok(queue.some(([x,z])=>Math.hypot(x-tx*town.scale,z-tz*town.scale)<2),'Выход/причал '+tx+','+tz+' недоступен');
   }

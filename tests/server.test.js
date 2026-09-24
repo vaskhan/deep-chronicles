@@ -7,6 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import net from 'node:net';
+import { buildProps } from '../src/world-core.js';
+const townWorld = buildProps();
+const generalVendor = townWorld.npcs.find(n => n.id === 'harbor:shop');
+const generalShop = townWorld.townShops.find(s => s.town === 'harbor' && s.id === generalVendor.building);
+const shopCustomer = { x: generalShop.x + generalShop.interior.customerX * generalShop.modelScale, z: generalVendor.z };
 
 const portProbe = net.createServer();
 await new Promise(resolve => portProbe.listen(0, '127.0.0.1', resolve));
@@ -224,7 +229,7 @@ test('покупка: без монет и вне досягаемости то�
   let p = await untilP(a, (x) => x.coins === 50);
   assert.ok(!p.inv.some((e) => e.id === 'sword_crystal'), 'купил вдали от торговца');
   // рядом с торговцем, но денег не хватает
-  await at(a, -450.5, 407);
+  await at(a, shopCustomer.x, shopCustomer.z);
   a.send({ t: 'buy', id: 'sword_crystal', n: 1 });
   await untilEv(a, /Недостаточно монет/);
   // и настоящая покупка
@@ -521,7 +526,7 @@ test('изготовление по WS: списание материалов, �
   const a=client();await a.open();
   try {
     a.send({t:'register',name:'Кузнец',pass:'craft-test',cls:'mage'});await a.wait('authok');
-    a.send({t:'dev',lvl:8,coins:1000,item:'pelt',n:40,x:-450.5,z:407});await untilP(a,p=>p.inv.some(e=>e.id==='pelt'));
+    a.send({t:'dev',lvl:8,coins:1000,item:'pelt',n:40,...shopCustomer});await untilP(a,p=>p.inv.some(e=>e.id==='pelt'));
     a.send({t:'dev',item:'bone',n:40});await untilP(a,p=>p.inv.some(e=>e.id==='bone'));
     const order={t:'craft',id:'staff_oak',request:'native-order-0001'};a.send(order);a.send(order);
     const p=await untilP(a,p=>p.inv.some(e=>e.id==='staff_oak'));
